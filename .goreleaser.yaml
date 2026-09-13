@@ -1,0 +1,37 @@
+version: 2
+project_name: gator
+builds:
+  - id: gator-server
+    main: ./cmd/gator-server
+    binary: gator-server
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/onegator/gator/internal/version.Version={{.Version}}
+      - -X github.com/onegator/gator/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/onegator/gator/internal/version.Date={{.Date}}
+  - id: gator-runner
+    main: ./cmd/gator-runner
+    binary: gator-runner
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/onegator/gator/internal/version.Version={{.Version}}
+      - -X github.com/onegator/gator/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/onegator/gator/internal/version.Date={{.Date}}
+archives:
+  - id: server
+    ids: [gator-server]
+    name_template: "gator-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: runner
+    ids: [gator-runner]
+    name_template: "gator-runner_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+checksum:
+  name_template: checksums.txt
+release:
+  extra_files:
+    - glob: docs/openapi.yaml

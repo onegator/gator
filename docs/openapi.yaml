@@ -1,0 +1,21 @@
+openapi: 3.1.0
+info:
+  title: gator API
+  version: 0.0.1
+paths:
+  /healthz:
+    get:
+      summary: Process liveness
+      responses:
+        "200": { description: ok }
+  /readyz:
+    get:
+      summary: Dependency readiness
+      responses:
+        "200": { description: ready }
+        "503": { description: not ready }
+  /version:
+    get:
+      summary: Build metadata
+      responses:
+        "200": { description: ok }
