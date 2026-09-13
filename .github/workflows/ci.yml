@@ -27,6 +27,7 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go build ./...
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - run: go run ./cmd/gator-server migrate
       - run: go run ./cmd/gator-server migrate-down
       - run: go run ./cmd/gator-server migrate

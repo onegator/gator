@@ -2,6 +2,8 @@ package process
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"os"
 	"testing"
@@ -50,25 +52,8 @@ func newProject(t *testing.T, pool *pgxpool.Pool) (pgtype.UUID, pgtype.UUID) {
 
 func randomSuffix() string {
 	b := make([]byte, 6)
-	for i := range b {
-		b[i] = "abcdefghijklmnopqrstuvwxyz"[int(os.Getpid()+i*7919+int(testCounter))%26]
-	}
-	testCounter++
-	return string(b) + itoa(testCounter)
-}
-
-var testCounter int
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var s []byte
-	for n > 0 {
-		s = append([]byte{byte('0' + n%10)}, s...)
-		n /= 10
-	}
-	return string(s)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func service(t *testing.T, pool *pgxpool.Pool, caps ...string) *Service {

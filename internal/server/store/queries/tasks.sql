@@ -79,3 +79,6 @@ JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
 WHERE t.closed_at IS NULL
   AND (sqlc.narg(project_id)::uuid IS NULL OR t.project_id = sqlc.narg(project_id)::uuid)
 ORDER BY t.urgency, t.phase_entered_at;
+
+-- name: ListOpenUnblockedTasks :many
+SELECT * FROM tasks WHERE closed_at IS NULL AND blocked_reason IS NULL ORDER BY phase_entered_at;

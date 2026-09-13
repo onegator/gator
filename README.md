@@ -62,3 +62,12 @@ first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is writt
   `gator.runners.online`, `gator.plugin.calls`, `gator.plugin.call_seconds`, `gator.agent.cost_usd`, `gator.http.rate_limited`.
 - API rate limit per token (or IP when anonymous): `GATOR_RATE_LIMIT_RPS` / `GATOR_RATE_LIMIT_BURST`; 429 with `Retry-After`.
 - `internal/server/limits.Breaker` is the circuit breaker the plugin host wraps every plugin with (M3).
+
+## Background jobs and backups
+
+River (Postgres-backed queue) runs periodic work: a phase-timeout sweep every minute that blocks
+overdue tasks into the inbox, and an hourly `pg_dump` uploaded to an S3-compatible bucket when
+`GATOR_BACKUP_S3_*` is set (`GATOR_BACKUP_KEEP` prunes old dumps). `gator-server backup now` runs one
+immediately; `gator-server restore <file>` replays a dump with `pg_restore --clean`. River's own
+schema is applied by `gator-server migrate`. On SIGTERM the server stops HTTP, lets in-flight jobs
+finish for up to 15s, then forces the queue down.

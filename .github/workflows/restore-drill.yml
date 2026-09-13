@@ -1,0 +1,38 @@
+name: restore-drill
+# Weekly proof that a backup can be restored: seed, dump, wipe, restore, verify.
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: gator, POSTGRES_PASSWORD: gator, POSTGRES_DB: gator }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U gator" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      GATOR_DATABASE_URL: postgres://gator:gator@localhost:5432/gator?sslmode=disable
+      GATOR_SECRETS_KEY: ci:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: go run ./cmd/gator-server migrate
+      - name: seed
+        run: psql "$GATOR_DATABASE_URL" -c "INSERT INTO projects(slug,name) VALUES('drill','Drill')"
+      - name: dump
+        run: |
+          mkdir -p /tmp/bk && pg_dump --format=custom --no-owner --no-privileges --file=/tmp/bk/drill.dump "$GATOR_DATABASE_URL"
+      - name: wipe
+        run: psql "$GATOR_DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+      - name: restore
+        run: go run ./cmd/gator-server restore /tmp/bk/drill.dump
+      - name: verify
+        run: |
+          test "$(psql -tA "$GATOR_DATABASE_URL" -c "SELECT count(*) FROM projects WHERE slug='drill'")" = "1"
+          go run ./cmd/gator-server migrate

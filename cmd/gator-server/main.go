@@ -18,8 +18,10 @@ import (
 	"github.com/onegator/gator/internal/server/admin"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/backup"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -36,7 +38,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gator-server <serve|migrate|migrate-down|secrets new-key [id]|secrets check|version>")
+		return errors.New("usage: gator-server <serve|migrate|migrate-down|backup now|restore <file>|secrets new-key [id]|secrets check|version>")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -61,6 +63,25 @@ func run(args []string) error {
 		return serve(ctx)
 	case "secrets":
 		return secretsCmd(args[1:])
+	case "backup":
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		bc := backup.LoadConfig()
+		if !bc.Enabled() {
+			return errors.New("backups not configured (GATOR_BACKUP_S3_*)")
+		}
+		return backup.Run(ctx, bc, cfg.DatabaseURL, slog.Default())
+	case "restore":
+		if len(args) < 2 {
+			return errors.New("usage: gator-server restore <dump file>")
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		return backup.Restore(ctx, cfg.DatabaseURL, args[1])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -103,6 +124,20 @@ func serve(ctx context.Context) error {
 	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
 	go relay.Run(ctx)
 
+	bc := backup.LoadConfig()
+	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL, Log: log})
+	if err != nil {
+		return err
+	}
+	if err := queue.Start(ctx); err != nil {
+		return fmt.Errorf("start queue: %w", err)
+	}
+	if bc.Enabled() {
+		log.Info("backups enabled", "bucket", bc.Bucket, "endpoint", bc.Endpoint)
+	} else {
+		log.Warn("backups not configured (GATOR_BACKUP_S3_*)")
+	}
+
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Hub: hub, Log: log,
 		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
@@ -142,7 +177,13 @@ func serve(ctx context.Context) error {
 		log.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		// Stop taking HTTP first, then let in-flight queue jobs finish (soft stop), then hard stop.
+		httpErr := srv.Shutdown(shutdownCtx)
+		if err := queue.Stop(shutdownCtx); err != nil {
+			log.Warn("queue soft stop timed out; forcing", "err", err)
+			_ = queue.StopAndCancel(context.Background())
+		}
+		return httpErr
 	}
 }
 

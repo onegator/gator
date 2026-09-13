@@ -418,6 +418,47 @@ func (q *Queries) ListOpenTasksWithGates(ctx context.Context, projectID pgtype.U
 	return items, nil
 }
 
+const listOpenUnblockedTasks = `-- name: ListOpenUnblockedTasks :many
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at FROM tasks WHERE closed_at IS NULL AND blocked_reason IS NULL ORDER BY phase_entered_at
+`
+
+func (q *Queries) ListOpenUnblockedTasks(ctx context.Context) ([]Task, error) {
+	rows, err := q.db.Query(ctx, listOpenUnblockedTasks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Task
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Kind,
+			&i.Title,
+			&i.Phase,
+			&i.Urgency,
+			&i.OwnerKind,
+			&i.OwnerID,
+			&i.RequirementsChanged,
+			&i.BlockedReason,
+			&i.SourceTaskID,
+			&i.ExternalRefs,
+			&i.PhaseEnteredAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ClosedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPhaseTransitions = `-- name: ListPhaseTransitions :many
 SELECT id, task_id, from_phase, to_phase, kind, actor_kind, actor_id, reason, evidence, created_at FROM phase_transitions WHERE task_id = $1 ORDER BY id
 `
