@@ -78,7 +78,9 @@ func (s StaticCatalog) Catalog(context.Context, pgtype.UUID) (Catalog, error) { 
 type StaticCapabilities []string
 
 // Capabilities implements CapabilityResolver.
-func (s StaticCapabilities) Capabilities(context.Context, pgtype.UUID) ([]string, error) { return s, nil }
+func (s StaticCapabilities) Capabilities(context.Context, pgtype.UUID) ([]string, error) {
+	return s, nil
+}
 
 func (s *Service) machine(ctx context.Context, projectID pgtype.UUID, kind string) (*Machine, error) {
 	cat, err := s.templates.Catalog(ctx, projectID)

@@ -12,6 +12,7 @@ test:
 	go test ./...
 
 lint:
+	test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 	go vet ./...
 
 sqlc:

@@ -31,12 +31,12 @@ const (
 
 // Phase is one step of a template.
 type Phase struct {
-	Name     string        `yaml:"name"`
-	Owner    Owner         `yaml:"owner"`
-	Role     string        `yaml:"role,omitempty"` // runner role when Owner == runner
-	Gate     GateKind      `yaml:"gate"`
-	Timeout  Duration      `yaml:"timeout"`
-	Requires string        `yaml:"requires,omitempty"` // plugin capability that activates this phase
+	Name     string   `yaml:"name"`
+	Owner    Owner    `yaml:"owner"`
+	Role     string   `yaml:"role,omitempty"` // runner role when Owner == runner
+	Gate     GateKind `yaml:"gate"`
+	Timeout  Duration `yaml:"timeout"`
+	Requires string   `yaml:"requires,omitempty"` // plugin capability that activates this phase
 }
 
 // Duration is a time.Duration that accepts "24h" and a bare 0 in YAML.

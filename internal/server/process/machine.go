@@ -6,9 +6,9 @@ import (
 )
 
 var (
-	ErrUnknownPhase   = errors.New("unknown phase")
-	ErrTerminalPhase  = errors.New("phase is terminal")
-	ErrNotBackward    = errors.New("rollback target is not an earlier phase")
+	ErrUnknownPhase    = errors.New("unknown phase")
+	ErrTerminalPhase   = errors.New("phase is terminal")
+	ErrNotBackward     = errors.New("rollback target is not an earlier phase")
 	ErrRollbackCeiling = errors.New("rollback ceiling reached; a human must unblock")
 )
 
