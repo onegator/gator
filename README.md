@@ -24,3 +24,10 @@ make run-server         # http://localhost:8080/healthz
 ```
 
 Migrations run only when asked (`gator-server migrate`), never at startup. Every migration has a down step.
+
+## Process templates
+
+Phase templates per task kind live in `internal/server/process/defaults/*.yaml` and are embedded
+in `gator-server`. A project overrides a kind by placing a full template under `process_config`.
+Phases with `requires: deploy` are active only when the project has a plugin with that capability.
+Role prompts live in `process/roles/`.

@@ -1,0 +1,7 @@
+kind: incident
+max_rollbacks: 1
+phases:
+  - { name: implementation, owner: runner, role: worker,   gate: both,  timeout: 6h }
+  - { name: verification,   owner: runner, role: reviewer, gate: human, timeout: 4h }
+  - { name: approved,       owner: human,  gate: auto,     timeout: 0 }
+  - { name: release,        owner: plugin, gate: auto,     timeout: 6h, requires: deploy }

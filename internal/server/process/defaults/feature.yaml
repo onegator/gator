@@ -1,0 +1,41 @@
+kind: feature
+max_rollbacks: 2
+phases:
+  - name: idea
+    owner: human
+    gate: human
+    timeout: 720h
+  - name: discovery
+    owner: runner
+    role: researcher
+    gate: human
+    timeout: 24h
+  - name: planning
+    owner: runner
+    role: planner
+    gate: human
+    timeout: 24h
+  - name: implementation
+    owner: runner
+    role: worker
+    gate: both
+    timeout: 48h
+  - name: verification
+    owner: runner
+    role: reviewer
+    gate: human
+    timeout: 24h
+  - name: approved
+    owner: human
+    gate: auto
+    timeout: 0
+  - name: release
+    owner: plugin
+    gate: auto
+    timeout: 24h
+    requires: deploy
+  - name: monitoring
+    owner: plugin
+    gate: auto
+    timeout: 168h
+    requires: deploy

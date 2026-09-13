@@ -19,6 +19,19 @@ type ApiToken struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type Artifact struct {
+	ID         pgtype.UUID        `json:"id"`
+	TaskID     pgtype.UUID        `json:"task_id"`
+	Phase      string             `json:"phase"`
+	Type       string             `json:"type"`
+	Version    int32              `json:"version"`
+	Content    *string            `json:"content"`
+	Url        *string            `json:"url"`
+	ApprovedAt pgtype.Timestamptz `json:"approved_at"`
+	ApprovedBy pgtype.UUID        `json:"approved_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type AuditLog struct {
 	ID        int64              `json:"id"`
 	ActorKind string             `json:"actor_kind"`
@@ -39,10 +52,34 @@ type Event struct {
 	PublishedAt pgtype.Timestamptz `json:"published_at"`
 }
 
+type Gate struct {
+	TaskID          pgtype.UUID        `json:"task_id"`
+	Phase           string             `json:"phase"`
+	Checks          []byte             `json:"checks"`
+	HumanApprovedBy pgtype.UUID        `json:"human_approved_by"`
+	HumanApprovedAt pgtype.Timestamptz `json:"human_approved_at"`
+	BlockedReason   *string            `json:"blocked_reason"`
+	BlockedBy       *string            `json:"blocked_by"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Membership struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	UserID    pgtype.UUID `json:"user_id"`
 	Role      string      `json:"role"`
+}
+
+type PhaseTransition struct {
+	ID        int64              `json:"id"`
+	TaskID    pgtype.UUID        `json:"task_id"`
+	FromPhase *string            `json:"from_phase"`
+	ToPhase   string             `json:"to_phase"`
+	Kind      string             `json:"kind"`
+	ActorKind string             `json:"actor_kind"`
+	ActorID   pgtype.UUID        `json:"actor_id"`
+	Reason    *string            `json:"reason"`
+	Evidence  []byte             `json:"evidence"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Project struct {
@@ -73,6 +110,25 @@ type Receipt struct {
 	Payload     []byte             `json:"payload"`
 	VerifiedAt  pgtype.Timestamptz `json:"verified_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Task struct {
+	ID                  pgtype.UUID        `json:"id"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	Kind                string             `json:"kind"`
+	Title               string             `json:"title"`
+	Phase               string             `json:"phase"`
+	Urgency             int16              `json:"urgency"`
+	OwnerKind           *string            `json:"owner_kind"`
+	OwnerID             pgtype.UUID        `json:"owner_id"`
+	RequirementsChanged bool               `json:"requirements_changed"`
+	BlockedReason       *string            `json:"blocked_reason"`
+	SourceTaskID        pgtype.UUID        `json:"source_task_id"`
+	ExternalRefs        []byte             `json:"external_refs"`
+	PhaseEnteredAt      pgtype.Timestamptz `json:"phase_entered_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
 }
 
 type User struct {
