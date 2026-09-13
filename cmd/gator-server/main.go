@@ -17,6 +17,7 @@ import (
 
 	"github.com/onegator/gator/internal/server/admin"
 	"github.com/onegator/gator/internal/server/api"
+	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
@@ -85,10 +86,29 @@ func serve(ctx context.Context) error {
 	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
 	go relay.Run(ctx)
 
-	apiServer := &api.Server{Pool: db.Pool, Process: svc, Hub: hub, Log: log}
+	apiServer := &api.Server{
+		Pool: db.Pool, Process: svc, Hub: hub, Log: log,
+		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
+	}
+	if oc := auth.LoadOIDCConfig(); oc.Enabled() {
+		o, err := auth.NewOIDC(ctx, oc, db.Pool)
+		if err != nil {
+			return err
+		}
+		apiServer.OIDC = o
+		log.Info("oidc enabled", "issuer", oc.Issuer)
+	} else {
+		log.Warn("oidc not configured; only bearer tokens authenticate", "dev_auth", cfg.DevAuth)
+	}
+	if cfg.DevAuth {
+		log.Warn("GATOR_DEV_AUTH=1: X-Gator-User header is trusted; never enable in production")
+	}
 	root := chi.NewRouter()
 	root.Mount("/", apiServer.Router())
-	root.Mount("/admin", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())
+	adminRouter := chi.NewRouter()
+	adminRouter.Use(auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log), auth.RequireAuth, auth.RequireWorkspaceAdmin)
+	adminRouter.Mount("/", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())
+	root.Mount("/admin", adminRouter)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: root, ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)

@@ -18,6 +18,7 @@ import (
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -29,6 +30,10 @@ type Server struct {
 	Pool     *pgxpool.Pool
 	Process  *process.Service
 	Hub      *events.Hub
+	Tokens   auth.Tokens
+	Authz    auth.Authorizer
+	OIDC     *auth.OIDC // nil when not configured
+	DevAuth  bool       // accept X-Gator-User; local development only
 	Features []string
 	Log      *slog.Logger
 }
@@ -38,9 +43,22 @@ var _ gen.ServerInterface = (*Server)(nil)
 // Router mounts the API under /api/v1 plus the WebSocket endpoint.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, devActorMiddleware)
+	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	r.Use(auth.Authenticate(s.Tokens, s.DevAuth, s.Log))
+	r.Use(auth.AuditWith(db.New(s.Pool), s.Log))
+	r.Route("/auth", func(r chi.Router) {
+		if s.OIDC != nil {
+			r.Get("/login", s.OIDC.Login)
+			r.Get("/callback", s.OIDC.Callback)
+		} else {
+			r.Get("/login", func(w http.ResponseWriter, _ *http.Request) {
+				writeError(w, http.StatusNotImplemented, "OIDC is not configured (GATOR_OIDC_*)", "oidc_disabled")
+			})
+		}
+		r.Post("/logout", auth.Logout(s.Tokens))
+	})
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/ws", s.websocket)
+		r.With(auth.RequireAuth).Get("/ws", s.websocket)
 		gen.HandlerFromMux(s, r)
 	})
 	return r
@@ -79,19 +97,38 @@ func (s *Server) Capabilities(w http.ResponseWriter, _ *http.Request) {
 // --- projects ---
 
 func (s *Server) ListProjects(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
+	visible, err := s.visibleProjects(r, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	rows, err := db.New(s.Pool).ListProjects(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	out := make([]gen.Project, 0, len(rows))
-	for _, p := range rows {
-		out = append(out, toProject(p))
+	for _, pr := range rows {
+		if visible == nil || visible[pr.ID.Bytes] {
+			out = append(out, toProject(pr))
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
+	if !p.IsWorkspaceAdmin() {
+		writeError(w, http.StatusForbidden, "creating projects requires workspace admin", "forbidden")
+		return
+	}
 	var in gen.NewProject
 	if !decode(w, r, &in) {
 		return
@@ -104,15 +141,22 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 	if in.Tags != nil {
 		tags = *in.Tags
 	}
-	p, err := db.New(s.Pool).CreateProject(r.Context(), db.CreateProjectParams{Slug: in.Slug, Name: in.Name, Tags: tags, ProcessConfig: []byte("{}")})
+	pr, err := db.New(s.Pool).CreateProject(r.Context(), db.CreateProjectParams{Slug: in.Slug, Name: in.Name, Tags: tags, ProcessConfig: []byte("{}")})
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toProject(p))
+	if err := db.New(s.Pool).UpsertMembership(r.Context(), db.UpsertMembershipParams{ProjectID: pr.ID, UserID: p.UserID, Role: "admin"}); err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toProject(pr))
 }
 
 func (s *Server) GetProject(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+		return
+	}
 	p, err := db.New(s.Pool).GetProject(r.Context(), fromUUID(projectId))
 	if err != nil {
 		s.fail(w, err)
@@ -124,6 +168,9 @@ func (s *Server) GetProject(w http.ResponseWriter, r *http.Request, projectId ge
 // --- tasks ---
 
 func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+		return
+	}
 	rows, err := s.Process.Tasks(r.Context(), fromUUID(projectId))
 	if err != nil {
 		s.fail(w, err)
@@ -137,6 +184,9 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request, projectId gen
 }
 
 func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleMember); !ok {
+		return
+	}
 	var in gen.NewTask
 	if !decode(w, r, &in) {
 		return
@@ -158,9 +208,21 @@ func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request, projectId ge
 }
 
 func (s *Server) ListInbox(w http.ResponseWriter, r *http.Request, params gen.ListInboxParams) {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
 	var pid pgtype.UUID
 	if params.ProjectId != nil {
 		pid = fromUUID(*params.ProjectId)
+		if _, ok := s.requireProject(w, r, pid, auth.RoleViewer); !ok {
+			return
+		}
+	}
+	visible, err := s.visibleProjects(r, p)
+	if err != nil {
+		s.fail(w, err)
+		return
 	}
 	rows, err := s.Process.Inbox(r.Context(), pid)
 	if err != nil {
@@ -169,12 +231,18 @@ func (s *Server) ListInbox(w http.ResponseWriter, r *http.Request, params gen.Li
 	}
 	out := make([]gen.Decision, 0, len(rows))
 	for _, d := range rows {
+		if visible != nil && !visible[d.Task.ProjectID.Bytes] {
+			continue
+		}
 		out = append(out, gen.Decision{Task: toTask(d.Task), Reason: gen.DecisionReason(d.Reason), WaitingSince: d.WaitingSince})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) GetTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer); !ok {
+		return
+	}
 	d, err := s.Process.Detail(r.Context(), fromUUID(taskId))
 	if err != nil {
 		s.fail(w, err)
@@ -184,11 +252,15 @@ func (s *Server) GetTask(w http.ResponseWriter, r *http.Request, taskId gen.Task
 }
 
 func (s *Server) ApproveTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
-	actor := ActorFromContext(r.Context())
-	if actor.Kind != process.ActorUser {
+	p, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember)
+	if !ok {
+		return
+	}
+	if p.Kind != auth.KindUser {
 		writeError(w, http.StatusForbidden, "approval requires a user identity", "forbidden")
 		return
 	}
+	actor := ActorFromContext(r.Context())
 	if err := s.Process.Approve(r.Context(), fromUUID(taskId), actor.ID); err != nil {
 		s.fail(w, err)
 		return
@@ -197,6 +269,9 @@ func (s *Server) ApproveTask(w http.ResponseWriter, r *http.Request, taskId gen.
 }
 
 func (s *Server) AdvanceTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember); !ok {
+		return
+	}
 	var in gen.Reason
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	t, err := s.Process.Advance(r.Context(), fromUUID(taskId), ActorFromContext(r.Context()), deref(in.Reason))
@@ -208,6 +283,9 @@ func (s *Server) AdvanceTask(w http.ResponseWriter, r *http.Request, taskId gen.
 }
 
 func (s *Server) RollbackTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember); !ok {
+		return
+	}
 	var in gen.Rollback
 	if !decode(w, r, &in) {
 		return
@@ -221,6 +299,9 @@ func (s *Server) RollbackTask(w http.ResponseWriter, r *http.Request, taskId gen
 }
 
 func (s *Server) HandoffTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember); !ok {
+		return
+	}
 	var in gen.Handoff
 	if !decode(w, r, &in) {
 		return
@@ -234,6 +315,9 @@ func (s *Server) HandoffTask(w http.ResponseWriter, r *http.Request, taskId gen.
 }
 
 func (s *Server) SetTaskCheck(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember); !ok {
+		return
+	}
 	var in gen.Check
 	if !decode(w, r, &in) {
 		return
@@ -247,6 +331,9 @@ func (s *Server) SetTaskCheck(w http.ResponseWriter, r *http.Request, taskId gen
 }
 
 func (s *Server) ListTaskTransitions(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer); !ok {
+		return
+	}
 	rows, err := s.Process.Transitions(r.Context(), fromUUID(taskId))
 	if err != nil {
 		s.fail(w, err)

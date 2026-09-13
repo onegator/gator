@@ -29,6 +29,45 @@ paths:
       operationId: capabilities
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Capabilities" } } } }
+  /auth/me:
+    get:
+      operationId: me
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /tokens:
+    get:
+      operationId: listTokens
+      description: Tokens issued to the caller (users) or every runner/plugin token (workspace admins).
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Token" } } } } }
+    post:
+      operationId: createToken
+      description: Mint a bearer token. Runner and plugin tokens require workspace admin; user tokens are for the caller.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewToken" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/IssuedToken" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /tokens/{tokenId}:
+    delete:
+      operationId: revokeToken
+      parameters: [ { name: tokenId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "204": { description: revoked }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/members:
+    put:
+      operationId: setMember
+      description: Set a user's role in a project. Requires project admin.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Member" } } }
+      responses:
+        "204": { description: ok }
+        "403": { $ref: "#/components/responses/Error" }
   /projects:
     get:
       operationId: listProjects
@@ -166,6 +205,48 @@ components:
       properties:
         features: { type: array, items: { type: string } }
         protocolVersion: { type: integer }
+    Me:
+      type: object
+      required: [kind, name, workspaceRole]
+      properties:
+        kind: { type: string }
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        workspaceRole: { type: string }
+        scope: { type: string }
+    NewToken:
+      type: object
+      required: [kind, name]
+      properties:
+        kind: { type: string, enum: [user, runner, plugin] }
+        name: { type: string }
+        projectId: { type: string, format: uuid, description: required for plugin tokens }
+        ttlHours: { type: integer }
+    Token:
+      type: object
+      required: [id, kind, scope, name, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        scope: { type: string }
+        name: { type: string }
+        projectId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time }
+    IssuedToken:
+      allOf:
+        - $ref: "#/components/schemas/Token"
+        - type: object
+          required: [token]
+          properties:
+            token: { type: string, description: plaintext, shown once }
+    Member:
+      type: object
+      required: [userId, role]
+      properties:
+        userId: { type: string, format: uuid }
+        role: { type: string, enum: [admin, member, viewer] }
     NewProject:
       type: object
       required: [slug, name]

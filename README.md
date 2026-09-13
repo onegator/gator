@@ -41,4 +41,13 @@ first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is writt
 
 `/admin` is a minimal HTML panel for M1 and debugging; it goes away once Gator.app covers it.
 
-Identity is temporary until PLQ-218: send `X-Gator-User: <user uuid>` to act as that user.
+## Identity and access
+
+- Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`); the callback sets an httpOnly
+  `gator_session` cookie. The first user to log in becomes workspace admin.
+- Native clients and automation: `Authorization: Bearer gtr_<kind>_…`. Mint with `POST /api/v1/tokens`
+  (user tokens for yourself; runner and plugin tokens require workspace admin). Only a SHA-256 hash is stored.
+- Roles: workspace `admin` | `member`; per project `admin` | `member` | `viewer`. Runners act as members
+  everywhere but cannot approve; plugin tokens are members of their own project only.
+- Every non-GET request is written to `audit_log` with actor, route pattern and status.
+- Local development only: `GATOR_DEV_AUTH=1` trusts `X-Gator-User: <user uuid>`.

@@ -9,14 +9,17 @@ import (
 )
 
 type ApiToken struct {
-	ID        pgtype.UUID        `json:"id"`
-	Kind      string             `json:"kind"`
-	Scope     string             `json:"scope"`
-	Hash      []byte             `json:"hash"`
-	UserID    pgtype.UUID        `json:"user_id"`
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
-	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID         pgtype.UUID        `json:"id"`
+	Kind       string             `json:"kind"`
+	Scope      string             `json:"scope"`
+	Hash       []byte             `json:"hash"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	Name       string             `json:"name"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
 }
 
 type Artifact struct {
@@ -132,9 +135,10 @@ type Task struct {
 }
 
 type User struct {
-	ID          pgtype.UUID        `json:"id"`
-	Email       string             `json:"email"`
-	Name        string             `json:"name"`
-	OidcSubject *string            `json:"oidc_subject"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ID            pgtype.UUID        `json:"id"`
+	Email         string             `json:"email"`
+	Name          string             `json:"name"`
+	OidcSubject   *string            `json:"oidc_subject"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	WorkspaceRole string             `json:"workspace_role"`
 }

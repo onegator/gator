@@ -44,8 +44,15 @@ const (
 
 // Defines values for HandoffToKind.
 const (
-	Runner HandoffToKind = "runner"
-	User   HandoffToKind = "user"
+	HandoffToKindRunner HandoffToKind = "runner"
+	HandoffToKindUser   HandoffToKind = "user"
+)
+
+// Defines values for MemberRole.
+const (
+	MemberRoleAdmin  MemberRole = "admin"
+	MemberRoleMember MemberRole = "member"
+	MemberRoleViewer MemberRole = "viewer"
 )
 
 // Defines values for NewTaskKind.
@@ -54,6 +61,13 @@ const (
 	Chore    NewTaskKind = "chore"
 	Feature  NewTaskKind = "feature"
 	Incident NewTaskKind = "incident"
+)
+
+// Defines values for NewTokenKind.
+const (
+	NewTokenKindPlugin NewTokenKind = "plugin"
+	NewTokenKindRunner NewTokenKind = "runner"
+	NewTokenKindUser   NewTokenKind = "user"
 )
 
 // Capabilities defines model for Capabilities.
@@ -112,6 +126,39 @@ type Handoff struct {
 // HandoffToKind defines model for Handoff.ToKind.
 type HandoffToKind string
 
+// IssuedToken defines model for IssuedToken.
+type IssuedToken struct {
+	CreatedAt  time.Time           `json:"createdAt"`
+	ExpiresAt  *time.Time          `json:"expiresAt,omitempty"`
+	Id         openapi_types.UUID  `json:"id"`
+	Kind       string              `json:"kind"`
+	LastUsedAt *time.Time          `json:"lastUsedAt,omitempty"`
+	Name       string              `json:"name"`
+	ProjectId  *openapi_types.UUID `json:"projectId,omitempty"`
+	Scope      string              `json:"scope"`
+
+	// Token plaintext
+	Token string `json:"token"`
+}
+
+// Me defines model for Me.
+type Me struct {
+	Kind          string              `json:"kind"`
+	Name          string              `json:"name"`
+	Scope         *string             `json:"scope,omitempty"`
+	UserId        *openapi_types.UUID `json:"userId,omitempty"`
+	WorkspaceRole string              `json:"workspaceRole"`
+}
+
+// Member defines model for Member.
+type Member struct {
+	Role   MemberRole         `json:"role"`
+	UserId openapi_types.UUID `json:"userId"`
+}
+
+// MemberRole defines model for Member.Role.
+type MemberRole string
+
 // NewProject defines model for NewProject.
 type NewProject struct {
 	Name string    `json:"name"`
@@ -128,6 +175,19 @@ type NewTask struct {
 
 // NewTaskKind defines model for NewTask.Kind.
 type NewTaskKind string
+
+// NewToken defines model for NewToken.
+type NewToken struct {
+	Kind NewTokenKind `json:"kind"`
+	Name string       `json:"name"`
+
+	// ProjectId required for plugin tokens
+	ProjectId *openapi_types.UUID `json:"projectId,omitempty"`
+	TtlHours  *int                `json:"ttlHours,omitempty"`
+}
+
+// NewTokenKind defines model for NewToken.Kind.
+type NewTokenKind string
 
 // Project defines model for Project.
 type Project struct {
@@ -197,6 +257,18 @@ type TaskDetail struct {
 	Urgency             int                `json:"urgency"`
 }
 
+// Token defines model for Token.
+type Token struct {
+	CreatedAt  time.Time           `json:"createdAt"`
+	ExpiresAt  *time.Time          `json:"expiresAt,omitempty"`
+	Id         openapi_types.UUID  `json:"id"`
+	Kind       string              `json:"kind"`
+	LastUsedAt *time.Time          `json:"lastUsedAt,omitempty"`
+	Name       string              `json:"name"`
+	ProjectId  *openapi_types.UUID `json:"projectId,omitempty"`
+	Scope      string              `json:"scope"`
+}
+
 // Transition defines model for Transition.
 type Transition struct {
 	ActorId   *openapi_types.UUID `json:"actorId,omitempty"`
@@ -230,6 +302,9 @@ type ListInboxParams struct {
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody = NewProject
 
+// SetMemberJSONRequestBody defines body for SetMember for application/json ContentType.
+type SetMemberJSONRequestBody = Member
+
 // CreateTaskJSONRequestBody defines body for CreateTask for application/json ContentType.
 type CreateTaskJSONRequestBody = NewTask
 
@@ -245,8 +320,14 @@ type HandoffTaskJSONRequestBody = Handoff
 // RollbackTaskJSONRequestBody defines body for RollbackTask for application/json ContentType.
 type RollbackTaskJSONRequestBody = Rollback
 
+// CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
+type CreateTokenJSONRequestBody = NewToken
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+
+	// (GET /auth/me)
+	Me(w http.ResponseWriter, r *http.Request)
 
 	// (GET /capabilities)
 	Capabilities(w http.ResponseWriter, r *http.Request)
@@ -265,6 +346,9 @@ type ServerInterface interface {
 
 	// (GET /projects/{projectId})
 	GetProject(w http.ResponseWriter, r *http.Request, projectId ProjectId)
+
+	// (PUT /projects/{projectId}/members)
+	SetMember(w http.ResponseWriter, r *http.Request, projectId ProjectId)
 
 	// (GET /projects/{projectId}/tasks)
 	ListTasks(w http.ResponseWriter, r *http.Request, projectId ProjectId)
@@ -296,6 +380,15 @@ type ServerInterface interface {
 	// (GET /tasks/{taskId}/transitions)
 	ListTaskTransitions(w http.ResponseWriter, r *http.Request, taskId TaskId)
 
+	// (GET /tokens)
+	ListTokens(w http.ResponseWriter, r *http.Request)
+
+	// (POST /tokens)
+	CreateToken(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /tokens/{tokenId})
+	RevokeToken(w http.ResponseWriter, r *http.Request, tokenId openapi_types.UUID)
+
 	// (GET /version)
 	Version(w http.ResponseWriter, r *http.Request)
 }
@@ -303,6 +396,11 @@ type ServerInterface interface {
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
 
 type Unimplemented struct{}
+
+// (GET /auth/me)
+func (_ Unimplemented) Me(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
 
 // (GET /capabilities)
 func (_ Unimplemented) Capabilities(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +429,11 @@ func (_ Unimplemented) CreateProject(w http.ResponseWriter, r *http.Request) {
 
 // (GET /projects/{projectId})
 func (_ Unimplemented) GetProject(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (PUT /projects/{projectId}/members)
+func (_ Unimplemented) SetMember(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -384,6 +487,21 @@ func (_ Unimplemented) ListTaskTransitions(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// (GET /tokens)
+func (_ Unimplemented) ListTokens(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /tokens)
+func (_ Unimplemented) CreateToken(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (DELETE /tokens/{tokenId})
+func (_ Unimplemented) RevokeToken(w http.ResponseWriter, r *http.Request, tokenId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // (GET /version)
 func (_ Unimplemented) Version(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -397,6 +515,20 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// Me operation middleware
+func (siw *ServerInterfaceWrapper) Me(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.Me(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // Capabilities operation middleware
 func (siw *ServerInterfaceWrapper) Capabilities(w http.ResponseWriter, r *http.Request) {
@@ -497,6 +629,31 @@ func (siw *ServerInterfaceWrapper) GetProject(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetProject(w, r, projectId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetMember operation middleware
+func (siw *ServerInterfaceWrapper) SetMember(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetMember(w, r, projectId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -745,6 +902,59 @@ func (siw *ServerInterfaceWrapper) ListTaskTransitions(w http.ResponseWriter, r 
 	handler.ServeHTTP(w, r)
 }
 
+// ListTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListTokens(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTokens(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateToken(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateToken(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeToken operation middleware
+func (siw *ServerInterfaceWrapper) RevokeToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "tokenId" -------------
+	var tokenId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "tokenId", chi.URLParam(r, "tokenId"), &tokenId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tokenId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeToken(w, r, tokenId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // Version operation middleware
 func (siw *ServerInterfaceWrapper) Version(w http.ResponseWriter, r *http.Request) {
 
@@ -873,6 +1083,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	}
 
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/auth/me", wrapper.Me)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/capabilities", wrapper.Capabilities)
 	})
 	r.Group(func(r chi.Router) {
@@ -889,6 +1102,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/projects/{projectId}", wrapper.GetProject)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/projects/{projectId}/members", wrapper.SetMember)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/projects/{projectId}/tasks", wrapper.ListTasks)
@@ -921,6 +1137,15 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/tasks/{taskId}/transitions", wrapper.ListTaskTransitions)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/tokens", wrapper.ListTokens)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/tokens", wrapper.CreateToken)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/tokens/{tokenId}", wrapper.RevokeToken)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/version", wrapper.Version)
 	})
 
@@ -930,34 +1155,42 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

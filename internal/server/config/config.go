@@ -13,6 +13,7 @@ type Config struct {
 	ListenAddr  string
 	DatabaseURL string
 	LogLevel    string
+	DevAuth     bool // GATOR_DEV_AUTH=1 accepts X-Gator-User; local development only
 }
 
 // Load reads configuration from environment variables prefixed GATOR_.
@@ -21,6 +22,7 @@ func Load() (Config, error) {
 		ListenAddr:  env("GATOR_LISTEN_ADDR", ":8080"),
 		DatabaseURL: os.Getenv("GATOR_DATABASE_URL"),
 		LogLevel:    env("GATOR_LOG_LEVEL", "info"),
+		DevAuth:     os.Getenv("GATOR_DEV_AUTH") == "1",
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("GATOR_DATABASE_URL is required")

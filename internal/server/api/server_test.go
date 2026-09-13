@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
@@ -25,8 +27,34 @@ import (
 type harness struct {
 	t     *testing.T
 	srv   *httptest.Server
-	user  string
+	pool  *pgxpool.Pool
+	token string // bearer of the current caller
 	relay *events.Relay
+}
+
+// login creates a user with the given workspace role and returns a bearer token.
+func (h *harness) login(role string) (userID string, token string) {
+	h.t.Helper()
+	ctx := context.Background()
+	var uid pgtype.UUID
+	if err := h.pool.QueryRow(ctx, "INSERT INTO users(email,name,workspace_role) VALUES($1,'t',$2) RETURNING id",
+		fmt.Sprintf("api-%d@t.local", time.Now().UnixNano()), role).Scan(&uid); err != nil {
+		h.t.Fatal(err)
+	}
+	plain, _, err := auth.Tokens{Pool: h.pool}.Issue(ctx, auth.IssueParams{Kind: auth.KindUser, Scope: "user", Name: "test", UserID: uid})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	v, _ := uid.Value()
+	s, _ := v.(string)
+	return s, plain
+}
+
+func (h *harness) member(project, userID, role string) {
+	h.t.Helper()
+	if _, err := h.pool.Exec(context.Background(), "INSERT INTO memberships(project_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT (project_id,user_id) DO UPDATE SET role=EXCLUDED.role", project, userID, role); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 func newHarness(t *testing.T) *harness {
@@ -44,10 +72,6 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var uid string
-	if err := pool.QueryRow(ctx, "INSERT INTO users(email,name) VALUES($1,'t') RETURNING id::text", fmt.Sprintf("api-%d@t.local", time.Now().UnixNano())).Scan(&uid); err != nil {
-		t.Fatal(err)
-	}
 	cat, _ := process.DefaultCatalog()
 	svc := process.NewService(pool, process.DBTemplates{Pool: pool, Defaults: cat}, process.StaticCapabilities(nil))
 	hub := events.NewHub()
@@ -55,10 +79,13 @@ func newHarness(t *testing.T) *harness {
 	rctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	go relay.Run(rctx)
-	s := &Server{Pool: pool, Process: svc, Hub: hub, Features: []string{"inbox"}, Log: slog.Default()}
+	s := &Server{Pool: pool, Process: svc, Hub: hub, Features: []string{"inbox"}, Log: slog.Default(),
+		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
 	srv := httptest.NewServer(s.Router())
 	t.Cleanup(srv.Close)
-	return &harness{t: t, srv: srv, user: uid, relay: relay}
+	h := &harness{t: t, srv: srv, pool: pool, relay: relay}
+	_, h.token = h.login("admin")
+	return h
 }
 
 func (h *harness) do(method, path string, body any, out any) int {
@@ -69,7 +96,9 @@ func (h *harness) do(method, path string, body any, out any) int {
 	}
 	req, _ := http.NewRequest(method, h.srv.URL+"/api/v1"+path, &buf)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Gator-User", h.user)
+	if h.token != "" {
+		req.Header.Set("Authorization", "Bearer "+h.token)
+	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		h.t.Fatal(err)
@@ -91,7 +120,8 @@ func TestTaskLifecycleOverHTTPWithLiveEvents(t *testing.T) {
 	}
 
 	// subscribe before acting so we see the events
-	ws, _, err := websocket.Dial(ctx, strings.Replace(h.srv.URL, "http", "ws", 1)+"/api/v1/ws", nil)
+	ws, _, err := websocket.Dial(ctx, strings.Replace(h.srv.URL, "http", "ws", 1)+"/api/v1/ws",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + h.token}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,14 +202,117 @@ func TestTaskLifecycleOverHTTPWithLiveEvents(t *testing.T) {
 	}
 }
 
-func TestApproveNeedsUserIdentity(t *testing.T) {
+func TestRBACOverHTTP(t *testing.T) {
 	h := newHarness(t)
-	h.user = ""
+	admin := h.token
 	var project gen.Project
-	h.do("POST", "/projects", gen.NewProject{Slug: fmt.Sprintf("q%d", time.Now().UnixNano()), Name: "Q"}, &project)
+	if code := h.do("POST", "/projects", gen.NewProject{Slug: fmt.Sprintf("r%d", time.Now().UnixNano()), Name: "R"}, &project); code != 201 {
+		t.Fatalf("admin create project: %d", code)
+	}
 	var task gen.Task
-	h.do("POST", "/projects/"+project.Id.String()+"/tasks", gen.NewTask{Kind: "chore", Title: "x"}, &task)
+	if code := h.do("POST", "/projects/"+project.Id.String()+"/tasks", gen.NewTask{Kind: "chore", Title: "x"}, &task); code != 201 {
+		t.Fatalf("admin create task: %d", code)
+	}
+
+	// anonymous
+	h.token = ""
+	if code := h.do("GET", "/inbox", nil, nil); code != 401 {
+		t.Fatalf("anonymous inbox: %d", code)
+	}
+
+	// stranger: no membership
+	strangerID, stranger := h.login("member")
+	h.token = stranger
+	if code := h.do("POST", "/projects", gen.NewProject{Slug: "nope", Name: "n"}, nil); code != 403 {
+		t.Fatalf("member creating project: %d", code)
+	}
+	if code := h.do("GET", "/tasks/"+task.Id.String(), nil, nil); code != 403 {
+		t.Fatalf("stranger reading task: %d", code)
+	}
+	var projects []gen.Project
+	h.do("GET", "/projects", nil, &projects)
+	if len(projects) != 0 {
+		t.Fatalf("stranger sees %d projects", len(projects))
+	}
+	var inbox []gen.Decision
+	h.do("GET", "/inbox", nil, &inbox)
+	if len(inbox) != 0 {
+		t.Fatalf("stranger inbox has %d rows", len(inbox))
+	}
+
+	// viewer: can read, cannot act
+	h.member(project.Id.String(), strangerID, "viewer")
+	if code := h.do("GET", "/tasks/"+task.Id.String(), nil, nil); code != 200 {
+		t.Fatalf("viewer reading task: %d", code)
+	}
+	h.do("GET", "/inbox", nil, &inbox)
+	if len(inbox) != 1 {
+		t.Fatalf("viewer inbox has %d rows, want 1", len(inbox))
+	}
 	if code := h.do("POST", "/tasks/"+task.Id.String()+"/approve", nil, nil); code != 403 {
-		t.Fatalf("approve as system: %d", code)
+		t.Fatalf("viewer approving: %d", code)
+	}
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/advance", nil, nil); code != 403 {
+		t.Fatalf("viewer advancing: %d", code)
+	}
+
+	// member: can act
+	h.member(project.Id.String(), strangerID, "member")
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/approve", nil, &task); code != 200 {
+		t.Fatalf("member approving: %d", code)
+	}
+	if code := h.do("PUT", "/projects/"+project.Id.String()+"/members", gen.Member{UserId: task.ProjectId, Role: "viewer"}, nil); code != 403 {
+		t.Fatalf("member setting members: %d", code)
+	}
+
+	// runner token acts as member; plugin token bound to another project is forbidden
+	h.token = admin
+	var issued gen.IssuedToken
+	if code := h.do("POST", "/tokens", gen.NewToken{Kind: "runner", Name: "mac"}, &issued); code != 201 || issued.Token == "" {
+		t.Fatalf("admin issuing runner token: %d", code)
+	}
+	h.token = issued.Token
+	if code := h.do("GET", "/tasks/"+task.Id.String(), nil, nil); code != 200 {
+		t.Fatalf("runner reading task: %d", code)
+	}
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/approve", nil, nil); code != 403 {
+		t.Fatalf("runner approving must be forbidden: %d", code)
+	}
+	h.token = stranger
+	if code := h.do("POST", "/tokens", gen.NewToken{Kind: "runner", Name: "x"}, nil); code != 403 {
+		t.Fatalf("member issuing runner token: %d", code)
+	}
+
+	// audit rows exist for mutations with the right actor kinds
+	var n int
+	if err := h.pool.QueryRow(context.Background(), "SELECT count(*) FROM audit_log WHERE target LIKE '%'||$1||'%' AND actor_kind IN ('user','runner')", task.Id.String()).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n < 3 {
+		t.Fatalf("expected audit rows for task mutations, got %d", n)
+	}
+}
+
+func TestSessionCookieAuthenticates(t *testing.T) {
+	h := newHarness(t)
+	req, _ := http.NewRequest("GET", h.srv.URL+"/api/v1/auth/me", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: h.token})
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var me gen.Me
+	_ = json.NewDecoder(res.Body).Decode(&me)
+	if res.StatusCode != 200 || me.WorkspaceRole != "admin" {
+		t.Fatalf("me via cookie: %d %+v", res.StatusCode, me)
+	}
+	// logout revokes the session
+	req, _ = http.NewRequest("POST", h.srv.URL+"/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: h.token})
+	res, _ = http.DefaultClient.Do(req)
+	res.Body.Close()
+	if code := h.do("GET", "/auth/me", nil, nil); code != 401 {
+		t.Fatalf("after logout: %d", code)
 	}
 }
