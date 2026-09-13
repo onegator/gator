@@ -18,6 +18,7 @@ jobs:
           --health-cmd "pg_isready -U gator" --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       GATOR_DATABASE_URL: postgres://gator:gator@localhost:5432/gator?sslmode=disable
+      GATOR_SECRETS_KEY: ci:0000000000000000000000000000000000000000000000000000000000000000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

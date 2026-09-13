@@ -10,19 +10,23 @@ import (
 // Config is the complete server configuration. Every field has a working default
 // except DatabaseURL, which is required.
 type Config struct {
-	ListenAddr  string
-	DatabaseURL string
-	LogLevel    string
-	DevAuth     bool // GATOR_DEV_AUTH=1 accepts X-Gator-User; local development only
+	ListenAddr         string
+	DatabaseURL        string
+	LogLevel           string
+	DevAuth            bool    // GATOR_DEV_AUTH=1 accepts X-Gator-User; local development only
+	RateLimitPerSecond float64 // GATOR_RATE_LIMIT_RPS, default 20; 0 disables
+	RateLimitBurst     int     // GATOR_RATE_LIMIT_BURST, default 40
 }
 
 // Load reads configuration from environment variables prefixed GATOR_.
 func Load() (Config, error) {
 	c := Config{
-		ListenAddr:  env("GATOR_LISTEN_ADDR", ":8080"),
-		DatabaseURL: os.Getenv("GATOR_DATABASE_URL"),
-		LogLevel:    env("GATOR_LOG_LEVEL", "info"),
-		DevAuth:     os.Getenv("GATOR_DEV_AUTH") == "1",
+		ListenAddr:         env("GATOR_LISTEN_ADDR", ":8080"),
+		DatabaseURL:        os.Getenv("GATOR_DATABASE_URL"),
+		LogLevel:           env("GATOR_LOG_LEVEL", "info"),
+		DevAuth:            os.Getenv("GATOR_DEV_AUTH") == "1",
+		RateLimitPerSecond: envFloat("GATOR_RATE_LIMIT_RPS", 20),
+		RateLimitBurst:     EnvInt("GATOR_RATE_LIMIT_BURST", 40),
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("GATOR_DATABASE_URL is required")
@@ -48,4 +52,16 @@ func EnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envFloat(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }

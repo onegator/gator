@@ -51,3 +51,14 @@ first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is writt
   everywhere but cannot approve; plugin tokens are members of their own project only.
 - Every non-GET request is written to `audit_log` with actor, route pattern and status.
 - Local development only: `GATOR_DEV_AUTH=1` trusts `X-Gator-User: <user uuid>`.
+
+## Secrets, telemetry, limits
+
+- Secrets at rest are AES-256-GCM under `GATOR_SECRETS_KEY` (`id:hex`). `gator-server secrets new-key` prints one;
+  put the previous key in `GATOR_SECRETS_OLD_KEYS` while rotating. Logs pass through a redacting handler that masks
+  any attribute whose key looks like a secret.
+- OpenTelemetry traces and metrics export over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; otherwise no-op.
+  Instruments: `gator.task.transitions`, `gator.task.phase_seconds`, `gator.gate.blocked`, `gator.jobs`,
+  `gator.runners.online`, `gator.plugin.calls`, `gator.plugin.call_seconds`, `gator.agent.cost_usd`, `gator.http.rate_limited`.
+- API rate limit per token (or IP when anonymous): `GATOR_RATE_LIMIT_RPS` / `GATOR_RATE_LIMIT_BURST`; 429 with `Retry-After`.
+- `internal/server/limits.Breaker` is the circuit breaker the plugin host wraps every plugin with (M3).

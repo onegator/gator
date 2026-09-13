@@ -21,7 +21,9 @@ import (
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
+	"github.com/onegator/gator/internal/server/telemetry"
 	"github.com/onegator/gator/internal/version"
 )
 
@@ -34,7 +36,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gator-server <serve|migrate|migrate-down|version>")
+		return errors.New("usage: gator-server <serve|migrate|migrate-down|secrets new-key [id]|secrets check|version>")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -57,6 +59,8 @@ func run(args []string) error {
 		return store.MigrateDown(ctx, cfg.DatabaseURL)
 	case "serve":
 		return serve(ctx)
+	case "secrets":
+		return secretsCmd(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -67,8 +71,21 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
+	log := slog.New(secrets.RedactingHandler{Inner: slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)})})
 	slog.SetDefault(log)
+
+	if _, err := secrets.LoadKeyring(); err != nil {
+		return err
+	}
+	shutdownTelemetry, err := telemetry.Setup(ctx, "gator-server", version.Version)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(tctx)
+	}()
 
 	db, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -89,6 +106,7 @@ func serve(ctx context.Context) error {
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Hub: hub, Log: log,
 		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
+		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst,
 	}
 	if oc := auth.LoadOIDCConfig(); oc.Enabled() {
 		o, err := auth.NewOIDC(ctx, oc, db.Pool)
@@ -134,4 +152,35 @@ func parseLevel(s string) slog.Level {
 		return slog.LevelInfo
 	}
 	return l
+}
+
+// secretsCmd manages the encryption keyring.
+//
+//	secrets new-key [id]  print a fresh key for GATOR_SECRETS_KEY
+//	secrets check         verify the configured keyring parses; report current key id
+//
+// Re-encryption of stored ciphertexts (rotate) is registered by the packages that own
+// encrypted columns; the first one lands with plugin configuration in M3.
+func secretsCmd(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: gator-server secrets <new-key [id]|check>")
+	}
+	switch args[0] {
+	case "new-key":
+		id := "k" + time.Now().UTC().Format("20060102")
+		if len(args) > 1 {
+			id = args[1]
+		}
+		fmt.Println(secrets.NewKey(id))
+		return nil
+	case "check":
+		k, err := secrets.LoadKeyring()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("keyring ok; current key id %s\n", k.CurrentID())
+		return nil
+	default:
+		return fmt.Errorf("unknown secrets command %q", args[0])
+	}
 }

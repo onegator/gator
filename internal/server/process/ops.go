@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/store/db"
+	"github.com/onegator/gator/internal/server/telemetry"
+	"go.opentelemetry.io/otel/metric"
 )
 
 var (
@@ -182,6 +185,7 @@ func (s *Service) Advance(ctx context.Context, taskID pgtype.UUID, actor Actor, 
 			if err != nil {
 				return err
 			}
+			observePhaseTime(ctx, task)
 			if err := q.SetTaskPhase(ctx, db.SetTaskPhaseParams{ID: taskID, Phase: next.Name}); err != nil {
 				return err
 			}
@@ -244,6 +248,7 @@ func (s *Service) Rollback(ctx context.Context, taskID pgtype.UUID, to string, a
 			}
 			return err
 		}
+		observePhaseTime(ctx, task)
 		if err := q.SetTaskPhase(ctx, db.SetTaskPhaseParams{ID: taskID, Phase: to}); err != nil {
 			return err
 		}
@@ -455,6 +460,13 @@ func (s *Service) tx(ctx context.Context, fn func(q *db.Queries) error) error {
 }
 
 func (s *Service) record(ctx context.Context, q *db.Queries, taskID pgtype.UUID, from *string, to, kind string, actor Actor, reason string, evidence map[string]any) error {
+	if m, err := telemetry.Instruments(); err == nil {
+		attrs := metric.WithAttributes(telemetry.Attr("kind", kind), telemetry.Attr("to", to))
+		m.PhaseTransitions.Add(ctx, 1, attrs)
+		if kind == "auto_block" {
+			m.GateBlocked.Add(ctx, 1, metric.WithAttributes(telemetry.Attr("phase", to)))
+		}
+	}
 	ev := []byte("{}")
 	if evidence != nil {
 		ev, _ = json.Marshal(evidence)
@@ -485,4 +497,13 @@ func uuidString(u pgtype.UUID) string {
 	s, _ := u.Value()
 	str, _ := s.(string)
 	return str
+}
+
+func observePhaseTime(ctx context.Context, task db.Task) {
+	m, err := telemetry.Instruments()
+	if err != nil || !task.PhaseEnteredAt.Valid {
+		return
+	}
+	secs := time.Since(task.PhaseEnteredAt.Time).Seconds()
+	m.TimeInPhase.Record(ctx, secs, metric.WithAttributes(telemetry.Attr("kind", task.Kind), telemetry.Attr("phase", task.Phase)))
 }

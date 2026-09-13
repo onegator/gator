@@ -20,9 +20,13 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
+	"github.com/onegator/gator/internal/server/telemetry"
 	"github.com/onegator/gator/internal/version"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Server implements gen.ServerInterface.
@@ -36,6 +40,9 @@ type Server struct {
 	DevAuth  bool       // accept X-Gator-User; local development only
 	Features []string
 	Log      *slog.Logger
+	// RateLimit applies per token (or IP when anonymous). Zero disables.
+	RateLimitPerSecond float64
+	RateLimitBurst     int
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -44,6 +51,22 @@ var _ gen.ServerInterface = (*Server)(nil)
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	r.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http", otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			if rc := chi.RouteContext(r.Context()); rc != nil && rc.RoutePattern() != "" {
+				return r.Method + " " + rc.RoutePattern()
+			}
+			return r.Method + " " + r.URL.Path
+		}))
+	})
+	if s.RateLimitPerSecond > 0 {
+		lim := limits.NewLimiter(s.RateLimitPerSecond, s.RateLimitBurst)
+		r.Use(limits.Middleware(lim, limits.ByBearerOrIP, func(r *http.Request) {
+			if m, err := telemetry.Instruments(); err == nil {
+				m.HTTPRateLimited.Add(r.Context(), 1, metric.WithAttributes(telemetry.Attr("scope", "api")))
+			}
+		}))
+	}
 	r.Use(auth.Authenticate(s.Tokens, s.DevAuth, s.Log))
 	r.Use(auth.AuditWith(db.New(s.Pool), s.Log))
 	r.Route("/auth", func(r chi.Router) {
