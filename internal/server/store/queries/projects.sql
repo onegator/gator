@@ -8,3 +8,6 @@ SELECT * FROM projects WHERE slug = $1;
 
 -- name: ListProjects :many
 SELECT * FROM projects ORDER BY name;
+
+-- name: GetProject :one
+SELECT * FROM projects WHERE id = $1;

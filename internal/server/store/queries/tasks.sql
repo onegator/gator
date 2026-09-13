@@ -71,3 +71,11 @@ UPDATE artifacts SET approved_at = now(), approved_by = $2 WHERE id = $1 RETURNI
 
 -- name: ListArtifacts :many
 SELECT * FROM artifacts WHERE task_id = $1 ORDER BY phase, type, version;
+
+-- name: ListOpenTasksWithGates :many
+SELECT sqlc.embed(t), sqlc.embed(g)
+FROM tasks t
+JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+WHERE t.closed_at IS NULL
+  AND (sqlc.narg(project_id)::uuid IS NULL OR t.project_id = sqlc.narg(project_id)::uuid)
+ORDER BY t.urgency, t.phase_entered_at;

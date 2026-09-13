@@ -359,6 +359,65 @@ func (q *Queries) ListOpenTasksByProject(ctx context.Context, projectID pgtype.U
 	return items, nil
 }
 
+const listOpenTasksWithGates = `-- name: ListOpenTasksWithGates :many
+SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, g.task_id, g.phase, g.checks, g.human_approved_by, g.human_approved_at, g.blocked_reason, g.blocked_by, g.updated_at
+FROM tasks t
+JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+WHERE t.closed_at IS NULL
+  AND ($1::uuid IS NULL OR t.project_id = $1::uuid)
+ORDER BY t.urgency, t.phase_entered_at
+`
+
+type ListOpenTasksWithGatesRow struct {
+	Task Task `json:"task"`
+	Gate Gate `json:"gate"`
+}
+
+func (q *Queries) ListOpenTasksWithGates(ctx context.Context, projectID pgtype.UUID) ([]ListOpenTasksWithGatesRow, error) {
+	rows, err := q.db.Query(ctx, listOpenTasksWithGates, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOpenTasksWithGatesRow
+	for rows.Next() {
+		var i ListOpenTasksWithGatesRow
+		if err := rows.Scan(
+			&i.Task.ID,
+			&i.Task.ProjectID,
+			&i.Task.Kind,
+			&i.Task.Title,
+			&i.Task.Phase,
+			&i.Task.Urgency,
+			&i.Task.OwnerKind,
+			&i.Task.OwnerID,
+			&i.Task.RequirementsChanged,
+			&i.Task.BlockedReason,
+			&i.Task.SourceTaskID,
+			&i.Task.ExternalRefs,
+			&i.Task.PhaseEnteredAt,
+			&i.Task.CreatedAt,
+			&i.Task.UpdatedAt,
+			&i.Task.ClosedAt,
+			&i.Gate.TaskID,
+			&i.Gate.Phase,
+			&i.Gate.Checks,
+			&i.Gate.HumanApprovedBy,
+			&i.Gate.HumanApprovedAt,
+			&i.Gate.BlockedReason,
+			&i.Gate.BlockedBy,
+			&i.Gate.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPhaseTransitions = `-- name: ListPhaseTransitions :many
 SELECT id, task_id, from_phase, to_phase, kind, actor_kind, actor_id, reason, evidence, created_at FROM phase_transitions WHERE task_id = $1 ORDER BY id
 `

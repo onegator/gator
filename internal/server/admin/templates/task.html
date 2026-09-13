@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>{{.D.Task.Title}}</title>
+<style>body{font:14px system-ui;margin:2rem;max-width:60rem}td,th{padding:.3rem .6rem;border-bottom:1px solid #ddd;text-align:left}</style>
+<p><a href="/admin/">← inbox</a></p>
+<h1>{{.D.Task.Title}} <small>{{.D.Task.Kind}} · {{.D.Task.Phase}}</small></h1>
+{{if .D.Task.BlockedReason}}<p style="color:#b00">Blocked: {{.D.Task.BlockedReason}}</p>{{end}}
+<p>Phases: {{range .D.Phases}}<span {{if eq .Name $.D.Task.Phase}}style="font-weight:bold"{{end}}>{{.Name}}</span> · {{end}}</p>
+<p>Gate: {{.D.Phase.Gate}} · human approved: {{.D.Gate.HumanApprovedAt.Valid}}</p>
+<h2>History</h2>
+<table><tr><th>When</th><th>Kind</th><th>From</th><th>To</th><th>Actor</th><th>Reason</th></tr>
+{{range .Transitions}}<tr><td>{{.CreatedAt.Time.Format "15:04:05"}}</td><td>{{.Kind}}</td><td>{{if .FromPhase}}{{.FromPhase}}{{end}}</td><td>{{.ToPhase}}</td><td>{{.ActorKind}}</td><td>{{if .Reason}}{{.Reason}}{{end}}</td></tr>{{end}}
+</table>

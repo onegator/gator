@@ -2,7 +2,7 @@ LDFLAGS := -X github.com/onegator/gator/internal/version.Version=$(shell git des
            -X github.com/onegator/gator/internal/version.Commit=$(shell git rev-parse --short HEAD) \
            -X github.com/onegator/gator/internal/version.Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: build test lint sqlc migrate db-up db-down run-server run-runner
+.PHONY: build test lint sqlc openapi generate migrate db-up db-down run-server run-runner
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/gator-server ./cmd/gator-server
@@ -14,6 +14,11 @@ test:
 lint:
 	test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
 	go vet ./...
+
+openapi:
+	cd internal/server/api/gen && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.0 -config config.yaml ../../../../docs/openapi.yaml
+
+generate: sqlc openapi
 
 sqlc:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate

@@ -13,8 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/onegator/gator/internal/server/admin"
+	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/config"
-	"github.com/onegator/gator/internal/server/httpapi"
+	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/version"
 )
@@ -70,11 +75,22 @@ func serve(ctx context.Context) error {
 	}
 	defer db.Close()
 
-	srv := &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           httpapi.NewRouter(db),
-		ReadHeaderTimeout: 10 * time.Second,
+	catalog, err := process.DefaultCatalog()
+	if err != nil {
+		return err
 	}
+	// Capabilities come from enabled plugins once PLQ-225 lands; until then none.
+	svc := process.NewService(db.Pool, process.DBTemplates{Pool: db.Pool, Defaults: catalog}, process.StaticCapabilities(nil))
+	hub := events.NewHub()
+	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
+	go relay.Run(ctx)
+
+	apiServer := &api.Server{Pool: db.Pool, Process: svc, Hub: hub, Log: log}
+	root := chi.NewRouter()
+	root.Mount("/", apiServer.Router())
+	root.Mount("/admin", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())
+
+	srv := &http.Server{Addr: cfg.ListenAddr, Handler: root, ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("listening", "addr", cfg.ListenAddr, "version", version.Version)

@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><title>gator admin</title>
+<style>body{font:14px system-ui;margin:2rem;max-width:60rem}table{border-collapse:collapse}td,th{padding:.3rem .6rem;border-bottom:1px solid #ddd;text-align:left}</style>
+<h1>gator admin</h1>
+<h2>Inbox</h2>
+<table><tr><th>Urg</th><th>Task</th><th>Phase</th><th>Why</th><th>Since</th></tr>
+{{range .Inbox}}<tr><td>{{.Task.Urgency}}</td><td><a href="/admin/tasks/{{.Task.ID}}">{{.Task.Title}}</a></td><td>{{.Task.Phase}}</td><td>{{.Reason}}</td><td>{{.WaitingSince.Format "2006-01-02 15:04"}}</td></tr>{{else}}<tr><td colspan=5>Gator sleeps: nothing waits for you.</td></tr>{{end}}
+</table>
+<h2>Projects</h2>
+<ul>{{range .Projects}}<li>{{.Name}} <code>{{.Slug}}</code> <small>{{.ID}}</small></li>{{end}}</ul>
+<p><small>API: <a href="/api/v1/inbox">/api/v1/inbox</a> · <a href="/api/v1/projects">/api/v1/projects</a></small></p>

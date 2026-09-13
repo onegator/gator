@@ -7,6 +7,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createProject = `-- name: CreateProject :one
@@ -29,6 +31,25 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		arg.Tags,
 		arg.ProcessConfig,
 	)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Tags,
+		&i.ProcessConfig,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getProject = `-- name: GetProject :one
+SELECT id, slug, name, tags, process_config, created_at, updated_at FROM projects WHERE id = $1
+`
+
+func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, getProject, id)
 	var i Project
 	err := row.Scan(
 		&i.ID,

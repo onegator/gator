@@ -31,3 +31,14 @@ Phase templates per task kind live in `internal/server/process/defaults/*.yaml` 
 in `gator-server`. A project overrides a kind by placing a full template under `process_config`.
 Phases with `requires: deploy` are active only when the project has a plugin with that capability.
 Role prompts live in `process/roles/`.
+
+## API
+
+`docs/openapi.yaml` is the contract. `make generate` regenerates the chi server and models
+(`internal/server/api/gen`) and the sqlc queries. Live updates: WebSocket at `/api/v1/ws`,
+first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is written to the
+`events` outbox in the same transaction as the change and relayed to subscribers.
+
+`/admin` is a minimal HTML panel for M1 and debugging; it goes away once Gator.app covers it.
+
+Identity is temporary until PLQ-218: send `X-Gator-User: <user uuid>` to act as that user.
