@@ -18,7 +18,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>GATOR_RUNNER_SERVER_URL</key>
-    <string>wss://gator.example.ts.net/runner</string>
+    <string>https://gator.example.ts.net</string>
     <key>GATOR_RUNNER_TOKEN</key>
     <string>REPLACE_WITH_RUNNER_TOKEN</string>
     <key>GATOR_RUNNER_LOCATION</key>

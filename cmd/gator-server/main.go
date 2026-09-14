@@ -23,6 +23,7 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/telemetry"
@@ -142,8 +143,11 @@ func serve(ctx context.Context) error {
 		log.Warn("backups not configured (GATOR_BACKUP_S3_*)")
 	}
 
+	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{})
+	go runnerMgr.Run(ctx)
+
 	apiServer := &api.Server{
-		Pool: db.Pool, Process: svc, Hub: hub, Log: log,
+		Pool: db.Pool, Process: svc, Runners: runnerMgr, Hub: hub, Log: log,
 		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst,
 	}

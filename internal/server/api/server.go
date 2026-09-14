@@ -22,6 +22,7 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
 	"github.com/onegator/gator/internal/version"
@@ -33,6 +34,7 @@ import (
 type Server struct {
 	Pool     *pgxpool.Pool
 	Process  *process.Service
+	Runners  *runners.Manager
 	Hub      *events.Hub
 	Tokens   auth.Tokens
 	Authz    auth.Authorizer
@@ -82,6 +84,9 @@ func (s *Server) Router() http.Handler {
 	})
 	r.Route("/api/v1", func(r chi.Router) {
 		r.With(auth.RequireAuth).Get("/ws", s.websocket)
+		if s.Runners != nil {
+			r.With(auth.RequireAuth).Get("/runner", s.Runners.ServeHTTP)
+		}
 		gen.HandlerFromMux(s, r)
 	})
 	return r
@@ -429,6 +434,10 @@ func (s *Server) respondTask(w http.ResponseWriter, r *http.Request, taskId gen.
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
+	if code, ok := runnerErrStatus(err); ok {
+		writeError(w, code, err.Error(), http.StatusText(code))
+		return
+	}
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		writeError(w, http.StatusNotFound, "not found", "not_found")

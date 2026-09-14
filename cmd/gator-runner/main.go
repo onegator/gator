@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/client"
 	"github.com/onegator/gator/internal/runner/config"
 	"github.com/onegator/gator/internal/version"
 )
@@ -39,10 +40,15 @@ func run(args []string) error {
 			return err
 		}
 		log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-		log.Info("runner configured", "name", cfg.Name, "location", cfg.Location, "server", cfg.ServerURL, "proto", proto.Version)
-		// M2: connect to server, register, heartbeat, lease loop.
-		<-ctx.Done()
-		return nil
+		if len(cfg.Backends) == 0 {
+			log.Warn("no GATOR_RUNNER_BACKENDS configured; this runner stays online but receives no jobs")
+		}
+		c := client.New(client.Config{
+			ServerURL: cfg.ServerURL, Token: cfg.Token, Name: cfg.Name, Location: cfg.Location,
+			BinaryVersion: version.Version, Backends: cfg.Backends, Projects: cfg.Projects, MaxParallel: cfg.MaxParallel,
+		}, client.Unconfigured{}, log)
+		log.Info("runner starting", "name", cfg.Name, "location", cfg.Location, "server", cfg.ServerURL, "proto", proto.Version)
+		return c.Run(ctx)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}

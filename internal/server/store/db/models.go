@@ -66,6 +66,40 @@ type Gate struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Job struct {
+	ID             pgtype.UUID        `json:"id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Phase          string             `json:"phase"`
+	Role           string             `json:"role"`
+	Backend        string             `json:"backend"`
+	Instruction    string             `json:"instruction"`
+	Status         string             `json:"status"`
+	RunnerID       pgtype.UUID        `json:"runner_id"`
+	Attempts       int32              `json:"attempts"`
+	MaxAttempts    int32              `json:"max_attempts"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+	LastEventAt    pgtype.Timestamptz `json:"last_event_at"`
+	Bounds         []byte             `json:"bounds"`
+	Receipt        []byte             `json:"receipt"`
+	StopReason     *string            `json:"stop_reason"`
+	CreatedByKind  string             `json:"created_by_kind"`
+	CreatedBy      pgtype.UUID        `json:"created_by"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type JobEvent struct {
+	JobID     pgtype.UUID        `json:"job_id"`
+	Seq       int64              `json:"seq"`
+	Type      string             `json:"type"`
+	Payload   []byte             `json:"payload"`
+	At        pgtype.Timestamptz `json:"at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Membership struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	UserID    pgtype.UUID `json:"user_id"`
@@ -113,6 +147,22 @@ type Receipt struct {
 	Payload     []byte             `json:"payload"`
 	VerifiedAt  pgtype.Timestamptz `json:"verified_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Runner struct {
+	ID              pgtype.UUID        `json:"id"`
+	TokenID         pgtype.UUID        `json:"token_id"`
+	Name            string             `json:"name"`
+	Location        string             `json:"location"`
+	Status          string             `json:"status"`
+	Capabilities    []byte             `json:"capabilities"`
+	AuthState       []byte             `json:"auth_state"`
+	ProtocolVersion int32              `json:"protocol_version"`
+	BinaryVersion   string             `json:"binary_version"`
+	ConnectedAt     pgtype.Timestamptz `json:"connected_at"`
+	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Task struct {

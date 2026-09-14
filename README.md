@@ -90,3 +90,24 @@ Cost on subscriptions is an estimate from list prices and is flagged `costEstima
 `docs/deploy.md` covers a VPS with systemd (`deploy/install.sh`), Docker (`deploy/compose.yaml`)
 and the Mac runner (launchd). Tagging `v*` publishes signed-checksum archives for both binaries
 and `ghcr.io/onegator/gator-server` for amd64 and arm64.
+
+## Runner protocol
+
+Runners hold one WebSocket to `/api/v1/runner`, authenticated with a runner token in the
+handshake. The contract lives in `internal/proto` and is the only code both binaries share.
+
+1. `register` → `registered` with the negotiated protocol version (the server speaks N and N-1).
+2. `heartbeat` every 15 s lists the jobs the runner holds; only those leases are extended.
+   45 s of silence marks the runner offline.
+3. `lease_request` → `lease`: jobs are handed out with `FOR UPDATE SKIP LOCKED`, matched on
+   backend and optional project list, capped by the runner's free slots.
+4. `events` stream agent output; `(job, seq)` makes a resend after reconnect a no-op.
+5. `finish` carries the receipt and usage. `done` without usage is recorded as `failed`.
+   Usage lands in the task's metrics with the job id as idempotency key.
+6. `ack` confirms events and finishes; the runner keeps them until acked and resends after
+   reconnecting. A job stays in the heartbeat until its finish is acked.
+
+The server sweeps every 10 s: a lease nobody extended for 90 s returns the job to the queue
+(or fails it after `maxAttempts`), and a running job with no output for 10 minutes becomes
+`stalled` until its next event. People steer and stop jobs through `/api/v1/jobs/{id}/steer`
+and `/stop`; live output streams on the WebSocket topic `job:<id>`.

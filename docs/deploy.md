@@ -42,13 +42,19 @@ Runner on the same or another host:
 
 ```sh
 sudo sh install.sh install runner          # user `gator-runner`, /etc/gator/runner.env, unit
-sudoedit /etc/gator/runner.env             # server URL and a runner token
+sudoedit /etc/gator/runner.env             # server base URL, runner token, backends
 sudo -iu gator-runner claude login         # log in the agent CLIs as the runner user
 sudo systemctl start gator-runner
 ```
 
 Mint a runner token as a workspace admin with `POST /api/v1/tokens` and
-`{"kind":"runner","name":"vps-1"}`. The token is shown once.
+`{"kind":"runner","name":"vps-1"}`, or on the server host with
+`install.sh exec admin issue-runner-token vps-1`. The token is shown once.
+
+`GATOR_RUNNER_SERVER_URL` is the server's base URL, for example
+`https://gator.<tailnet>.ts.net`; the runner switches to `wss` and appends `/api/v1/runner`.
+`GATOR_RUNNER_BACKENDS` lists the agent CLIs this runner can drive (`claude`, `codex`). A runner
+with no backends connects and shows as online but is never handed a job.
 
 The runner user is what agents run as. A worktree is isolation, not a sandbox: give that user
 no credentials beyond what its jobs need.

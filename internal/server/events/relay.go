@@ -25,7 +25,8 @@ type Event struct {
 	CreatedAt   time.Time       `json:"createdAt"`
 }
 
-// Hub fans events out to topic subscribers. Topics: "inbox", "task:<id>", "job:<id>", "*".
+// Hub fans events out to topic subscribers. Topics: "inbox", "task:<id>", "job:<id>",
+// "runners", "runner:<id>", "*".
 type Hub struct {
 	mu   sync.RWMutex
 	subs map[string]map[chan Event]struct{}
@@ -63,6 +64,9 @@ func (h *Hub) Publish(e Event) {
 	}
 	if e.Aggregate == "job" {
 		topics = append(topics, "job:"+e.AggregateID)
+	}
+	if e.Aggregate == "runner" {
+		topics = append(topics, "runners", "runner:"+e.AggregateID)
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()

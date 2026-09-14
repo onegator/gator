@@ -3,7 +3,11 @@
 // of either binary: the server accepts protocol versions N and N-1.
 package proto
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 // Version is the current runner protocol version. Bump on any incompatible change
 // and keep the previous version readable on the server side.
@@ -11,6 +15,18 @@ const Version = 1
 
 // MinSupportedVersion is the oldest runner protocol the server still speaks.
 const MinSupportedVersion = 1
+
+// Timing both sides agree on.
+const (
+	HeartbeatInterval = 15 * time.Second
+	// OfflineAfter without a heartbeat the server marks the runner offline.
+	OfflineAfter = 45 * time.Second
+	// LeaseTTL is how long a lease lives without being extended by a heartbeat.
+	LeaseTTL = 90 * time.Second
+)
+
+// Path is where the runner WebSocket is served, relative to the server base URL.
+const Path = "/api/v1/runner"
 
 // MessageType enumerates every message either side may send.
 type MessageType string
@@ -29,6 +45,7 @@ const (
 const (
 	TypeRegistered   MessageType = "registered"
 	TypeLease        MessageType = "lease"
+	TypeAck          MessageType = "ack"
 	TypeSteer        MessageType = "steer"
 	TypeStop         MessageType = "stop"
 	TypeLoginBackend MessageType = "login_backend"
@@ -43,19 +60,64 @@ type Envelope struct {
 	Payload any         `json:"payload,omitempty"`
 }
 
-// Register is the first message a runner sends.
+// RawEnvelope is an envelope whose payload is decoded later, once the type is known.
+type RawEnvelope struct {
+	Type    MessageType     `json:"type"`
+	Seq     uint64          `json:"seq"`
+	Version int             `json:"version"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// Encode marshals a message.
+func Encode(t MessageType, seq uint64, payload any) ([]byte, error) {
+	return json.Marshal(Envelope{Type: t, Seq: seq, Version: Version, Payload: payload})
+}
+
+// Decode unmarshals the envelope; call Into for the payload.
+func Decode(b []byte) (RawEnvelope, error) {
+	var e RawEnvelope
+	if err := json.Unmarshal(b, &e); err != nil {
+		return e, err
+	}
+	if e.Type == "" {
+		return e, fmt.Errorf("proto: message without type")
+	}
+	return e, nil
+}
+
+// Into decodes the payload into v.
+func (e RawEnvelope) Into(v any) error {
+	if len(e.Payload) == 0 {
+		return fmt.Errorf("proto: %s has no payload", e.Type)
+	}
+	return json.Unmarshal(e.Payload, v)
+}
+
+// Negotiate picks the protocol version for a runner that speaks `runner`.
+func Negotiate(runner int) (int, error) {
+	if runner < MinSupportedVersion {
+		return 0, fmt.Errorf("proto: runner speaks v%d, server needs at least v%d", runner, MinSupportedVersion)
+	}
+	if runner > Version {
+		return Version, nil
+	}
+	return runner, nil
+}
+
+// Register is the first message a runner sends. The runner authenticates with its token
+// in the WebSocket handshake (Authorization: Bearer), never inside a message.
 type Register struct {
-	Token        string       `json:"token"`
-	Name         string       `json:"name"`
-	Location     string       `json:"location"` // "vps" | "mac"
-	Capabilities Capabilities `json:"capabilities"`
+	Name          string       `json:"name"`
+	Location      string       `json:"location"` // "vps" | "mac" | "other"
+	BinaryVersion string       `json:"binary_version"`
+	Capabilities  Capabilities `json:"capabilities"`
 }
 
 // Capabilities describes what a runner can execute.
 type Capabilities struct {
 	Backends    []string `json:"backends"`     // "claude", "codex", "pi"
 	MaxParallel int      `json:"max_parallel"` // concurrent jobs
-	Projects    []string `json:"projects"`     // empty = any project
+	Projects    []string `json:"projects"`     // project ids; empty = any project
 }
 
 // Registered acknowledges a registration.
@@ -64,11 +126,86 @@ type Registered struct {
 	Version  int    `json:"version"` // protocol version the server will speak
 }
 
-// Heartbeat is sent every 15s and extends every active lease.
+// Heartbeat is sent every HeartbeatInterval. It extends the lease of every job listed in
+// ActiveJobs; a leased job the runner no longer lists expires and goes back to the queue.
 type Heartbeat struct {
 	Load       int               `json:"load"`
 	AuthState  map[string]string `json:"auth_state"` // backend → "ok" | "expired" | "missing"
 	ActiveJobs []string          `json:"active_jobs"`
+}
+
+// LeaseRequest asks for up to Slots jobs.
+type LeaseRequest struct {
+	Slots int `json:"slots"`
+}
+
+// Bounds limit a job so a runaway cannot burn a session.
+type Bounds struct {
+	TimeoutSeconds int `json:"timeout_seconds"`
+	MaxToolCalls   int `json:"max_tool_calls"`
+}
+
+// Job is one unit of work handed to a runner.
+type Job struct {
+	JobID          string    `json:"job_id"`
+	TaskID         string    `json:"task_id"`
+	ProjectID      string    `json:"project_id"`
+	Phase          string    `json:"phase"`
+	Role           string    `json:"role"`
+	Backend        string    `json:"backend"`
+	Instruction    string    `json:"instruction"`
+	Bounds         Bounds    `json:"bounds"`
+	Attempt        int       `json:"attempt"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+}
+
+// Lease hands jobs to the runner. An empty list means nothing is queued for it.
+type Lease struct {
+	Jobs []Job `json:"jobs"`
+}
+
+// JobEvent is one item of agent output (text, tool call, commit, screenshot).
+type JobEvent struct {
+	Seq     uint64          `json:"seq"`
+	Type    string          `json:"type"`
+	At      time.Time       `json:"at"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// Events streams output for one job. Per-job event seq makes resends idempotent.
+type Events struct {
+	JobID  string     `json:"job_id"`
+	Events []JobEvent `json:"events"`
+}
+
+// Ack confirms the server durably processed the runner message with this envelope seq.
+// The runner keeps events and finishes until acked and resends them after reconnect.
+type Ack struct {
+	Seq uint64 `json:"seq"`
+}
+
+// Steer injects a correction into a running job.
+type Steer struct {
+	JobID   string `json:"job_id"`
+	Message string `json:"message"`
+}
+
+// Stop asks the runner to end a job; it answers with a Finish whose status is "stopped".
+type Stop struct {
+	JobID  string `json:"job_id"`
+	Reason string `json:"reason"`
+}
+
+// LoginBackend asks the runner to start an interactive login for a backend.
+type LoginBackend struct {
+	Backend string `json:"backend"`
+}
+
+// LoginPrompt returns what the person must open to finish the login.
+type LoginPrompt struct {
+	Backend string `json:"backend"`
+	URL     string `json:"url"`
+	Code    string `json:"code,omitempty"`
 }
 
 // Usage is what one job consumed. Every finish carries it; the server stores it per task
@@ -87,17 +224,30 @@ type Usage struct {
 	FinishedAt       time.Time `json:"finished_at"`
 }
 
+// Reported says whether the usage carries any measurement at all.
+func (u Usage) Reported() bool {
+	return u.DurationMS > 0 || u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens > 0
+}
+
+// Finish statuses.
+const (
+	StatusDone    = "done"
+	StatusFailed  = "failed"
+	StatusStopped = "stopped"
+)
+
 // Finish is the receipt a runner sends when a job ends. The server does not accept
-// `done` without it.
+// `done` without usage: a done job with no measurement is recorded as failed.
 type Finish struct {
 	JobID        string   `json:"job_id"`
-	Status       string   `json:"status"` // "done" | "failed" | "stopped"
+	Status       string   `json:"status"` // StatusDone | StatusFailed | StatusStopped
 	StopReason   string   `json:"stop_reason,omitempty"`
 	ExitCode     int      `json:"exit_code"`
 	Branch       string   `json:"branch,omitempty"`
 	Commits      []string `json:"commits,omitempty"`
 	ChangedFiles int      `json:"changed_files"`
 	SessionID    string   `json:"session_id,omitempty"`
+	Summary      string   `json:"summary,omitempty"`
 	Usage        Usage    `json:"usage"`
 }
 
@@ -105,4 +255,5 @@ type Finish struct {
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Fatal   bool   `json:"fatal"` // the server closes the connection after a fatal error
 }

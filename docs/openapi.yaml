@@ -203,6 +203,76 @@ paths:
           schema: { type: string, format: date-time }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectMetrics" } } } }
+  /tasks/{taskId}/jobs:
+    get:
+      operationId: listTaskJobs
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Job" } } } } }
+    post:
+      operationId: createTaskJob
+      description: Queue an agent job for the task's current phase. Role defaults to the phase's runner role.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewJob" } } }
+      responses:
+        "201": { description: queued, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}:
+    get:
+      operationId: getJob
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/events:
+    get:
+      operationId: listJobEvents
+      description: Stored agent output after the given sequence number. Live output streams on the WebSocket topic job:<id>.
+      parameters:
+        - { $ref: "#/components/parameters/jobId" }
+        - { name: after, in: query, required: false, schema: { type: integer, format: int64, minimum: 0 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1000 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/JobEvent" } } } } }
+  /jobs/{jobId}/stop:
+    post:
+      operationId: stopJob
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      requestBody:
+        content: { application/json: { schema: { $ref: "#/components/schemas/StopJob" } } }
+      responses:
+        "202": { description: stop requested or done, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/steer:
+    post:
+      operationId: steerJob
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SteerJob" } } }
+      responses:
+        "202": { description: delivered to the runner }
+        "409": { $ref: "#/components/responses/Error" }
+  /runners:
+    get:
+      operationId: listRunners
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RunnerInfo" } } } } }
+  /runners/{runnerId}/login:
+    post:
+      operationId: requestRunnerLogin
+      description: Ask a connected runner to start a backend login; the URL and code arrive on the WebSocket topic runner:<id>.
+      parameters: [ { $ref: "#/components/parameters/runnerId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } }
+      responses:
+        "202": { description: requested }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/transitions:
     get:
       operationId: listTaskTransitions
@@ -213,6 +283,8 @@ components:
   parameters:
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
+    jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error:
       description: error
@@ -240,6 +312,78 @@ components:
       properties:
         features: { type: array, items: { type: string } }
         protocolVersion: { type: integer }
+    NewJob:
+      type: object
+      required: [backend]
+      properties:
+        backend: { type: string, description: "claude | codex | pi" }
+        instruction: { type: string }
+        role: { type: string }
+        maxAttempts: { type: integer, minimum: 1, maximum: 10 }
+        timeoutSeconds: { type: integer, minimum: 60 }
+        maxToolCalls: { type: integer, minimum: 1 }
+    Job:
+      type: object
+      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        phase: { type: string }
+        role: { type: string }
+        backend: { type: string }
+        instruction: { type: string }
+        status: { type: string, enum: [queued, leased, running, stalled, done, failed, stopped] }
+        runnerId: { type: string, format: uuid }
+        attempts: { type: integer }
+        maxAttempts: { type: integer }
+        leaseExpiresAt: { type: string, format: date-time }
+        lastEventAt: { type: string, format: date-time }
+        stopReason: { type: string }
+        receipt: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    JobEvent:
+      type: object
+      required: [seq, type, at, payload]
+      properties:
+        seq: { type: integer, format: int64 }
+        type: { type: string }
+        at: { type: string, format: date-time }
+        payload: { type: object, additionalProperties: true }
+    StopJob:
+      type: object
+      properties: { reason: { type: string } }
+    SteerJob:
+      type: object
+      required: [message]
+      properties: { message: { type: string } }
+    LoginRequest:
+      type: object
+      required: [backend]
+      properties: { backend: { type: string } }
+    RunnerCapabilities:
+      type: object
+      required: [backends, maxParallel, projects]
+      properties:
+        backends: { type: array, items: { type: string } }
+        maxParallel: { type: integer }
+        projects: { type: array, items: { type: string } }
+    RunnerInfo:
+      type: object
+      required: [id, name, location, status, connected, capabilities, authState, protocolVersion, binaryVersion]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        location: { type: string }
+        status: { type: string, enum: [online, busy, offline] }
+        connected: { type: boolean }
+        capabilities: { $ref: "#/components/schemas/RunnerCapabilities" }
+        authState: { type: object, additionalProperties: { type: string } }
+        protocolVersion: { type: integer }
+        binaryVersion: { type: string }
+        lastHeartbeatAt: { type: string, format: date-time }
     UsageInput:
       type: object
       required: [durationMs]
