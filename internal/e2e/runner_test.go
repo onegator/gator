@@ -70,6 +70,13 @@ func TestRunnerRunsJobEndToEnd(t *testing.T) {
 	if m.Tokens.Total != 120 || m.Jobs != 1 || m.AgentSeconds != 1.5 {
 		t.Fatalf("usage from the receipt should reach task metrics: %+v", m)
 	}
+	// After the job the task waits for a person; the lead splits into its parts.
+	if m.State.Kind != "waiting_for_human" || m.WorkSeconds <= 0 || done.FinishedAt == nil || m.State.Since.Before(done.FinishedAt.Add(-time.Second)) {
+		t.Fatalf("state after the job: %+v work=%v", m.State, m.WorkSeconds)
+	}
+	if sum := m.WorkSeconds + m.QueueSeconds + m.BlockedSeconds + m.WaitingSeconds; sum < m.LeadSeconds-0.01 || sum > m.LeadSeconds+0.01 {
+		t.Fatalf("parts %v do not add up to lead %v", sum, m.LeadSeconds)
+	}
 
 	var rs []gen.RunnerInfo
 	h.do("GET", "/runners", nil, &rs)

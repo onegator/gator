@@ -65,12 +65,15 @@ func (s *Server) GetTaskMetrics(w http.ResponseWriter, r *http.Request, taskId g
 	out := gen.TaskMetrics{
 		TaskId: toUUID(m.TaskID), Closed: m.Closed, LeadSeconds: m.LeadSeconds, BlockedSeconds: m.BlockedSeconds,
 		AgentSeconds: m.AgentSeconds, Tokens: toTokens(m.Tokens), CostUsd: m.CostUSD, CostEstimated: m.CostEstimated,
-		Jobs: m.Jobs, Phases: make([]gen.PhaseMetrics, 0, len(m.Phases)),
+		WorkSeconds: m.WorkSeconds, QueueSeconds: m.QueueSeconds, WaitingSeconds: m.WaitingSeconds,
+		State: gen.TaskState{Kind: gen.TaskStateKind(m.State.Kind), Since: m.State.Since},
+		Jobs:  m.Jobs, Phases: make([]gen.PhaseMetrics, 0, len(m.Phases)),
 	}
 	for _, p := range m.Phases {
 		out.Phases = append(out.Phases, gen.PhaseMetrics{
 			Phase: p.Phase, Owner: p.Owner, Visits: p.Visits, Seconds: p.Seconds, BlockedSeconds: p.BlockedSeconds,
-			AgentSeconds: p.AgentSeconds, Tokens: toTokens(p.Tokens), CostUsd: p.CostUSD, Jobs: p.Jobs,
+			AgentSeconds: p.AgentSeconds, WorkSeconds: p.WorkSeconds, QueueSeconds: p.QueueSeconds, WaitingSeconds: p.WaitingSeconds,
+			Tokens: toTokens(p.Tokens), CostUsd: p.CostUSD, Jobs: p.Jobs,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

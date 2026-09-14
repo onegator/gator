@@ -6,9 +6,11 @@
 <p>Phases: {{range .D.Phases}}<span {{if eq .Name $.D.Task.Phase}}style="font-weight:bold"{{end}}>{{.Name}}</span> · {{end}}</p>
 <p>Gate: {{.D.Phase.Gate}} · human approved: {{.D.Gate.HumanApprovedAt.Valid}}</p>
 <h2>Time and tokens</h2>
-<p>Lead {{printf "%.0f" .M.LeadSeconds}}s · agents {{printf "%.0f" .M.AgentSeconds}}s · blocked {{printf "%.0f" .M.BlockedSeconds}}s · tokens {{.M.Tokens.Total}} · ${{printf "%.4f" .M.CostUSD}}{{if .M.CostEstimated}} (estimated){{end}} · jobs {{.M.Jobs}}</p>
-<table><tr><th>Phase</th><th>Visits</th><th>Time</th><th>Blocked</th><th>Agents</th><th>Tokens</th><th>Cost</th></tr>
-{{range .M.Phases}}<tr><td>{{.Phase}}</td><td>{{.Visits}}</td><td>{{printf "%.0f" .Seconds}}s</td><td>{{printf "%.0f" .BlockedSeconds}}s</td><td>{{printf "%.0f" .AgentSeconds}}s</td><td>{{.Tokens.Total}}</td><td>${{printf "%.4f" .CostUSD}}</td></tr>{{end}}
+<p><strong>{{stateText .M.State.Kind}}</strong>{{if eq .M.State.Kind "closed"}} at {{.M.State.Since.Format "2006-01-02 15:04"}}{{else}} for {{since .M.State.Since}}{{end}}</p>
+<p>Lead {{dur .M.LeadSeconds}} = agent work {{dur .M.WorkSeconds}} + queue {{dur .M.QueueSeconds}} + blocked {{dur .M.BlockedSeconds}} + waiting for people {{dur .M.WaitingSeconds}}{{if not .M.Closed}} <small>(open tasks count up to now)</small>{{end}}</p>
+<p>Tokens {{.M.Tokens.Total}} · ${{printf "%.4f" .M.CostUSD}}{{if .M.CostEstimated}} (estimated){{end}} · jobs {{.M.Jobs}} · agent process time {{dur .M.AgentSeconds}}</p>
+<table><tr><th>Phase</th><th>Visits</th><th>Time</th><th>Agent work</th><th>Queue</th><th>Blocked</th><th>Waiting</th><th>Tokens</th><th>Cost</th></tr>
+{{range .M.Phases}}<tr><td>{{.Phase}}</td><td>{{.Visits}}</td><td>{{dur .Seconds}}</td><td>{{dur .WorkSeconds}}</td><td>{{dur .QueueSeconds}}</td><td>{{dur .BlockedSeconds}}</td><td>{{dur .WaitingSeconds}}</td><td>{{.Tokens.Total}}</td><td>${{printf "%.4f" .CostUSD}}</td></tr>{{end}}
 </table>
 <h2>History</h2>
 <table><tr><th>When</th><th>Kind</th><th>From</th><th>To</th><th>Actor</th><th>Reason</th></tr>

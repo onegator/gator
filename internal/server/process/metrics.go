@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -47,9 +48,28 @@ type PhaseMetrics struct {
 	Seconds        float64 // wall time in the phase
 	BlockedSeconds float64 // part of Seconds spent blocked
 	AgentSeconds   float64 // time agents ran while the task was in this phase
+	WorkSeconds    float64 // job wall time from start to finish (agent plus setup and git)
+	QueueSeconds   float64 // jobs waiting for a runner
+	WaitingSeconds float64 // the rest of Seconds: nobody working, the phase waits for a person
 	Tokens         TokenCounts
 	CostUSD        float64
 	Jobs           int
+}
+
+// Task states, most urgent first.
+const (
+	StateClosed          = "closed"
+	StateBlocked         = "blocked"
+	StateAgentStalled    = "agent_stalled"
+	StateAgentWorking    = "agent_working"
+	StateQueued          = "queued"
+	StateWaitingForHuman = "waiting_for_human"
+)
+
+// TaskState is what the task is doing right now and since when.
+type TaskState struct {
+	Kind  string
+	Since time.Time
 }
 
 // TaskMetrics is the full time and token account of a task.
@@ -59,6 +79,12 @@ type TaskMetrics struct {
 	LeadSeconds    float64 // created → closed, or → now while open
 	BlockedSeconds float64
 	AgentSeconds   float64
+	// Lead = WorkSeconds + QueueSeconds + BlockedSeconds + WaitingSeconds (waiting is clamped at
+	// zero when parallel jobs overlap).
+	WorkSeconds    float64
+	QueueSeconds   float64
+	WaitingSeconds float64
+	State          TaskState
 	Tokens         TokenCounts
 	CostUSD        float64
 	CostEstimated  bool
@@ -66,13 +92,14 @@ type TaskMetrics struct {
 	Phases         []PhaseMetrics // in order of first visit
 }
 
-// ComputeMetrics derives time per phase from the transition log and adds usage records.
+// ComputeMetrics derives time per phase from the transition log, splits it into agent work,
+// queue, blocked and waiting-for-a-person using the task's jobs, and adds usage records.
 // It is pure so it can be tested with synthetic timelines.
 //
 // Rules: create/advance/rollback start a phase segment; advance/rollback/close end it;
 // auto_block starts a blocked interval inside the current phase, unblock or leaving the
 // phase ends it. Open tasks are measured up to now.
-func ComputeMetrics(task db.Task, trs []db.PhaseTransition, usage []db.UsageRecord, owners map[string]Owner, now time.Time) TaskMetrics {
+func ComputeMetrics(task db.Task, trs []db.PhaseTransition, usage []db.UsageRecord, jobs []db.Job, owners map[string]Owner, now time.Time) TaskMetrics {
 	var order []string
 	byPhase := map[string]*PhaseMetrics{}
 	get := func(p string) *PhaseMetrics {
@@ -86,7 +113,7 @@ func ComputeMetrics(task db.Task, trs []db.PhaseTransition, usage []db.UsageReco
 	}
 
 	var cur string
-	var start time.Time
+	var start, enteredAt, unblockedAt time.Time
 	var blockedAt *time.Time
 	closeSegment := func(at time.Time) {
 		if cur == "" {
@@ -100,7 +127,7 @@ func ComputeMetrics(task db.Task, trs []db.PhaseTransition, usage []db.UsageReco
 		}
 	}
 	enter := func(p string, at time.Time) {
-		cur, start = p, at
+		cur, start, enteredAt = p, at, at
 		get(p).Visits++
 	}
 	for _, tr := range trs {
@@ -123,10 +150,16 @@ func ComputeMetrics(task db.Task, trs []db.PhaseTransition, usage []db.UsageReco
 			if cur != "" && blockedAt != nil {
 				get(cur).BlockedSeconds += at.Sub(*blockedAt).Seconds()
 				blockedAt = nil
+				unblockedAt = at
 			}
 		}
 	}
+	var openBlock *time.Time
 	if cur != "" {
+		if blockedAt != nil {
+			t := *blockedAt
+			openBlock = &t
+		}
 		closeSegment(now)
 	}
 
@@ -154,16 +187,111 @@ func ComputeMetrics(task db.Task, trs []db.PhaseTransition, usage []db.UsageReco
 			out.CostEstimated = true
 		}
 	}
+
+	for _, j := range jobs {
+		p := get(j.Phase)
+		jEnd := end
+		if j.FinishedAt.Valid && j.FinishedAt.Time.Before(jEnd) {
+			jEnd = j.FinishedAt.Time
+		}
+		created := j.CreatedAt.Time
+		if j.StartedAt.Valid {
+			p.QueueSeconds += positive(j.StartedAt.Time.Sub(created))
+			p.WorkSeconds += positive(jEnd.Sub(j.StartedAt.Time))
+		} else {
+			p.QueueSeconds += positive(jEnd.Sub(created))
+		}
+	}
+
 	for _, name := range order {
 		p := byPhase[name]
+		p.WaitingSeconds = math.Max(0, p.Seconds-p.BlockedSeconds-p.WorkSeconds-p.QueueSeconds)
 		out.BlockedSeconds += p.BlockedSeconds
 		out.AgentSeconds += p.AgentSeconds
+		out.WorkSeconds += p.WorkSeconds
+		out.QueueSeconds += p.QueueSeconds
 		out.Tokens.add(p.Tokens)
 		out.CostUSD += p.CostUSD
 		out.Jobs += p.Jobs
 		out.Phases = append(out.Phases, *p)
 	}
+	out.WaitingSeconds = math.Max(0, out.LeadSeconds-out.WorkSeconds-out.QueueSeconds-out.BlockedSeconds)
+	out.State = taskState(task, jobs, cur, enteredAt, unblockedAt, openBlock)
 	return out
+}
+
+// taskState says what the task is doing now. Waiting for a person starts at the latest of:
+// entering the phase, being unblocked, or the last job of this phase finishing.
+func taskState(task db.Task, jobs []db.Job, cur string, enteredAt, unblockedAt time.Time, openBlock *time.Time) TaskState {
+	if task.ClosedAt.Valid {
+		return TaskState{StateClosed, task.ClosedAt.Time}
+	}
+	fallback := func(t time.Time) time.Time {
+		if t.IsZero() {
+			return task.CreatedAt.Time
+		}
+		return t
+	}
+	if task.BlockedReason != nil {
+		since := enteredAt
+		if openBlock != nil {
+			since = *openBlock
+		}
+		return TaskState{StateBlocked, fallback(since)}
+	}
+	var working, stalled, queued time.Time
+	var latestDone time.Time
+	earliest := func(cur, t time.Time) time.Time {
+		if cur.IsZero() || t.Before(cur) {
+			return t
+		}
+		return cur
+	}
+	for _, j := range jobs {
+		switch j.Status {
+		case "leased", "running":
+			t := j.CreatedAt.Time
+			if j.StartedAt.Valid {
+				t = j.StartedAt.Time
+			}
+			working = earliest(working, t)
+		case "stalled":
+			t := j.StartedAt.Time
+			if j.LastEventAt.Valid {
+				t = j.LastEventAt.Time
+			}
+			stalled = earliest(stalled, t)
+		case "queued":
+			queued = earliest(queued, j.CreatedAt.Time)
+		default:
+			if j.Phase == cur && j.FinishedAt.Valid && j.FinishedAt.Time.After(latestDone) {
+				latestDone = j.FinishedAt.Time
+			}
+		}
+	}
+	switch {
+	case !stalled.IsZero():
+		return TaskState{StateAgentStalled, stalled}
+	case !working.IsZero():
+		return TaskState{StateAgentWorking, working}
+	case !queued.IsZero():
+		return TaskState{StateQueued, queued}
+	}
+	since := enteredAt
+	if unblockedAt.After(since) {
+		since = unblockedAt
+	}
+	if latestDone.After(since) {
+		since = latestDone
+	}
+	return TaskState{StateWaitingForHuman, fallback(since)}
+}
+
+func positive(d time.Duration) float64 {
+	if d < 0 {
+		return 0
+	}
+	return d.Seconds()
 }
 
 // Metrics loads a task's transitions and usage and computes its account.
@@ -181,13 +309,17 @@ func (s *Service) Metrics(ctx context.Context, taskID pgtype.UUID, now time.Time
 	if err != nil {
 		return TaskMetrics{}, err
 	}
+	jobs, err := q.ListJobsByTask(ctx, taskID)
+	if err != nil {
+		return TaskMetrics{}, err
+	}
 	owners := map[string]Owner{}
 	if m, err := s.machine(ctx, t.ProjectID, t.Kind); err == nil {
 		for _, p := range m.template.Phases {
 			owners[p.Name] = p.Owner
 		}
 	}
-	return ComputeMetrics(t, trs, us, owners, now), nil
+	return ComputeMetrics(t, trs, us, jobs, owners, now), nil
 }
 
 // UsageInput is one usage report.

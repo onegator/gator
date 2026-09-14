@@ -354,6 +354,9 @@ func TestUsageAndMetricsOverHTTP(t *testing.T) {
 	if len(m.Phases) != 1 || m.Phases[0].Phase != "planning" || m.Phases[0].Owner != "runner" || m.Phases[0].Tokens.Total != 9500 || m.LeadSeconds <= 0 {
 		t.Fatalf("phase metrics: %+v", m.Phases)
 	}
+	if m.State.Kind != "waiting_for_human" || m.State.Since.IsZero() || m.WorkSeconds != 0 || m.WaitingSeconds <= 0 {
+		t.Fatalf("a task with no jobs waits for a person: %+v work=%v waiting=%v", m.State, m.WorkSeconds, m.WaitingSeconds)
+	}
 
 	var pm gen.ProjectMetrics
 	if code := h.do("GET", "/projects/"+project.Id.String()+"/metrics", nil, &pm); code != 200 {

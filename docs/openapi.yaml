@@ -442,7 +442,7 @@ components:
         total: { type: integer, format: int64 }
     PhaseMetrics:
       type: object
-      required: [phase, owner, visits, seconds, blockedSeconds, agentSeconds, tokens, costUsd, jobs]
+      required: [phase, owner, visits, seconds, blockedSeconds, agentSeconds, workSeconds, queueSeconds, waitingSeconds, tokens, costUsd, jobs]
       properties:
         phase: { type: string }
         owner: { type: string, description: human | runner | plugin, from the template }
@@ -450,23 +450,36 @@ components:
         seconds: { type: number, format: double, description: wall time spent in the phase }
         blockedSeconds: { type: number, format: double }
         agentSeconds: { type: number, format: double, description: time agents ran during this phase }
+        workSeconds: { type: number, format: double, description: job wall time from start to finish }
+        queueSeconds: { type: number, format: double, description: jobs waiting for a runner }
+        waitingSeconds: { type: number, format: double, description: rest of the phase time, waiting for a person }
         tokens: { $ref: "#/components/schemas/Tokens" }
         costUsd: { type: number, format: double }
         jobs: { type: integer }
     TaskMetrics:
       type: object
-      required: [taskId, closed, leadSeconds, blockedSeconds, agentSeconds, tokens, costUsd, costEstimated, jobs, phases]
+      required: [taskId, closed, leadSeconds, blockedSeconds, agentSeconds, workSeconds, queueSeconds, waitingSeconds, state, tokens, costUsd, costEstimated, jobs, phases]
       properties:
         taskId: { type: string, format: uuid }
         closed: { type: boolean }
         leadSeconds: { type: number, format: double, description: created to closed, or to now while open }
         blockedSeconds: { type: number, format: double }
         agentSeconds: { type: number, format: double }
+        workSeconds: { type: number, format: double, description: "lead = work + queue + blocked + waiting" }
+        queueSeconds: { type: number, format: double }
+        waitingSeconds: { type: number, format: double, description: nobody working; the task waits for a person }
+        state: { $ref: "#/components/schemas/TaskState" }
         tokens: { $ref: "#/components/schemas/Tokens" }
         costUsd: { type: number, format: double }
         costEstimated: { type: boolean, description: true if any part of the cost is an estimate }
         jobs: { type: integer }
         phases: { type: array, items: { $ref: "#/components/schemas/PhaseMetrics" } }
+    TaskState:
+      type: object
+      required: [kind, since]
+      properties:
+        kind: { type: string, enum: [closed, blocked, agent_stalled, agent_working, queued, waiting_for_human] }
+        since: { type: string, format: date-time }
     KindMetrics:
       type: object
       required: [kind, tasks, closedTasks, avgLeadSeconds, agentSeconds, tokens, costUsd, jobs]

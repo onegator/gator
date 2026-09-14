@@ -4,6 +4,7 @@ package admin
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"net/http"
 	"time"
@@ -19,7 +20,44 @@ import (
 //go:embed templates/*.html
 var files embed.FS
 
-var tmpl = template.Must(template.ParseFS(files, "templates/*.html"))
+var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
+	"dur":       human,
+	"since":     func(t time.Time) string { return human(time.Since(t).Seconds()) },
+	"stateText": stateText,
+}).ParseFS(files, "templates/*.html"))
+
+// human formats seconds the way a person reads them: 45s, 8m 1s, 2h 5m, 3d 4h.
+func human(sec float64) string {
+	d := time.Duration(sec * float64(time.Second)).Round(time.Second)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dd %dh", int(d.Hours())/24, int(d.Hours())%24)
+	}
+}
+
+func stateText(kind string) string {
+	switch kind {
+	case "waiting_for_human":
+		return "Waiting for you"
+	case "agent_working":
+		return "Agent working"
+	case "agent_stalled":
+		return "Agent stalled, no output"
+	case "queued":
+		return "Queued for a runner"
+	case "blocked":
+		return "Blocked"
+	case "closed":
+		return "Closed"
+	}
+	return kind
+}
 
 // Handler serves /admin.
 type Handler struct {
