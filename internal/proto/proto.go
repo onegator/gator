@@ -3,6 +3,8 @@
 // of either binary: the server accepts protocol versions N and N-1.
 package proto
 
+import "time"
+
 // Version is the current runner protocol version. Bump on any incompatible change
 // and keep the previous version readable on the server side.
 const Version = 1
@@ -67,6 +69,36 @@ type Heartbeat struct {
 	Load       int               `json:"load"`
 	AuthState  map[string]string `json:"auth_state"` // backend → "ok" | "expired" | "missing"
 	ActiveJobs []string          `json:"active_jobs"`
+}
+
+// Usage is what one job consumed. Every finish carries it; the server stores it per task
+// and phase so time and tokens can be reported for every task Gator runs.
+type Usage struct {
+	Backend          string    `json:"backend"` // "claude" | "codex" | "pi"
+	Model            string    `json:"model"`
+	InputTokens      int64     `json:"input_tokens"`
+	OutputTokens     int64     `json:"output_tokens"`
+	CacheReadTokens  int64     `json:"cache_read_tokens"`
+	CacheWriteTokens int64     `json:"cache_write_tokens"`
+	CostUSD          float64   `json:"cost_usd"`
+	CostEstimated    bool      `json:"cost_estimated"` // true on subscriptions: priced from list rates, not billed
+	DurationMS       int64     `json:"duration_ms"`    // wall time the agent process ran
+	StartedAt        time.Time `json:"started_at"`
+	FinishedAt       time.Time `json:"finished_at"`
+}
+
+// Finish is the receipt a runner sends when a job ends. The server does not accept
+// `done` without it.
+type Finish struct {
+	JobID        string   `json:"job_id"`
+	Status       string   `json:"status"` // "done" | "failed" | "stopped"
+	StopReason   string   `json:"stop_reason,omitempty"`
+	ExitCode     int      `json:"exit_code"`
+	Branch       string   `json:"branch,omitempty"`
+	Commits      []string `json:"commits,omitempty"`
+	ChangedFiles int      `json:"changed_files"`
+	SessionID    string   `json:"session_id,omitempty"`
+	Usage        Usage    `json:"usage"`
 }
 
 // Error is sent by the server when a message is rejected.

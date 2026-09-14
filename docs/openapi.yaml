@@ -168,6 +168,41 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
         "409": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/usage:
+    post:
+      operationId: recordTaskUsage
+      description: >
+        Record tokens, cost and agent time for work done on a task. Runners send one record per
+        job; plugins and people may report too. Repeating an idempotencyKey for the same task is a no-op.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UsageInput" } } }
+      responses:
+        "201": { description: recorded, content: { application/json: { schema: { $ref: "#/components/schemas/UsageAck" } } } }
+        "200": { description: duplicate idempotencyKey, nothing recorded, content: { application/json: { schema: { $ref: "#/components/schemas/UsageAck" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/metrics:
+    get:
+      operationId: getTaskMetrics
+      description: Time and token accounting for one task, total and per phase.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TaskMetrics" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/metrics:
+    get:
+      operationId: getProjectMetrics
+      description: Aggregates per task kind for tasks created since the given time (default 30 days).
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - name: since
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectMetrics" } } } }
   /tasks/{taskId}/transitions:
     get:
       operationId: listTaskTransitions
@@ -205,6 +240,84 @@ components:
       properties:
         features: { type: array, items: { type: string } }
         protocolVersion: { type: integer }
+    UsageInput:
+      type: object
+      required: [durationMs]
+      properties:
+        jobId: { type: string, format: uuid }
+        phase: { type: string, description: defaults to the task's current phase }
+        backend: { type: string }
+        model: { type: string }
+        inputTokens: { type: integer, format: int64, minimum: 0 }
+        outputTokens: { type: integer, format: int64, minimum: 0 }
+        cacheReadTokens: { type: integer, format: int64, minimum: 0 }
+        cacheWriteTokens: { type: integer, format: int64, minimum: 0 }
+        costUsd: { type: number, format: double, minimum: 0 }
+        costEstimated: { type: boolean, description: true when priced from list rates (subscriptions) }
+        durationMs: { type: integer, format: int64, minimum: 0 }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        idempotencyKey: { type: string }
+    UsageAck:
+      type: object
+      required: [recorded]
+      properties: { recorded: { type: boolean } }
+    Tokens:
+      type: object
+      required: [input, output, cacheRead, cacheWrite, total]
+      properties:
+        input: { type: integer, format: int64 }
+        output: { type: integer, format: int64 }
+        cacheRead: { type: integer, format: int64 }
+        cacheWrite: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+    PhaseMetrics:
+      type: object
+      required: [phase, owner, visits, seconds, blockedSeconds, agentSeconds, tokens, costUsd, jobs]
+      properties:
+        phase: { type: string }
+        owner: { type: string, description: human | runner | plugin, from the template }
+        visits: { type: integer, description: times the task entered this phase (rollbacks add visits) }
+        seconds: { type: number, format: double, description: wall time spent in the phase }
+        blockedSeconds: { type: number, format: double }
+        agentSeconds: { type: number, format: double, description: time agents ran during this phase }
+        tokens: { $ref: "#/components/schemas/Tokens" }
+        costUsd: { type: number, format: double }
+        jobs: { type: integer }
+    TaskMetrics:
+      type: object
+      required: [taskId, closed, leadSeconds, blockedSeconds, agentSeconds, tokens, costUsd, costEstimated, jobs, phases]
+      properties:
+        taskId: { type: string, format: uuid }
+        closed: { type: boolean }
+        leadSeconds: { type: number, format: double, description: created to closed, or to now while open }
+        blockedSeconds: { type: number, format: double }
+        agentSeconds: { type: number, format: double }
+        tokens: { $ref: "#/components/schemas/Tokens" }
+        costUsd: { type: number, format: double }
+        costEstimated: { type: boolean, description: true if any part of the cost is an estimate }
+        jobs: { type: integer }
+        phases: { type: array, items: { $ref: "#/components/schemas/PhaseMetrics" } }
+    KindMetrics:
+      type: object
+      required: [kind, tasks, closedTasks, avgLeadSeconds, agentSeconds, tokens, costUsd, jobs]
+      properties:
+        kind: { type: string }
+        tasks: { type: integer, format: int64 }
+        closedTasks: { type: integer, format: int64 }
+        avgLeadSeconds: { type: number, format: double }
+        agentSeconds: { type: number, format: double }
+        tokens: { $ref: "#/components/schemas/Tokens" }
+        costUsd: { type: number, format: double }
+        jobs: { type: integer, format: int64 }
+    ProjectMetrics:
+      type: object
+      required: [projectId, since, byKind, totals]
+      properties:
+        projectId: { type: string, format: uuid }
+        since: { type: string, format: date-time }
+        byKind: { type: array, items: { $ref: "#/components/schemas/KindMetrics" } }
+        totals: { $ref: "#/components/schemas/KindMetrics" }
     Me:
       type: object
       required: [kind, name, workspaceRole]

@@ -71,3 +71,16 @@ overdue tasks into the inbox, and an hourly `pg_dump` uploaded to an S3-compatib
 immediately; `gator-server restore <file>` replays a dump with `pg_restore --clean`. River's own
 schema is applied by `gator-server migrate`. On SIGTERM the server stops HTTP, lets in-flight jobs
 finish for up to 15s, then forces the queue down.
+
+## Time and tokens per task
+
+Every task is measured. Time comes from the append-only transition log: lead time (created to
+closed, or to now), wall time per phase and visit count (rollbacks add visits), and blocked time.
+Tokens, cost and agent run time come from `usage_records`, one row per job or report, split into
+input, output, cache read and cache write. Runners attach a `proto.Usage` to every `Finish`;
+anything else can report through `POST /api/v1/tasks/{id}/usage` with an idempotency key.
+Cost on subscriptions is an estimate from list prices and is flagged `costEstimated`.
+
+- `GET /api/v1/tasks/{id}/metrics`: totals and per-phase breakdown.
+- `GET /api/v1/projects/{id}/metrics?since=`: per task kind, with averages over closed tasks.
+- OpenTelemetry counters `gator.agent.tokens{type,backend}` and `gator.agent.cost_usd{backend}`.

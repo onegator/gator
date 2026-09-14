@@ -316,3 +316,67 @@ func TestSessionCookieAuthenticates(t *testing.T) {
 		t.Fatalf("after logout: %d", code)
 	}
 }
+
+func TestUsageAndMetricsOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	admin := h.token
+	var project gen.Project
+	h.do("POST", "/projects", gen.NewProject{Slug: fmt.Sprintf("m%d", time.Now().UnixNano()), Name: "M"}, &project)
+	var task gen.Task
+	if code := h.do("POST", "/projects/"+project.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "leak"}, &task); code != 201 {
+		t.Fatalf("create task: %d", code)
+	}
+	n := func(v int64) *int64 { return &v }
+	str := func(v string) *string { return &v }
+	cost := 0.42
+	usage := gen.UsageInput{Backend: str("claude"), Model: str("claude-opus-5"), InputTokens: n(1200), OutputTokens: n(300),
+		CacheReadTokens: n(8000), DurationMs: 90_000, CostUsd: &cost, IdempotencyKey: str("job-1")}
+
+	var ack gen.UsageAck
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/usage", usage, &ack); code != 201 || !ack.Recorded {
+		t.Fatalf("first usage: %d %+v", code, ack)
+	}
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/usage", usage, &ack); code != 200 || ack.Recorded {
+		t.Fatalf("duplicate usage must not count: %d %+v", code, ack)
+	}
+	bad := gen.UsageInput{InputTokens: n(-1), DurationMs: 1}
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/usage", bad, nil); code != 400 {
+		t.Fatalf("negative tokens: %d", code)
+	}
+
+	var m gen.TaskMetrics
+	if code := h.do("GET", "/tasks/"+task.Id.String()+"/metrics", nil, &m); code != 200 {
+		t.Fatalf("metrics: %d", code)
+	}
+	if m.Tokens.Total != 9500 || m.Tokens.Input != 1200 || m.Jobs != 1 || m.AgentSeconds != 90 || m.CostUsd != 0.42 || !m.CostEstimated {
+		t.Fatalf("task metrics: %+v", m)
+	}
+	if len(m.Phases) != 1 || m.Phases[0].Phase != "planning" || m.Phases[0].Owner != "runner" || m.Phases[0].Tokens.Total != 9500 || m.LeadSeconds <= 0 {
+		t.Fatalf("phase metrics: %+v", m.Phases)
+	}
+
+	var pm gen.ProjectMetrics
+	if code := h.do("GET", "/projects/"+project.Id.String()+"/metrics", nil, &pm); code != 200 {
+		t.Fatalf("project metrics: %d", code)
+	}
+	if len(pm.ByKind) != 1 || pm.ByKind[0].Kind != "bug" || pm.Totals.Tokens.Total != 9500 || pm.Totals.Tasks != 1 {
+		t.Fatalf("project metrics: %+v", pm)
+	}
+
+	// a viewer may read metrics but not report usage
+	viewerID, viewer := h.login("member")
+	h.member(project.Id.String(), viewerID, "viewer")
+	h.token = viewer
+	if code := h.do("GET", "/tasks/"+task.Id.String()+"/metrics", nil, nil); code != 200 {
+		t.Fatalf("viewer metrics: %d", code)
+	}
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/usage", gen.UsageInput{DurationMs: 1}, nil); code != 403 {
+		t.Fatalf("viewer reporting usage: %d", code)
+	}
+	h.token = admin
+
+	// usage rows are append-only
+	if _, err := h.pool.Exec(context.Background(), "UPDATE usage_records SET input_tokens = 0 WHERE task_id = $1", task.Id.String()); err == nil {
+		t.Fatal("usage_records must be append-only")
+	}
+}

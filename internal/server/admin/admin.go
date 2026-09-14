@@ -6,6 +6,7 @@ import (
 	"embed"
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -60,5 +61,6 @@ func (h *Handler) task(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	trs, _ := h.Process.Transitions(r.Context(), id)
-	_ = tmpl.ExecuteTemplate(w, "task.html", map[string]any{"D": d, "Transitions": trs})
+	m, _ := h.Process.Metrics(r.Context(), id, time.Now())
+	_ = tmpl.ExecuteTemplate(w, "task.html", map[string]any{"D": d, "Transitions": trs, "M": m})
 }

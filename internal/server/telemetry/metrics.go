@@ -19,6 +19,7 @@ type Metrics struct {
 	PluginCalls      metric.Int64Counter       // gator.plugin.calls{plugin,hook,ok}
 	PluginLatency    metric.Float64Histogram   // gator.plugin.call_seconds{plugin,hook}
 	TokenCost        metric.Float64Counter     // gator.agent.cost_usd{project}
+	AgentTokens      metric.Int64Counter       // gator.agent.tokens{type,backend}
 	HTTPRateLimited  metric.Int64Counter       // gator.http.rate_limited{scope}
 }
 
@@ -55,6 +56,8 @@ func Instruments() (*Metrics, error) {
 		mm.PluginLatency, err = m.Float64Histogram("gator.plugin.call_seconds", metric.WithDescription("plugin hook latency"), metric.WithUnit("s"))
 		add(err)
 		mm.TokenCost, err = m.Float64Counter("gator.agent.cost_usd", metric.WithDescription("estimated agent cost"))
+		add(err)
+		mm.AgentTokens, err = m.Int64Counter("gator.agent.tokens", metric.WithDescription("tokens consumed by agents"))
 		add(err)
 		mm.HTTPRateLimited, err = m.Int64Counter("gator.http.rate_limited", metric.WithDescription("requests rejected by rate limiting"))
 		add(err)

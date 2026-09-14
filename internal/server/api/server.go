@@ -437,6 +437,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		errors.Is(err, process.ErrRollbackCeiling), errors.Is(err, process.ErrUnknownPhase),
 		errors.Is(err, process.ErrTerminalPhase):
 		writeError(w, http.StatusConflict, err.Error(), "conflict")
+	case errors.Is(err, process.ErrInvalidUsage):
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 	default:
 		s.Log.Error("request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error", "internal")

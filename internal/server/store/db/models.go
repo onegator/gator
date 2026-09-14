@@ -134,6 +134,29 @@ type Task struct {
 	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
 }
 
+type UsageRecord struct {
+	ID               pgtype.UUID        `json:"id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	Phase            string             `json:"phase"`
+	JobID            pgtype.UUID        `json:"job_id"`
+	Source           string             `json:"source"`
+	ActorID          pgtype.UUID        `json:"actor_id"`
+	Backend          string             `json:"backend"`
+	Model            string             `json:"model"`
+	InputTokens      int64              `json:"input_tokens"`
+	OutputTokens     int64              `json:"output_tokens"`
+	CacheReadTokens  int64              `json:"cache_read_tokens"`
+	CacheWriteTokens int64              `json:"cache_write_tokens"`
+	CostUsd          float64            `json:"cost_usd"`
+	CostEstimated    bool               `json:"cost_estimated"`
+	DurationMs       int64              `json:"duration_ms"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	IdempotencyKey   *string            `json:"idempotency_key"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type User struct {
 	ID            pgtype.UUID        `json:"id"`
 	Email         string             `json:"email"`

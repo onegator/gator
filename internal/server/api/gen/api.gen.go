@@ -141,6 +141,18 @@ type IssuedToken struct {
 	Token string `json:"token"`
 }
 
+// KindMetrics defines model for KindMetrics.
+type KindMetrics struct {
+	AgentSeconds   float64 `json:"agentSeconds"`
+	AvgLeadSeconds float64 `json:"avgLeadSeconds"`
+	ClosedTasks    int64   `json:"closedTasks"`
+	CostUsd        float64 `json:"costUsd"`
+	Jobs           int64   `json:"jobs"`
+	Kind           string  `json:"kind"`
+	Tasks          int64   `json:"tasks"`
+	Tokens         Tokens  `json:"tokens"`
+}
+
 // Me defines model for Me.
 type Me struct {
 	Kind          string              `json:"kind"`
@@ -189,6 +201,26 @@ type NewToken struct {
 // NewTokenKind defines model for NewToken.Kind.
 type NewTokenKind string
 
+// PhaseMetrics defines model for PhaseMetrics.
+type PhaseMetrics struct {
+	// AgentSeconds time agents ran during this phase
+	AgentSeconds   float64 `json:"agentSeconds"`
+	BlockedSeconds float64 `json:"blockedSeconds"`
+	CostUsd        float64 `json:"costUsd"`
+	Jobs           int     `json:"jobs"`
+
+	// Owner human | runner | plugin
+	Owner string `json:"owner"`
+	Phase string `json:"phase"`
+
+	// Seconds wall time spent in the phase
+	Seconds float64 `json:"seconds"`
+	Tokens  Tokens  `json:"tokens"`
+
+	// Visits times the task entered this phase (rollbacks add visits)
+	Visits int `json:"visits"`
+}
+
 // Project defines model for Project.
 type Project struct {
 	CreatedAt time.Time          `json:"createdAt"`
@@ -196,6 +228,14 @@ type Project struct {
 	Name      string             `json:"name"`
 	Slug      string             `json:"slug"`
 	Tags      []string           `json:"tags"`
+}
+
+// ProjectMetrics defines model for ProjectMetrics.
+type ProjectMetrics struct {
+	ByKind    []KindMetrics      `json:"byKind"`
+	ProjectId openapi_types.UUID `json:"projectId"`
+	Since     time.Time          `json:"since"`
+	Totals    KindMetrics        `json:"totals"`
 }
 
 // Readiness defines model for Readiness.
@@ -257,6 +297,24 @@ type TaskDetail struct {
 	Urgency             int                `json:"urgency"`
 }
 
+// TaskMetrics defines model for TaskMetrics.
+type TaskMetrics struct {
+	AgentSeconds   float64 `json:"agentSeconds"`
+	BlockedSeconds float64 `json:"blockedSeconds"`
+	Closed         bool    `json:"closed"`
+
+	// CostEstimated true if any part of the cost is an estimate
+	CostEstimated bool    `json:"costEstimated"`
+	CostUsd       float64 `json:"costUsd"`
+	Jobs          int     `json:"jobs"`
+
+	// LeadSeconds created to closed
+	LeadSeconds float64            `json:"leadSeconds"`
+	Phases      []PhaseMetrics     `json:"phases"`
+	TaskId      openapi_types.UUID `json:"taskId"`
+	Tokens      Tokens             `json:"tokens"`
+}
+
 // Token defines model for Token.
 type Token struct {
 	CreatedAt  time.Time           `json:"createdAt"`
@@ -269,6 +327,15 @@ type Token struct {
 	Scope      string              `json:"scope"`
 }
 
+// Tokens defines model for Tokens.
+type Tokens struct {
+	CacheRead  int64 `json:"cacheRead"`
+	CacheWrite int64 `json:"cacheWrite"`
+	Input      int64 `json:"input"`
+	Output     int64 `json:"output"`
+	Total      int64 `json:"total"`
+}
+
 // Transition defines model for Transition.
 type Transition struct {
 	ActorId   *openapi_types.UUID `json:"actorId,omitempty"`
@@ -279,6 +346,33 @@ type Transition struct {
 	Kind      string              `json:"kind"`
 	Reason    *string             `json:"reason,omitempty"`
 	ToPhase   string              `json:"toPhase"`
+}
+
+// UsageAck defines model for UsageAck.
+type UsageAck struct {
+	Recorded bool `json:"recorded"`
+}
+
+// UsageInput defines model for UsageInput.
+type UsageInput struct {
+	Backend          *string `json:"backend,omitempty"`
+	CacheReadTokens  *int64  `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens *int64  `json:"cacheWriteTokens,omitempty"`
+
+	// CostEstimated true when priced from list rates (subscriptions)
+	CostEstimated  *bool               `json:"costEstimated,omitempty"`
+	CostUsd        *float64            `json:"costUsd,omitempty"`
+	DurationMs     int64               `json:"durationMs"`
+	FinishedAt     *time.Time          `json:"finishedAt,omitempty"`
+	IdempotencyKey *string             `json:"idempotencyKey,omitempty"`
+	InputTokens    *int64              `json:"inputTokens,omitempty"`
+	JobId          *openapi_types.UUID `json:"jobId,omitempty"`
+	Model          *string             `json:"model,omitempty"`
+	OutputTokens   *int64              `json:"outputTokens,omitempty"`
+
+	// Phase defaults to the task's current phase
+	Phase     *string    `json:"phase,omitempty"`
+	StartedAt *time.Time `json:"startedAt,omitempty"`
 }
 
 // Version defines model for Version.
@@ -297,6 +391,11 @@ type TaskId = openapi_types.UUID
 // ListInboxParams defines parameters for ListInbox.
 type ListInboxParams struct {
 	ProjectId *openapi_types.UUID `form:"projectId,omitempty" json:"projectId,omitempty"`
+}
+
+// GetProjectMetricsParams defines parameters for GetProjectMetrics.
+type GetProjectMetricsParams struct {
+	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
 }
 
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
@@ -319,6 +418,9 @@ type HandoffTaskJSONRequestBody = Handoff
 
 // RollbackTaskJSONRequestBody defines body for RollbackTask for application/json ContentType.
 type RollbackTaskJSONRequestBody = Rollback
+
+// RecordTaskUsageJSONRequestBody defines body for RecordTaskUsage for application/json ContentType.
+type RecordTaskUsageJSONRequestBody = UsageInput
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = NewToken
@@ -350,6 +452,9 @@ type ServerInterface interface {
 	// (PUT /projects/{projectId}/members)
 	SetMember(w http.ResponseWriter, r *http.Request, projectId ProjectId)
 
+	// (GET /projects/{projectId}/metrics)
+	GetProjectMetrics(w http.ResponseWriter, r *http.Request, projectId ProjectId, params GetProjectMetricsParams)
+
 	// (GET /projects/{projectId}/tasks)
 	ListTasks(w http.ResponseWriter, r *http.Request, projectId ProjectId)
 
@@ -374,11 +479,17 @@ type ServerInterface interface {
 	// (POST /tasks/{taskId}/handoff)
 	HandoffTask(w http.ResponseWriter, r *http.Request, taskId TaskId)
 
+	// (GET /tasks/{taskId}/metrics)
+	GetTaskMetrics(w http.ResponseWriter, r *http.Request, taskId TaskId)
+
 	// (POST /tasks/{taskId}/rollback)
 	RollbackTask(w http.ResponseWriter, r *http.Request, taskId TaskId)
 
 	// (GET /tasks/{taskId}/transitions)
 	ListTaskTransitions(w http.ResponseWriter, r *http.Request, taskId TaskId)
+
+	// (POST /tasks/{taskId}/usage)
+	RecordTaskUsage(w http.ResponseWriter, r *http.Request, taskId TaskId)
 
 	// (GET /tokens)
 	ListTokens(w http.ResponseWriter, r *http.Request)
@@ -437,6 +548,11 @@ func (_ Unimplemented) SetMember(w http.ResponseWriter, r *http.Request, project
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// (GET /projects/{projectId}/metrics)
+func (_ Unimplemented) GetProjectMetrics(w http.ResponseWriter, r *http.Request, projectId ProjectId, params GetProjectMetricsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // (GET /projects/{projectId}/tasks)
 func (_ Unimplemented) ListTasks(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -477,6 +593,11 @@ func (_ Unimplemented) HandoffTask(w http.ResponseWriter, r *http.Request, taskI
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// (GET /tasks/{taskId}/metrics)
+func (_ Unimplemented) GetTaskMetrics(w http.ResponseWriter, r *http.Request, taskId TaskId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // (POST /tasks/{taskId}/rollback)
 func (_ Unimplemented) RollbackTask(w http.ResponseWriter, r *http.Request, taskId TaskId) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -484,6 +605,11 @@ func (_ Unimplemented) RollbackTask(w http.ResponseWriter, r *http.Request, task
 
 // (GET /tasks/{taskId}/transitions)
 func (_ Unimplemented) ListTaskTransitions(w http.ResponseWriter, r *http.Request, taskId TaskId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /tasks/{taskId}/usage)
+func (_ Unimplemented) RecordTaskUsage(w http.ResponseWriter, r *http.Request, taskId TaskId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -654,6 +780,42 @@ func (siw *ServerInterfaceWrapper) SetMember(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetMember(w, r, projectId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetProjectMetrics operation middleware
+func (siw *ServerInterfaceWrapper) GetProjectMetrics(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetProjectMetricsParams
+
+	// ------------- Optional query parameter "since" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "since", r.URL.Query(), &params.Since)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "since", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetProjectMetrics(w, r, projectId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -852,6 +1014,31 @@ func (siw *ServerInterfaceWrapper) HandoffTask(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// GetTaskMetrics operation middleware
+func (siw *ServerInterfaceWrapper) GetTaskMetrics(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "taskId" -------------
+	var taskId TaskId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "taskId", chi.URLParam(r, "taskId"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "taskId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTaskMetrics(w, r, taskId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RollbackTask operation middleware
 func (siw *ServerInterfaceWrapper) RollbackTask(w http.ResponseWriter, r *http.Request) {
 
@@ -893,6 +1080,31 @@ func (siw *ServerInterfaceWrapper) ListTaskTransitions(w http.ResponseWriter, r 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListTaskTransitions(w, r, taskId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RecordTaskUsage operation middleware
+func (siw *ServerInterfaceWrapper) RecordTaskUsage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "taskId" -------------
+	var taskId TaskId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "taskId", chi.URLParam(r, "taskId"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "taskId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RecordTaskUsage(w, r, taskId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1107,6 +1319,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Put(options.BaseURL+"/projects/{projectId}/members", wrapper.SetMember)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/projects/{projectId}/metrics", wrapper.GetProjectMetrics)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/projects/{projectId}/tasks", wrapper.ListTasks)
 	})
 	r.Group(func(r chi.Router) {
@@ -1131,10 +1346,16 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/tasks/{taskId}/handoff", wrapper.HandoffTask)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/tasks/{taskId}/metrics", wrapper.GetTaskMetrics)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/tasks/{taskId}/rollback", wrapper.RollbackTask)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/tasks/{taskId}/transitions", wrapper.ListTaskTransitions)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/tasks/{taskId}/usage", wrapper.RecordTaskUsage)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/tokens", wrapper.ListTokens)
@@ -1155,42 +1376,57 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
