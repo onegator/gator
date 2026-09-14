@@ -118,7 +118,8 @@ and `/stop`; live output streams on the WebSocket topic `job:<id>`.
    gets its own worktree on branch `gator/<task>-<job>` from `origin/<default branch>`. Jobs of
    projects without a repository get an empty directory.
 2. **Agent.** The backend runs `claude -p --output-format stream-json --verbose --permission-mode
-   bypassPermissions` in its own process group. Output becomes job events (`session`, `text`,
+   bypassPermissions --strict-mcp-config --mcp-config <explicit or empty>` in its own process group,
+   so MCP servers and claude.ai connectors of the logged-in account never reach a job. Output becomes job events (`session`, `text`,
    `tool_call`, `tool_result`, `rate_limit`, `result`); hook output and thinking are not forwarded.
 3. **Bounds.** The job timeout and tool-call limit end the whole process group; a process that
    exits without a `result` line is `failed`, never quietly `done`.

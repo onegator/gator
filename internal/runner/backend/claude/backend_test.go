@@ -50,7 +50,8 @@ func TestSuccessfulRun(t *testing.T) {
 		t.Fatalf("events: %v", evs)
 	}
 	args, _ := os.ReadFile(argsFile)
-	for _, want := range []string{"-p", "Do the thing", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions", "--model", "claude-opus-5"} {
+	for _, want := range []string{"-p", "Do the thing", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions", "--model", "claude-opus-5",
+		"--strict-mcp-config", "--mcp-config", `{"mcpServers":{}}`} {
 		if !strings.Contains(string(args), want+"\n") {
 			t.Fatalf("missing arg %q in:\n%s", want, args)
 		}
@@ -160,4 +161,22 @@ func assertDead(t *testing.T, pidFile string) {
 	}
 	_ = syscall.Kill(pid, syscall.SIGKILL)
 	t.Fatalf("background child %d survived", pid)
+}
+
+// Jobs must never see MCP servers or claude.ai connectors from the logged-in account; an
+// operator can only grant an explicit set.
+func TestMCPIsStrictByDefaultAndExplicitWhenConfigured(t *testing.T) {
+	b, argsFile := fake(t, "claude-2.1.270-tool-success.ndjson")
+	run(t, b, context.Background(), backend.Spec{Prompt: "x"})
+	args, _ := os.ReadFile(argsFile)
+	if !strings.Contains(string(args), "--strict-mcp-config\n--mcp-config\n{\"mcpServers\":{}}\n") {
+		t.Fatalf("default must be strict and empty:\n%s", args)
+	}
+	_ = os.Remove(argsFile)
+	b.MCPConfig = "/etc/gator/mcp.json"
+	run(t, b, context.Background(), backend.Spec{Prompt: "x"})
+	args, _ = os.ReadFile(argsFile)
+	if !strings.Contains(string(args), "--strict-mcp-config\n--mcp-config\n/etc/gator/mcp.json\n") {
+		t.Fatalf("explicit config must still be strict:\n%s", args)
+	}
 }

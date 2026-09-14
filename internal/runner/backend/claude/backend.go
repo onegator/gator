@@ -24,11 +24,19 @@ import (
 
 // Backend runs `claude -p` headless with stream-json output.
 type Backend struct {
-	Bin         string // default "claude"
-	Model       string // optional --model
+	Bin   string // default "claude"
+	Model string // optional --model
+	// MCPConfig is the only MCP configuration a job session may use (a JSON string or file
+	// path for --mcp-config). Sessions always run with --strict-mcp-config, so servers and
+	// claude.ai connectors attached to the logged-in account are not available to jobs.
+	// Empty means no MCP servers at all.
+	MCPConfig   string
 	GracePeriod time.Duration
 	Log         *slog.Logger
 }
+
+// noMCP is the default: a job session gets no MCP servers.
+const noMCP = `{"mcpServers":{}}`
 
 var _ backend.Backend = Backend{}
 
@@ -71,7 +79,12 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	if strings.HasPrefix(prompt, "-") { // would be parsed as a flag
 		prompt = "Task: " + prompt
 	}
-	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"}
+	mcp := b.MCPConfig
+	if mcp == "" {
+		mcp = noMCP
+	}
+	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions",
+		"--strict-mcp-config", "--mcp-config", mcp}
 	if spec.SessionID != "" {
 		args = append(args, "--resume", spec.SessionID)
 	}

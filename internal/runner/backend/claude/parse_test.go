@@ -114,3 +114,19 @@ func TestLongPayloadsAreTruncated(t *testing.T) {
 		t.Fatalf("not truncated: %q", in)
 	}
 }
+
+func TestSessionRecordsMCPServerNames(t *testing.T) {
+	p := &Parser{}
+	var payload map[string]any
+	_ = p.Line([]byte(`{"type":"system","subtype":"init","session_id":"s","model":"m","mcp_servers":[{"name":"claude.ai SuperX","status":"connected","url":"https://secret"}]}`),
+		func(_ string, pl any) { payload, _ = pl.(map[string]any) })
+	got, _ := payload["mcp_servers"].([]string)
+	if len(got) != 1 || got[0] != "claude.ai SuperX:connected" || len(p.MCPServers) != 1 {
+		t.Fatalf("mcp servers: %v", payload["mcp_servers"])
+	}
+	p2 := &Parser{}
+	_ = p2.Line([]byte(`{"type":"system","subtype":"init","session_id":"s","model":"m","mcp_servers":[]}`), func(_ string, pl any) { payload, _ = pl.(map[string]any) })
+	if got, _ := payload["mcp_servers"].([]string); got == nil || len(got) != 0 {
+		t.Fatalf("empty list should be reported as empty, got %v", payload["mcp_servers"])
+	}
+}

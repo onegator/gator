@@ -37,9 +37,10 @@ type Parser struct {
 	Version    string
 	ToolCalls  int
 	Result     *Result
-	BadLines   int // lines that were not JSON
-	Unknown    int // JSON lines of a type this parser does not know (ignored for forward compatibility)
-	MaxPayload int // truncate long strings in event payloads; default 4096
+	MCPServers []string // "name:status" of every MCP server in the session
+	BadLines   int      // lines that were not JSON
+	Unknown    int      // JSON lines of a type this parser does not know (ignored for forward compatibility)
+	MaxPayload int      // truncate long strings in event payloads; default 4096
 }
 
 // ErrNotJSON is returned for a line that is not a JSON object.
@@ -53,6 +54,10 @@ type line struct {
 	Version   string          `json:"claude_code_version"`
 	Message   json.RawMessage `json:"message"`
 	RateLimit *rateLimit      `json:"rate_limit_info"`
+	MCP       []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	} `json:"mcp_servers"`
 
 	// result fields
 	IsError        bool                  `json:"is_error"`
@@ -126,7 +131,14 @@ func (p *Parser) Line(raw []byte, emit func(typ string, payload any)) error {
 	case "system":
 		if l.Subtype == "init" {
 			p.Model, p.Version = l.Model, l.Version
-			emit("session", map[string]any{"session_id": l.SessionID, "model": l.Model, "claude_code_version": l.Version})
+			// Record which MCP servers the session could reach, by name only, so every job's
+			// audit trail shows the tools it had beyond the built-ins.
+			mcp := make([]string, 0, len(l.MCP))
+			for _, m := range l.MCP {
+				mcp = append(mcp, m.Name+":"+m.Status)
+			}
+			p.MCPServers = mcp
+			emit("session", map[string]any{"session_id": l.SessionID, "model": l.Model, "claude_code_version": l.Version, "mcp_servers": mcp})
 		}
 		// hook_* lines carry the host's hook output and are deliberately not forwarded.
 	case "rate_limit_event":

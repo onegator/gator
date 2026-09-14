@@ -69,6 +69,12 @@ sudoedit /etc/gator/runner.env                     # GATOR_RUNNER_BACKENDS=claud
 sudo systemctl restart gator-runner
 ```
 
+Job sessions run with `--strict-mcp-config` and, by default, an empty MCP configuration: MCP
+servers and claude.ai connectors attached to the logged-in account (Linear, Google Drive, social
+tools…) are never reachable from a job, even with `bypassPermissions`. Grant an explicit set with
+`GATOR_RUNNER_CLAUDE_MCP_CONFIG`. Each job's `session` event lists the MCP servers it had.
+Prefer a Claude account dedicated to runners over a personal one.
+
 The runner logs each backend's login state at start (`ok`, `missing`, or `unknown` on macOS,
 where the login lives in the Keychain).
 

@@ -51,7 +51,8 @@ func run(args []string) error {
 		for _, name := range cfg.Backends {
 			switch name {
 			case "claude":
-				backends[name] = claude.Backend{Bin: os.Getenv("GATOR_RUNNER_CLAUDE_BIN"), Model: os.Getenv("GATOR_RUNNER_CLAUDE_MODEL"), Log: log}
+				backends[name] = claude.Backend{Bin: os.Getenv("GATOR_RUNNER_CLAUDE_BIN"), Model: os.Getenv("GATOR_RUNNER_CLAUDE_MODEL"),
+					MCPConfig: os.Getenv("GATOR_RUNNER_CLAUDE_MCP_CONFIG"), Log: log}
 				advertised = append(advertised, name)
 			default:
 				log.Warn("unknown backend ignored", "backend", name)
