@@ -3,6 +3,7 @@
 #
 #   install.sh install server|runner [--version vX.Y.Z] [--archive PATH] [--checksums PATH]
 #   install.sh migrate            run database migrations as the gator user
+#   install.sh exec ARGS...       run `gator-server ARGS...` as the gator user with server.env
 #   install.sh uninstall server|runner
 #
 # Idempotent: re-running `install` upgrades the binary, keeps existing env files and
@@ -160,18 +161,20 @@ cmd_install() {
 	fi
 }
 
-cmd_migrate() {
+# cmd_exec runs gator-server as the gator user with the server environment loaded.
+cmd_exec() {
 	need_root
 	[ -f "$ETC/server.env" ] || die "$ETC/server.env missing"
+	command -v runuser >/dev/null 2>&1 || die "runuser not found"
 	set -a
 	# shellcheck disable=SC1091
 	. "$ETC/server.env"
 	set +a
-	if command -v runuser >/dev/null 2>&1; then
-		runuser -u gator -- "$PREFIX/bin/gator-server" migrate
-	else
-		su -s /bin/sh gator -c "$PREFIX/bin/gator-server migrate"
-	fi
+	runuser -u gator -- "$PREFIX/bin/gator-server" "$@"
+}
+
+cmd_migrate() {
+	cmd_exec migrate
 	log "migrations applied"
 }
 
@@ -191,6 +194,7 @@ cmd_uninstall() {
 case "${1:-}" in
 install) shift; cmd_install "$@" ;;
 migrate) cmd_migrate ;;
+exec) shift; cmd_exec "$@" ;;
 uninstall) shift; cmd_uninstall "$@" ;;
-*) die "usage: install.sh install|migrate|uninstall ..." ;;
+*) die "usage: install.sh install|migrate|exec|uninstall ..." ;;
 esac

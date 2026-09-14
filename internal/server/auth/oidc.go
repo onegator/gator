@@ -103,17 +103,27 @@ func (o *OIDC) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var claims struct {
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		Email         string `json:"email"`
+		EmailVerified *bool  `json:"email_verified"`
+		Name          string `json:"name"`
 	}
 	if err := idt.Claims(&claims); err != nil || claims.Email == "" {
 		http.Error(w, "missing email claim", http.StatusUnauthorized)
+		return
+	}
+	// Accounts link by email, so an unverified email must never be trusted.
+	if claims.EmailVerified != nil && !*claims.EmailVerified {
+		http.Error(w, "email not verified by the identity provider", http.StatusUnauthorized)
 		return
 	}
 	if claims.Name == "" {
 		claims.Name = claims.Email
 	}
 	user, err := o.upsertUser(r.Context(), claims.Email, claims.Name, idt.Subject)
+	if errors.Is(err, ErrIdentityConflict) {
+		http.Error(w, "this email is already linked to another identity", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, "user upsert failed", http.StatusInternalServerError)
 		return
@@ -128,15 +138,14 @@ func (o *OIDC) Callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/", http.StatusFound)
 }
 
-// upsertUser creates or updates the user. The very first user becomes workspace admin.
+// upsertUser resolves the login to a user. The very first user becomes workspace admin.
 func (o *OIDC) upsertUser(ctx context.Context, email, name, subject string) (db.User, error) {
 	q := db.New(o.pool)
 	n, err := q.CountUsers(ctx)
 	if err != nil {
 		return db.User{}, err
 	}
-	sub := subject
-	u, err := q.UpsertUserByOIDC(ctx, db.UpsertUserByOIDCParams{Email: email, Name: name, OidcSubject: &sub})
+	u, err := LinkOIDCUser(ctx, q, email, name, subject)
 	if err != nil {
 		return db.User{}, err
 	}

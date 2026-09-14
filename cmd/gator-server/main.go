@@ -38,7 +38,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gator-server <serve|migrate|migrate-down|backup now|restore <file>|secrets new-key [id]|secrets check|version>")
+		return errors.New("usage: gator-server <serve|migrate|migrate-down|admin create-admin <email> [name]|admin issue-runner-token <name>|backup now|restore <file>|secrets new-key [id]|secrets check|version>")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -63,6 +63,8 @@ func run(args []string) error {
 		return serve(ctx)
 	case "secrets":
 		return secretsCmd(args[1:])
+	case "admin":
+		return adminCmd(ctx, args[1:])
 	case "backup":
 		cfg, err := config.Load()
 		if err != nil {
@@ -225,5 +227,48 @@ func secretsCmd(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown secrets command %q", args[0])
+	}
+}
+
+// adminCmd is the host-side break-glass for a fresh install: it needs database access,
+// not an API token, so it works before OIDC is configured.
+//
+//	admin create-admin <email> [name]   create or promote a workspace admin; prints a 30-day token
+//	admin issue-runner-token <name>     print a runner token
+func adminCmd(ctx context.Context, args []string) error {
+	if len(args) < 2 {
+		return errors.New("usage: gator-server admin <create-admin <email> [name]|issue-runner-token <name>>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	switch args[0] {
+	case "create-admin":
+		name := ""
+		if len(args) > 2 {
+			name = args[2]
+		}
+		u, token, err := auth.BootstrapAdmin(ctx, db.Pool, args[1], name, 30*24*time.Hour)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("workspace admin: %s\n", u.Email)
+		fmt.Printf("token (shown once, valid 30 days): %s\n", token)
+		return nil
+	case "issue-runner-token":
+		token, err := auth.IssueRunnerToken(ctx, db.Pool, args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("runner token for %s (shown once): %s\n", args[1], token)
+		return nil
+	default:
+		return fmt.Errorf("unknown admin command %q", args[0])
 	}
 }

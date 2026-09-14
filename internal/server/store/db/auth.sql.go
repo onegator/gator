@@ -91,6 +91,24 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 	return i, err
 }
 
+const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
+SELECT id, email, name, oidc_subject, created_at, workspace_role FROM users WHERE oidc_subject = $1
+`
+
+func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject *string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByOIDCSubject, oidcSubject)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.OidcSubject,
+		&i.CreatedAt,
+		&i.WorkspaceRole,
+	)
+	return i, err
+}
+
 const insertAudit = `-- name: InsertAudit :exec
 INSERT INTO audit_log (actor_kind, actor_id, action, target, payload)
 VALUES ($1, $2, $3, $4, $5)
@@ -286,6 +304,30 @@ func (q *Queries) TouchToken(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users SET email = $2, name = $3 WHERE id = $1 RETURNING id, email, name, oidc_subject, created_at, workspace_role
+`
+
+type UpdateUserProfileParams struct {
+	ID    pgtype.UUID `json:"id"`
+	Email string      `json:"email"`
+	Name  string      `json:"name"`
+}
+
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserProfile, arg.ID, arg.Email, arg.Name)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.OidcSubject,
+		&i.CreatedAt,
+		&i.WorkspaceRole,
+	)
+	return i, err
+}
+
 const upsertMembership = `-- name: UpsertMembership :exec
 INSERT INTO memberships (project_id, user_id, role) VALUES ($1, $2, $3)
 ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role
@@ -302,21 +344,25 @@ func (q *Queries) UpsertMembership(ctx context.Context, arg UpsertMembershipPara
 	return err
 }
 
-const upsertUserByOIDC = `-- name: UpsertUserByOIDC :one
+const upsertUserByEmail = `-- name: UpsertUserByEmail :one
 INSERT INTO users (email, name, oidc_subject)
 VALUES ($1, $2, $3)
-ON CONFLICT (oidc_subject) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name
+ON CONFLICT (email) DO UPDATE
+SET name = EXCLUDED.name,
+    oidc_subject = COALESCE(users.oidc_subject, EXCLUDED.oidc_subject)
 RETURNING id, email, name, oidc_subject, created_at, workspace_role
 `
 
-type UpsertUserByOIDCParams struct {
+type UpsertUserByEmailParams struct {
 	Email       string  `json:"email"`
 	Name        string  `json:"name"`
 	OidcSubject *string `json:"oidc_subject"`
 }
 
-func (q *Queries) UpsertUserByOIDC(ctx context.Context, arg UpsertUserByOIDCParams) (User, error) {
-	row := q.db.QueryRow(ctx, upsertUserByOIDC, arg.Email, arg.Name, arg.OidcSubject)
+// Creates a user or refreshes its name. An OIDC subject is attached only if the user has
+// none yet; the caller checks the returned subject to detect a conflicting identity.
+func (q *Queries) UpsertUserByEmail(ctx context.Context, arg UpsertUserByEmailParams) (User, error) {
+	row := q.db.QueryRow(ctx, upsertUserByEmail, arg.Email, arg.Name, arg.OidcSubject)
 	var i User
 	err := row.Scan(
 		&i.ID,

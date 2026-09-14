@@ -25,6 +25,19 @@ sudo systemctl start gator-server
 `install` generates `GATOR_SECRETS_KEY` on first run. Store a copy outside the host: without
 it encrypted secrets cannot be read after a restore.
 
+### Before OIDC is configured
+
+The first admin and runner tokens can be created on the host, with database access instead
+of an API token:
+
+```sh
+sudo /usr/local/lib/gator/install.sh exec admin create-admin you@example.com "Your Name"
+sudo /usr/local/lib/gator/install.sh exec admin issue-runner-token vps-1
+```
+
+Each token is printed once. The admin account links to OIDC on its first login with the same
+verified email; an email already linked to another identity is refused.
+
 Runner on the same or another host:
 
 ```sh
