@@ -90,9 +90,15 @@ func uuidOf(u pgtype.UUID) string {
 	return s
 }
 
+// artifacts returns the phase documents of a task, without its working state.
 func (h *harness) artifacts(task gen.Task) []gen.Artifact {
-	var a []gen.Artifact
-	h.do("GET", "/tasks/"+task.Id.String()+"/artifacts", nil, &a)
+	var all, a []gen.Artifact
+	h.do("GET", "/tasks/"+task.Id.String()+"/artifacts", nil, &all)
+	for _, x := range all {
+		if x.Phase != "task" {
+			a = append(a, x)
+		}
+	}
 	return a
 }
 
@@ -153,8 +159,8 @@ func TestAutopilotRunsEachRunnerPhase(t *testing.T) {
 		t.Fatalf("planning job role %s", job.Role)
 	}
 	h.waitJob(job.Id.String(), "done")
-	if got := exec.last(); len(got.Context) != 1 || got.Context[0].Kind != "brief" || !strings.Contains(got.Context[0].Title, "approved") {
-		t.Fatalf("planner context: %+v", got.Context)
+	if got := exec.last(); len(got.Context) != 2 || got.Context[0].Kind != "working_state" || got.Context[1].Kind != "brief" || !strings.Contains(got.Context[1].Title, "approved") {
+		t.Fatalf("planner context should be the working state, then the approved brief: %+v", got.Context)
 	}
 
 	task = h.approveAdvance(task)

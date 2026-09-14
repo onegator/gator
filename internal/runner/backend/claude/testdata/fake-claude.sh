@@ -10,6 +10,13 @@ if [ -n "$FAKE_CLAUDE_ARGS" ]; then
 	for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_CLAUDE_ARGS"; done
 	echo "---" >> "$FAKE_CLAUDE_ARGS"
 fi
+#   FAKE_CLAUDE_RESUME_FIXTURE  printed instead (and nothing committed) when --resume is passed
+for a in "$@"; do
+	if [ "$a" = "--resume" ] && [ -n "$FAKE_CLAUDE_RESUME_FIXTURE" ]; then
+		cat "$FAKE_CLAUDE_RESUME_FIXTURE"
+		exit 0
+	fi
+done
 if [ -n "$FAKE_CLAUDE_COMMIT" ]; then
 	echo "change $$" >> gator.txt
 	git add gator.txt && git -c user.name=fake -c user.email=fake@t commit -q -m "fake: change"

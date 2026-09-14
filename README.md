@@ -150,3 +150,14 @@ the latest version of every artifact so far, and the reason the task was last se
 phase. A job that ends `done` leaves the document its role produces (brief, plan, report,
 review) as a new artifact version; approving the phase approves its artifacts. While a job is
 queued or running, the task does not ask anyone for a decision.
+
+## Digest and working state
+
+Every job prompt asks the agent to end with a fenced `gator-digest` block of JSON: what it
+changed, what it decided, what it rejected and what is left. The runner removes the block from
+the answer people read and puts it in the receipt; a done session that forgot it is resumed
+once, in the same session, to ask for only the block. Each done job then rebuilds the task's
+`working_state` artifact from all receipts: work so far, decisions, rejected approaches, what is
+left, and the latest branch and commit. The next job of the task gets it as its first context
+document whatever backend or model runs it. `job.digest` events carry each digest for the
+curator (M5); `job.digest_missing` records sessions that gave none.

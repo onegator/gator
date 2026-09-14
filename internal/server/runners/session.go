@@ -479,6 +479,16 @@ func (s *session) finish(fin proto.Finish) error {
 			if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
 				return err
 			}
+			if fin.Digest != nil {
+				if err := emit(ctx, q, "job.digest", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID), "phase": j.Phase, "role": j.Role, "digest": fin.Digest}); err != nil {
+					return err
+				}
+			} else if err := emit(ctx, q, "job.digest_missing", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID)}); err != nil {
+				return err
+			}
+			if err := refreshWorkingState(ctx, q, j.TaskID); err != nil {
+				return err
+			}
 		}
 		j.Status = status
 		return s.m.emitJob(ctx, q, "job.finished", j, map[string]any{"stop_reason": reason, "summary": fin.Summary})

@@ -268,7 +268,17 @@ type Finish struct {
 	ChangedFiles int      `json:"changed_files"`
 	SessionID    string   `json:"session_id,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
+	Digest       *Digest  `json:"digest,omitempty"`
 	Usage        Usage    `json:"usage"`
+}
+
+// Digest is the structured account of one session: what changed, what was decided and
+// rejected, and what is left. The server folds every digest of a task into its working state.
+type Digest struct {
+	Changes   []string `json:"changes"`
+	Decisions []string `json:"decisions"`
+	Rejected  []string `json:"rejected"`
+	Left      []string `json:"left"`
 }
 
 // Error is sent by the server when a message is rejected.

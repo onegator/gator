@@ -57,6 +57,8 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	td := filepath.Join(wd, "..", "runner", "backend", "claude", "testdata")
 	t.Setenv("FAKE_CLAUDE_FIXTURE", filepath.Join(td, "claude-2.1.270-tool-success.ndjson"))
 	t.Setenv("FAKE_CLAUDE_COMMIT", "1")
+	// The recording has no digest, so the executor resumes the session once to ask for it.
+	t.Setenv("FAKE_CLAUDE_RESUME_FIXTURE", filepath.Join(td, "synthetic-digest-reply.ndjson"))
 	ex := &executor.Executor{
 		WS:       &workspace.Manager{Root: t.TempDir()},
 		Backends: map[string]backend.Backend{"claude": claude.Backend{Bin: filepath.Join(td, "fake-claude.sh")}},
@@ -80,6 +82,9 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	if !strings.HasPrefix(branch, "gator/") || len(commits) != 1 || r["changed_files"] != float64(1) || r["summary"] != "DONE" {
 		t.Fatalf("receipt: %+v", r)
 	}
+	if d, _ := r["digest"].(map[string]any); d == nil || d["changes"].([]any)[0] != "added gator.txt" {
+		t.Fatalf("receipt digest: %+v", r["digest"])
+	}
 	if got := gitCmd(t, origin, "rev-parse", "refs/heads/"+branch); got != commits[0] {
 		t.Fatalf("origin has %s, want %s", got, commits[0])
 	}
@@ -90,17 +95,18 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	for _, e := range evs {
 		kinds = append(kinds, e.Type)
 	}
-	if got := strings.Join(kinds, ","); got != "workspace,rate_limit,session,tool_call,tool_result,text,result,git" {
+	if got := strings.Join(kinds, ","); got != "workspace,rate_limit,session,tool_call,tool_result,text,result,digest_requested,session,result,git" {
 		t.Fatalf("event stream: %s", got)
 	}
 
 	var m gen.TaskMetrics
 	h.do("GET", "/tasks/"+task.Id.String()+"/metrics", nil, &m)
-	// Sum over every model in the recording's modelUsage (Opus plus the background Haiku call).
-	if m.Tokens.Input != 946 || m.Tokens.Output != 153 || m.Tokens.CacheRead != 39662 || m.Tokens.CacheWrite != 24069 {
+	// Sum over every model in the recording's modelUsage (Opus plus the background Haiku call),
+	// plus the small digest round (5 in, 7 out, $0.001).
+	if m.Tokens.Input != 951 || m.Tokens.Output != 160 || m.Tokens.CacheRead != 39662 || m.Tokens.CacheWrite != 24069 {
 		t.Fatalf("tokens: %+v", m.Tokens)
 	}
-	if math.Abs(m.CostUsd-0.265168) > 1e-6 || !m.CostEstimated || m.Jobs != 1 {
+	if math.Abs(m.CostUsd-0.266168) > 1e-6 || !m.CostEstimated || m.Jobs != 1 {
 		t.Fatalf("cost %v estimated %v jobs %d", m.CostUsd, m.CostEstimated, m.Jobs)
 	}
 }

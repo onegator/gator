@@ -84,7 +84,7 @@ func TestCommitIsPushedAndWorkspaceCleaned(t *testing.T) {
 			t.Errorf("commit: %v %s", err, out)
 		}
 		emit("text", map[string]string{"text": "fixed"})
-		return backend.Outcome{Status: proto.StatusDone, Summary: "fixed it", SessionID: "s1", Usage: usage()}
+		return backend.Outcome{Status: proto.StatusDone, Summary: "fixed it\n\n" + digestBlock, SessionID: "s1", Usage: usage()}
 	}}
 	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}, Push: true}
 	io, _, evs, _ := jobIO()
@@ -115,7 +115,7 @@ func TestSteerResumesSession(t *testing.T) {
 			<-ctx.Done()
 			return backend.Outcome{Interrupted: true, Cause: context.Cause(ctx), SessionID: "sess-9", Usage: usage()}
 		}
-		return backend.Outcome{Status: proto.StatusDone, Summary: "done after steer", SessionID: "sess-9", Usage: usage()}
+		return backend.Outcome{Status: proto.StatusDone, Summary: "done after steer" + digestBlock, SessionID: "sess-9", Usage: usage()}
 	}}
 	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
 	io, steer, _, _ := jobIO()
@@ -179,5 +179,74 @@ func TestPromptWithGuideAndContext(t *testing.T) {
 	}
 	if strings.Contains(p, "Finish with a short summary") {
 		t.Error("a role guide defines the output; the generic closing line must not compete with it")
+	}
+}
+
+const digestBlock = "```gator-digest\n{\"changes\":[\"added the toggle\"],\"decisions\":[\"kept CSS variables\"],\"rejected\":[\"a second stylesheet\"],\"left\":[\"docs\"]}\n```"
+
+func TestExtractDigest(t *testing.T) {
+	d, rest := ExtractDigest("## Report\nDone.\n\n" + digestBlock)
+	if d == nil || d.Changes[0] != "added the toggle" || d.Rejected[0] != "a second stylesheet" || strings.Contains(rest, "gator-digest") || rest != "## Report\nDone." {
+		t.Fatalf("digest %+v rest %q", d, rest)
+	}
+	if d, rest := ExtractDigest("no block here"); d != nil || rest != "no block here" {
+		t.Fatal("absent block")
+	}
+	bad := "x\n```gator-digest\n{not json}\n```"
+	if d, rest := ExtractDigest(bad); d != nil || rest != bad {
+		t.Fatal("malformed block must be left alone")
+	}
+	two := "```gator-digest\n{\"changes\":[\"old\"]}\n```\n\n" + digestBlock
+	if d, _ := ExtractDigest(two); d == nil || d.Changes[0] != "added the toggle" || len(d.Left) != 1 {
+		t.Fatal("the last block wins")
+	}
+}
+
+func TestDigestIsStrippedFromTheSummary(t *testing.T) {
+	be := &scripted{run: func(_ context.Context, _ int, _ backend.Spec, _ backend.Emit) backend.Outcome {
+		return backend.Outcome{Status: proto.StatusDone, Summary: "## What changed\nX\n\n" + digestBlock, SessionID: "s1", Usage: usage()}
+	}}
+	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _, _, _ := jobIO()
+	fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake"}, io)
+	if fin.Digest == nil || fin.Digest.Decisions[0] != "kept CSS variables" || strings.Contains(fin.Summary, "gator-digest") || len(be.specs) != 1 {
+		t.Fatalf("finish %+v runs %d", fin, len(be.specs))
+	}
+	if !strings.Contains(be.specs[0].Prompt, "gator-digest") {
+		t.Fatal("every prompt must ask for the digest")
+	}
+}
+
+func TestMissingDigestIsRequestedOnceInTheSameSession(t *testing.T) {
+	be := &scripted{run: func(_ context.Context, n int, spec backend.Spec, _ backend.Emit) backend.Outcome {
+		if n == 1 {
+			return backend.Outcome{Status: proto.StatusDone, Summary: "## What changed\nX", SessionID: "s1", Usage: usage()}
+		}
+		return backend.Outcome{Status: proto.StatusDone, Summary: digestBlock, SessionID: "s1", Usage: usage()}
+	}}
+	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _, evs, mu := jobIO()
+	fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake"}, io)
+	if fin.Digest == nil || len(be.specs) != 2 || be.specs[1].SessionID != "s1" || be.specs[1].Prompt != DigestPrompt || fin.Summary != "## What changed\nX" {
+		t.Fatalf("finish %+v runs %d", fin, len(be.specs))
+	}
+	if fin.Usage.InputTokens != 20 {
+		t.Fatalf("the digest round counts toward usage: %+v", fin.Usage)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(strings.Join(*evs, ","), "digest_requested") {
+		t.Fatalf("events: %v", *evs)
+	}
+}
+
+func TestNoDigestRoundWithoutASession(t *testing.T) {
+	be := &scripted{run: func(_ context.Context, _ int, _ backend.Spec, _ backend.Emit) backend.Outcome {
+		return backend.Outcome{Status: proto.StatusDone, Summary: "done", Usage: usage()}
+	}}
+	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _, _, _ := jobIO()
+	if fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake"}, io); fin.Digest != nil || len(be.specs) != 1 {
+		t.Fatalf("%+v runs %d", fin, len(be.specs))
 	}
 }

@@ -143,7 +143,14 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID) ([]Context
 	if reason, err := q.LastRollbackReason(ctx, db.LastRollbackReasonParams{TaskID: taskID, ToPhase: t.Phase}); err == nil && reason != nil && *reason != "" {
 		add(ContextDoc{Kind: "rollback", Phase: t.Phase, Title: "Why this phase was sent back", Body: *reason})
 	}
+	// The working state comes first: it is the shortest route to where the task stands.
+	if ws, ok := latest["task/working_state"]; ok && ws.Content != nil {
+		add(ContextDoc{Kind: "working_state", Phase: "task", Title: fmt.Sprintf("Working state (v%d)", ws.Version), Body: *ws.Content})
+	}
 	for _, k := range keys {
+		if k == "task/working_state" {
+			continue
+		}
 		a := latest[k]
 		body := ""
 		if a.Content != nil {

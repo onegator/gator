@@ -97,7 +97,8 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		break
 	}
 
-	fin := proto.Finish{Status: last.Status, StopReason: last.Reason, SessionID: session, Summary: last.Summary, Usage: usage}
+	digest, summary := ExtractDigest(last.Summary)
+	fin := proto.Finish{Status: last.Status, StopReason: last.Reason, SessionID: session, Summary: summary, Usage: usage}
 	if last.Interrupted {
 		cause := context.Cause(ctx)
 		switch {
@@ -109,6 +110,19 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 			fin.Status = proto.StatusFailed
 		}
 	}
+
+	// A done session that forgot its digest is asked once more, in the same session: cheap,
+	// because the context is cached, and it keeps the working state complete.
+	if fin.Status == proto.StatusDone && digest == nil && session != "" && ctx.Err() == nil {
+		io.Emit("digest_requested", map[string]any{"session_id": session})
+		out := be.Run(ctx, backend.Spec{Dir: ws.Dir, Prompt: DigestPrompt, SessionID: session, MaxToolCalls: 1}, backend.Emit(io.Emit))
+		addUsage(&usage, out.Usage)
+		fin.Usage = usage
+		if out.Status == proto.StatusDone {
+			digest, _ = ExtractDigest(out.Summary)
+		}
+	}
+	fin.Digest = digest
 
 	// Git work happens even after a stop or timeout, on a context of its own: a person
 	// should be able to see what the agent left behind.
@@ -180,6 +194,8 @@ func Prompt(job proto.Job, hasRepo bool) string {
 	if guide == "" {
 		b.WriteString(" Finish with a short summary of what you did and what is left.")
 	}
+	b.WriteString("\n\n")
+	b.WriteString(DigestInstruction)
 	return b.String()
 }
 
