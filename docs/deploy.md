@@ -43,7 +43,7 @@ Runner on the same or another host:
 ```sh
 sudo sh install.sh install runner          # user `gator-runner`, /etc/gator/runner.env, unit
 sudoedit /etc/gator/runner.env             # server base URL, runner token, backends
-sudo -iu gator-runner claude login         # log in the agent CLIs as the runner user
+sudo -iu gator-runner claude               # log Claude Code in as the runner user, then /exit
 sudo systemctl start gator-runner
 ```
 
@@ -55,6 +55,26 @@ Mint a runner token as a workspace admin with `POST /api/v1/tokens` and
 `https://gator.<tailnet>.ts.net`; the runner switches to `wss` and appends `/api/v1/runner`.
 `GATOR_RUNNER_BACKENDS` lists the agent CLIs this runner can drive (`claude`, `codex`). A runner
 with no backends connects and shows as online but is never handed a job.
+
+### Agent backends
+
+Install Claude Code for the runner user (it lands in its home, which the unit keeps writable),
+log it in once interactively, then enable the backend:
+
+```sh
+sudo -iu gator-runner sh -c 'curl -fsSL https://claude.ai/install.sh | bash'
+sudo -iu gator-runner ~/.local/bin/claude          # log in, then /exit
+sudoedit /etc/gator/runner.env                     # GATOR_RUNNER_BACKENDS=claude
+                                                   # GATOR_RUNNER_CLAUDE_BIN=/var/lib/gator-runner/.local/bin/claude
+sudo systemctl restart gator-runner
+```
+
+The runner logs each backend's login state at start (`ok`, `missing`, or `unknown` on macOS,
+where the login lives in the Keychain).
+
+To push job branches the runner user needs git access to the project's repositories, for
+example a deploy key with write access or a fine-grained token in its git credential helper.
+`GATOR_RUNNER_PUSH=0` keeps branches in the runner's cache instead.
 
 The runner user is what agents run as. A worktree is isolation, not a sandbox: give that user
 no credentials beyond what its jobs need.

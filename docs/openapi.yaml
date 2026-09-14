@@ -88,6 +88,23 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/repos:
+    get:
+      operationId: listProjectRepos
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectRepo" } } } } }
+    put:
+      operationId: putProjectRepo
+      description: Add or update a repository by name. The primary repository is what runners check out. Requires project admin.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectRepo" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectRepo" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/tasks:
     get:
       operationId: listTasks
@@ -312,6 +329,14 @@ components:
       properties:
         features: { type: array, items: { type: string } }
         protocolVersion: { type: integer }
+    ProjectRepo:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string, description: "https://, ssh (git@host:path), file:// or an absolute path" }
+        defaultBranch: { type: string }
+        primary: { type: boolean }
     NewJob:
       type: object
       required: [backend]

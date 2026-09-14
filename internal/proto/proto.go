@@ -145,10 +145,19 @@ type Bounds struct {
 	MaxToolCalls   int `json:"max_tool_calls"`
 }
 
+// Repo tells the runner where to check out code. Absent for jobs that need no repository.
+type Repo struct {
+	Name          string `json:"name"`
+	URL           string `json:"url"`
+	DefaultBranch string `json:"default_branch"`
+}
+
 // Job is one unit of work handed to a runner.
 type Job struct {
 	JobID          string    `json:"job_id"`
 	TaskID         string    `json:"task_id"`
+	TaskTitle      string    `json:"task_title"`
+	Repo           *Repo     `json:"repo,omitempty"`
 	ProjectID      string    `json:"project_id"`
 	Phase          string    `json:"phase"`
 	Role           string    `json:"role"`

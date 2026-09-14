@@ -56,6 +56,10 @@ type Config struct {
 	Projects      []string
 	MaxParallel   int
 
+	// JournalPath keeps unacked events and finishes on disk so a restarted runner still
+	// delivers them. Empty keeps them in memory only.
+	JournalPath string
+
 	HeartbeatInterval time.Duration
 	MinBackoff        time.Duration
 	MaxBackoff        time.Duration
@@ -106,6 +110,8 @@ type Client struct {
 	pending  []*outMsg
 	inflight map[uint64]*outMsg
 	jobs     map[string]*runningJob
+	journal  *fileJournal
+	loaded   sync.Once
 }
 
 // New builds a client.
@@ -122,7 +128,53 @@ func New(cfg Config, exec Executor, log *slog.Logger) *Client {
 	if cfg.MaxBackoff == 0 {
 		cfg.MaxBackoff = 30 * time.Second
 	}
-	return &Client{cfg: cfg, exec: exec, log: log, jobs: map[string]*runningJob{}, inflight: map[uint64]*outMsg{}}
+	c := &Client{cfg: cfg, exec: exec, log: log, jobs: map[string]*runningJob{}, inflight: map[uint64]*outMsg{}}
+	if cfg.JournalPath != "" {
+		c.journal = &fileJournal{path: cfg.JournalPath}
+	}
+	return c
+}
+
+// restore loads unacked messages left by a previous process. A finish keeps its job in the
+// heartbeat so the lease survives until the server acks the receipt.
+func (c *Client) restore() {
+	if c.journal == nil {
+		return
+	}
+	entries, err := c.journal.load()
+	if err != nil {
+		c.log.Warn("journal unreadable; starting empty", "err", err)
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range entries {
+		c.pending = append(c.pending, &outMsg{typ: e.Type, payload: e.Payload, jobID: e.JobID})
+		if e.Type == proto.TypeFinish && e.JobID != "" {
+			c.jobs[e.JobID] = &runningJob{}
+		}
+	}
+	if len(entries) > 0 {
+		c.log.Info("restored unacked messages", "count", len(entries))
+	}
+}
+
+// persistLocked writes the pending list to the journal. Caller holds c.mu.
+func (c *Client) persistLocked() {
+	if c.journal == nil {
+		return
+	}
+	entries := make([]journalEntry, 0, len(c.pending))
+	for _, m := range c.pending {
+		b, err := json.Marshal(m.payload)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, journalEntry{Type: m.typ, Payload: b, JobID: m.jobID})
+	}
+	if err := c.journal.save(entries); err != nil {
+		c.log.Warn("journal write failed", "err", err)
+	}
 }
 
 // ErrFatal is returned when the server refuses the runner for good (bad token, protocol).
@@ -131,6 +183,7 @@ var ErrFatal = errors.New("server refused the runner")
 // Run keeps a connection alive until ctx is done. It returns ErrFatal-wrapped errors when
 // retrying cannot help.
 func (c *Client) Run(ctx context.Context) error {
+	c.loaded.Do(c.restore)
 	backoff := c.cfg.MinBackoff
 	for {
 		registered, err := c.session(ctx)
@@ -269,6 +322,7 @@ func (c *Client) sendReliable(m *outMsg) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pending = append(c.pending, m)
+	c.persistLocked()
 	c.writeLocked(m)
 }
 
@@ -292,6 +346,7 @@ func (c *Client) ack(seq uint64) {
 			break
 		}
 	}
+	c.persistLocked()
 	if m.typ == proto.TypeFinish {
 		delete(c.jobs, m.jobID) // only now may the heartbeat stop listing it
 	}

@@ -301,11 +301,18 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 		for _, j := range jobs {
 			var b proto.Bounds
 			_ = json.Unmarshal(j.Bounds, &b)
-			out = append(out, proto.Job{
+			pj := proto.Job{
 				JobID: uuidString(j.ID), TaskID: uuidString(j.TaskID), ProjectID: uuidString(j.ProjectID),
 				Phase: j.Phase, Role: j.Role, Backend: j.Backend, Instruction: j.Instruction, Bounds: b,
 				Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
-			})
+			}
+			if t, err := q.GetTask(ctx, j.TaskID); err == nil {
+				pj.TaskTitle = t.Title
+			}
+			if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
+				pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
+			}
+			out = append(out, pj)
 			_ = s.m.tx(ctx, func(q *db.Queries) error {
 				return s.m.emitJob(ctx, q, "job.leased", j, map[string]any{"runner": s.name, "attempt": j.Attempts})
 			})

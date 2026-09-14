@@ -11,9 +11,15 @@ import (
 	"os/signal"
 	"syscall"
 
+	"path/filepath"
+
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/backend"
+	"github.com/onegator/gator/internal/runner/backend/claude"
 	"github.com/onegator/gator/internal/runner/client"
 	"github.com/onegator/gator/internal/runner/config"
+	"github.com/onegator/gator/internal/runner/executor"
+	"github.com/onegator/gator/internal/runner/workspace"
 	"github.com/onegator/gator/internal/version"
 )
 
@@ -40,13 +46,34 @@ func run(args []string) error {
 			return err
 		}
 		log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-		if len(cfg.Backends) == 0 {
-			log.Warn("no GATOR_RUNNER_BACKENDS configured; this runner stays online but receives no jobs")
+		backends := map[string]backend.Backend{}
+		var advertised []string
+		for _, name := range cfg.Backends {
+			switch name {
+			case "claude":
+				backends[name] = claude.Backend{Bin: os.Getenv("GATOR_RUNNER_CLAUDE_BIN"), Model: os.Getenv("GATOR_RUNNER_CLAUDE_MODEL"), Log: log}
+				advertised = append(advertised, name)
+			default:
+				log.Warn("unknown backend ignored", "backend", name)
+			}
+		}
+		if len(advertised) == 0 {
+			log.Warn("no usable GATOR_RUNNER_BACKENDS; this runner stays online but receives no jobs")
+		}
+		ex := &executor.Executor{
+			WS:       &workspace.Manager{Root: cfg.WorkDir},
+			Backends: backends,
+			Push:     os.Getenv("GATOR_RUNNER_PUSH") != "0",
+			Log:      log,
+		}
+		for name, state := range ex.AuthState() {
+			log.Info("backend", "name", name, "auth", state)
 		}
 		c := client.New(client.Config{
 			ServerURL: cfg.ServerURL, Token: cfg.Token, Name: cfg.Name, Location: cfg.Location,
-			BinaryVersion: version.Version, Backends: cfg.Backends, Projects: cfg.Projects, MaxParallel: cfg.MaxParallel,
-		}, client.Unconfigured{}, log)
+			BinaryVersion: version.Version, Backends: advertised, Projects: cfg.Projects, MaxParallel: cfg.MaxParallel,
+			JournalPath: filepath.Join(cfg.WorkDir, "outbox.json"),
+		}, ex, log)
 		log.Info("runner starting", "name", cfg.Name, "location", cfg.Location, "server", cfg.ServerURL, "proto", proto.Version)
 		return c.Run(ctx)
 	default:

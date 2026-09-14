@@ -111,3 +111,24 @@ The server sweeps every 10 s: a lease nobody extended for 90 s returns the job t
 (or fails it after `maxAttempts`), and a running job with no output for 10 minutes becomes
 `stalled` until its next event. People steer and stop jobs through `/api/v1/jobs/{id}/steer`
 and `/stop`; live output streams on the WebSocket topic `job:<id>`.
+
+## What a runner does with a job
+
+1. **Workspace.** Each repository is cached once as a bare clone under `$WORKDIR/repos`; the job
+   gets its own worktree on branch `gator/<task>-<job>` from `origin/<default branch>`. Jobs of
+   projects without a repository get an empty directory.
+2. **Agent.** The backend runs `claude -p --output-format stream-json --verbose --permission-mode
+   bypassPermissions` in its own process group. Output becomes job events (`session`, `text`,
+   `tool_call`, `tool_result`, `rate_limit`, `result`); hook output and thinking are not forwarded.
+3. **Bounds.** The job timeout and tool-call limit end the whole process group; a process that
+   exits without a `result` line is `failed`, never quietly `done`.
+4. **Steer.** A person's correction interrupts the current run and resumes the same session
+   with `--resume`, so context is kept. Usage adds up across runs.
+5. **Git.** Commits on the job branch are counted and the branch alone is pushed to origin;
+   the worktree is removed. An unpushed branch stays in the cache.
+6. **Receipt.** The finish carries status, branch, commits, changed files, summary, session id
+   and usage summed over every model the session used. Unacked events and receipts survive a
+   runner restart in `$WORKDIR/outbox.json`.
+
+`internal/runner/backend/claude/testdata` holds sanitized recordings of real Claude Code 2.1.270
+sessions; the parser and backend tests replay them through a fake `claude`.
