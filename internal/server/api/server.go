@@ -223,7 +223,7 @@ func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request, projectId ge
 		writeError(w, http.StatusBadRequest, "title is required", "invalid")
 		return
 	}
-	p := process.CreateParams{ProjectID: fromUUID(projectId), Kind: string(in.Kind), Title: in.Title}
+	p := process.CreateParams{ProjectID: fromUUID(projectId), Kind: string(in.Kind), Title: in.Title, Description: deref(in.Description)}
 	if in.Urgency != nil {
 		p.Urgency = int16(*in.Urgency)
 	}
@@ -479,4 +479,20 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func (s *Server) ListTaskArtifacts(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer); !ok {
+		return
+	}
+	rows, err := db.New(s.Pool).ListArtifacts(r.Context(), fromUUID(taskId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]gen.Artifact, 0, len(rows))
+	for _, a := range rows {
+		out = append(out, toArtifact(a))
+	}
+	writeJSON(w, http.StatusOK, out)
 }

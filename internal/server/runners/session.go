@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -307,7 +308,15 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 				Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
 			}
 			if t, err := q.GetTask(ctx, j.TaskID); err == nil {
-				pj.TaskTitle = t.Title
+				pj.TaskTitle, pj.TaskDescription = t.Title, t.Description
+			}
+			if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
+				pj.Guide = g
+			}
+			if docs, err := s.m.process.JobContext(ctx, j.TaskID); err == nil {
+				for _, d := range docs {
+					pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+				}
 			}
 			if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 				pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
@@ -459,6 +468,18 @@ func (s *session) finish(fin proto.Finish) error {
 		if err := q.InsertReceipt(ctx, db.InsertReceiptParams{Source: "runner", SubjectKind: "job", SubjectID: jobID, Status: status, Payload: receipt}); err != nil {
 			return err
 		}
+		// A finished job leaves the document its role produces; the phase gate approves it.
+		if status == proto.StatusDone {
+			content := artifactContent(j.Role, fin)
+			typ := process.ArtifactTypeFor(j.Role)
+			a, err := q.CreateArtifact(ctx, db.CreateArtifactParams{TaskID: j.TaskID, Phase: j.Phase, Type: typ, Content: &content})
+			if err != nil {
+				return err
+			}
+			if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
+				return err
+			}
+		}
 		j.Status = status
 		return s.m.emitJob(ctx, q, "job.finished", j, map[string]any{"stop_reason": reason, "summary": fin.Summary})
 	})
@@ -466,4 +487,26 @@ func (s *session) finish(fin proto.Finish) error {
 		return errRetry
 	}
 	return nil
+}
+
+// artifactContent is the agent's final answer, plus the branch and commits for code work.
+func artifactContent(role string, fin proto.Finish) string {
+	var b strings.Builder
+	summary := strings.TrimSpace(fin.Summary)
+	if summary == "" {
+		summary = "_The agent finished without a written summary._"
+	}
+	b.WriteString(summary)
+	if fin.Branch != "" || len(fin.Commits) > 0 {
+		fmt.Fprintf(&b, "\n\n---\nBranch `%s`, %d commit(s), %d file(s) changed", fin.Branch, len(fin.Commits), fin.ChangedFiles)
+		for _, c := range fin.Commits {
+			short := c
+			if len(short) > 12 {
+				short = short[:12]
+			}
+			fmt.Fprintf(&b, "\n- `%s`", short)
+		}
+	}
+	_ = role
+	return b.String()
 }

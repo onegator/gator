@@ -29,7 +29,7 @@ func toProject(p db.Project) gen.Project {
 
 func toTask(t db.Task) gen.Task {
 	out := gen.Task{
-		Id: toUUID(t.ID), ProjectId: toUUID(t.ProjectID), Kind: t.Kind, Title: t.Title, Phase: t.Phase,
+		Id: toUUID(t.ID), ProjectId: toUUID(t.ProjectID), Kind: t.Kind, Title: t.Title, Description: &t.Description, Phase: t.Phase,
 		Urgency: int(t.Urgency), OwnerKind: t.OwnerKind, OwnerId: toUUIDPtr(t.OwnerID),
 		RequirementsChanged: t.RequirementsChanged, BlockedReason: t.BlockedReason,
 		PhaseEnteredAt: t.PhaseEnteredAt.Time, CreatedAt: t.CreatedAt.Time,
@@ -76,4 +76,14 @@ func toDetail(d process.Detail) gen.TaskDetail {
 func toTransition(tr db.PhaseTransition) gen.Transition {
 	return gen.Transition{Id: tr.ID, FromPhase: tr.FromPhase, ToPhase: tr.ToPhase, Kind: tr.Kind,
 		ActorKind: tr.ActorKind, ActorId: toUUIDPtr(tr.ActorID), Reason: tr.Reason, CreatedAt: tr.CreatedAt.Time}
+}
+
+func toArtifact(a db.Artifact) gen.Artifact {
+	out := gen.Artifact{Id: toUUID(a.ID), Phase: a.Phase, Type: a.Type, Version: int(a.Version), Content: a.Content, Url: a.Url,
+		Approved: a.ApprovedAt.Valid, CreatedAt: a.CreatedAt.Time}
+	if a.ApprovedAt.Valid {
+		v := a.ApprovedAt.Time
+		out.ApprovedAt = &v
+	}
+	return out
 }

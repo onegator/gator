@@ -2,7 +2,6 @@ package process
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -20,6 +19,7 @@ const (
 	ReasonBlocked             DecisionReason = "blocked"
 	ReasonRequirementsChanged DecisionReason = "requirements_changed"
 	ReasonIdea                DecisionReason = "idea"
+	ReasonJobFailed           DecisionReason = "job_failed"
 )
 
 // Decision is one inbox row: a task that needs a human now.
@@ -34,9 +34,18 @@ type Decision struct {
 // Inbox lists open tasks whose current phase waits on a person: a human-gated phase without
 // approval, a blocked task, or one whose requirements changed. Most urgent first.
 func (s *Service) Inbox(ctx context.Context, projectID pgtype.UUID) ([]Decision, error) {
-	rows, err := db.New(s.pool).ListOpenTasksWithGates(ctx, projectID)
+	q := db.New(s.pool)
+	rows, err := q.ListOpenTasksWithGates(ctx, projectID)
 	if err != nil {
 		return nil, err
+	}
+	jobRows, err := q.ListCurrentPhaseJobs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	jobStatus := map[[16]byte]string{}
+	for _, j := range jobRows {
+		jobStatus[j.TaskID.Bytes] = j.Status
 	}
 	machines := map[string]*Machine{}
 	var out []Decision
@@ -54,7 +63,7 @@ func (s *Service) Inbox(ctx context.Context, projectID pgtype.UUID) ([]Decision,
 		if err != nil {
 			continue // phase deactivated by config change; surfaced elsewhere
 		}
-		reason, ok := decisionReason(r.Task, r.Gate, p)
+		reason, ok := decisionReason(r.Task, r.Gate, p, jobStatus[r.Task.ID.Bytes])
 		if !ok {
 			continue
 		}
@@ -63,12 +72,16 @@ func (s *Service) Inbox(ctx context.Context, projectID pgtype.UUID) ([]Decision,
 	return out, nil
 }
 
-func decisionReason(t db.Task, g db.Gate, p Phase) (DecisionReason, bool) {
+func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string) (DecisionReason, bool) {
 	switch {
 	case t.BlockedReason != nil:
 		return ReasonBlocked, true
 	case t.RequirementsChanged:
 		return ReasonRequirementsChanged, true
+	case jobStatus == "queued" || jobStatus == "leased" || jobStatus == "running" || jobStatus == "stalled":
+		return "", false // an agent is on it; asking a person now would be premature
+	case jobStatus == "failed" || jobStatus == "stopped":
+		return ReasonJobFailed, true
 	case p.Name == "idea":
 		return ReasonIdea, true
 	case (p.Gate == GateHuman || p.Gate == GateBoth) && !g.HumanApprovedAt.Valid:
@@ -127,13 +140,9 @@ func (d DBTemplates) Catalog(ctx context.Context, projectID pgtype.UUID) (Catalo
 	if err != nil {
 		return nil, fmt.Errorf("project: %w", err)
 	}
-	var cfg struct {
-		Templates map[string]Template `json:"templates"`
-	}
-	if len(p.ProcessConfig) > 0 {
-		if err := json.Unmarshal(p.ProcessConfig, &cfg); err != nil {
-			return nil, fmt.Errorf("process_config: %w", err)
-		}
+	cfg, err := ParseProjectConfig(p.ProcessConfig)
+	if err != nil {
+		return nil, err
 	}
 	overrides := Catalog{}
 	for k, t := range cfg.Templates {

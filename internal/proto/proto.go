@@ -152,20 +152,31 @@ type Repo struct {
 	DefaultBranch string `json:"default_branch"`
 }
 
+// ContextDoc is earlier work a job should read before starting.
+type ContextDoc struct {
+	Kind  string `json:"kind"` // "brief", "plan", "report", "review", "rollback"
+	Phase string `json:"phase"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
 // Job is one unit of work handed to a runner.
 type Job struct {
-	JobID          string    `json:"job_id"`
-	TaskID         string    `json:"task_id"`
-	TaskTitle      string    `json:"task_title"`
-	Repo           *Repo     `json:"repo,omitempty"`
-	ProjectID      string    `json:"project_id"`
-	Phase          string    `json:"phase"`
-	Role           string    `json:"role"`
-	Backend        string    `json:"backend"`
-	Instruction    string    `json:"instruction"`
-	Bounds         Bounds    `json:"bounds"`
-	Attempt        int       `json:"attempt"`
-	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	JobID           string       `json:"job_id"`
+	TaskID          string       `json:"task_id"`
+	TaskTitle       string       `json:"task_title"`
+	TaskDescription string       `json:"task_description,omitempty"`
+	Guide           string       `json:"guide,omitempty"`   // the role's prompt, resolved per project
+	Context         []ContextDoc `json:"context,omitempty"` // earlier artifacts and rollback reasons
+	Repo            *Repo        `json:"repo,omitempty"`
+	ProjectID       string       `json:"project_id"`
+	Phase           string       `json:"phase"`
+	Role            string       `json:"role"`
+	Backend         string       `json:"backend"`
+	Instruction     string       `json:"instruction"`
+	Bounds          Bounds       `json:"bounds"`
+	Attempt         int          `json:"attempt"`
+	LeaseExpiresAt  time.Time    `json:"lease_expires_at"`
 }
 
 // Lease hands jobs to the runner. An empty list means nothing is queued for it.

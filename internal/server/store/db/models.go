@@ -182,6 +182,7 @@ type Task struct {
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
+	Description         string             `json:"description"`
 }
 
 type UsageRecord struct {

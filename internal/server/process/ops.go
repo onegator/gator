@@ -106,6 +106,7 @@ type CreateParams struct {
 	ProjectID    pgtype.UUID
 	Kind         string
 	Title        string
+	Description  string
 	Urgency      int16
 	SourceTaskID pgtype.UUID
 }
@@ -124,7 +125,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 	err = s.tx(ctx, func(q *db.Queries) error {
 		var err error
 		task, err = q.CreateTask(ctx, db.CreateTaskParams{
-			ProjectID: p.ProjectID, Kind: p.Kind, Title: p.Title, Phase: first.Name,
+			ProjectID: p.ProjectID, Kind: p.Kind, Title: p.Title, Description: p.Description, Phase: first.Name,
 			Urgency: p.Urgency, SourceTaskID: p.SourceTaskID,
 		})
 		if err != nil {
@@ -367,6 +368,10 @@ func (s *Service) Approve(ctx context.Context, taskID pgtype.UUID, userID pgtype
 			return err
 		}
 		if err := q.SetGateHumanApproval(ctx, db.SetGateHumanApprovalParams{TaskID: taskID, Phase: task.Phase, HumanApprovedBy: userID}); err != nil {
+			return err
+		}
+		// Approving a phase approves what it produced; a later edit flags requirements_changed.
+		if _, err := q.ApprovePhaseArtifacts(ctx, db.ApprovePhaseArtifactsParams{TaskID: taskID, Phase: task.Phase, ApprovedBy: userID}); err != nil {
 			return err
 		}
 		return s.emit(ctx, q, "gate.approved", taskID, map[string]any{"phase": task.Phase, "by": uuidString(userID)})

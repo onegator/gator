@@ -30,7 +30,8 @@ Migrations run only when asked (`gator-server migrate`), never at startup. Every
 Phase templates per task kind live in `internal/server/process/defaults/*.yaml` and are embedded
 in `gator-server`. A project overrides a kind by placing a full template under `process_config`.
 Phases with `requires: deploy` are active only when the project has a plugin with that capability.
-Role prompts live in `process/roles/`.
+Role prompts (researcher, planner, worker, reviewer) live in `internal/server/process/roles/*.md`
+and are embedded too; a project replaces one with `process_config.roles.<role>`.
 
 ## API
 
@@ -133,3 +134,19 @@ and `/stop`; live output streams on the WebSocket topic `job:<id>`.
 
 `internal/runner/backend/claude/testdata` holds sanitized recordings of real Claude Code 2.1.270
 sessions; the parser and backend tests replay them through a fake `claude`.
+
+## Autopilot, roles and artifacts
+
+When a task enters a phase owned by a runner (discovery, planning, implementation, verification
+in the default templates), the server queues one job for it: the phase's role, the project's
+backend (`process_config.autopilot.backend`, default `GATOR_DEFAULT_BACKEND` or `claude`). Task
+events trigger it within moments; a reconcile every 10 s catches anything missed. A job is
+created once per phase entry, so a rollback gets a fresh one, and a failed job is not retried
+automatically: it shows in the inbox as `job_failed` for a person to decide. Turn it off per
+project with `{"autopilot":{"enabled":false}}` or for the server with `GATOR_AUTOPILOT=0`.
+
+The lease carries the role's prompt, the task's title and description, the job's instruction,
+the latest version of every artifact so far, and the reason the task was last sent back to this
+phase. A job that ends `done` leaves the document its role produces (brief, plan, report,
+review) as a new artifact version; approving the phase approves its artifacts. While a job is
+queued or running, the task does not ask anyone for a decision.

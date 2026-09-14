@@ -220,6 +220,13 @@ paths:
           schema: { type: string, format: date-time }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectMetrics" } } } }
+  /tasks/{taskId}/artifacts:
+    get:
+      operationId: listTaskArtifacts
+      description: Documents the task's phases produced (brief, plan, report, review), every version.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Artifact" } } } } }
   /tasks/{taskId}/jobs:
     get:
       operationId: listTaskJobs
@@ -564,7 +571,21 @@ components:
       properties:
         kind: { type: string, enum: [feature, bug, incident, chore] }
         title: { type: string }
+        description: { type: string, description: what the person wants, in their words; jobs get it in their prompt }
         urgency: { type: integer, minimum: 1, maximum: 4 }
+    Artifact:
+      type: object
+      required: [id, phase, type, version, approved, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        phase: { type: string }
+        type: { type: string }
+        version: { type: integer }
+        content: { type: string }
+        url: { type: string }
+        approved: { type: boolean }
+        approvedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
     Task:
       type: object
       required: [id, projectId, kind, title, phase, urgency, requirementsChanged, phaseEnteredAt, createdAt]
@@ -573,6 +594,7 @@ components:
         projectId: { type: string, format: uuid }
         kind: { type: string }
         title: { type: string }
+        description: { type: string }
         phase: { type: string }
         urgency: { type: integer }
         ownerKind: { type: string }
@@ -614,7 +636,7 @@ components:
       properties:
         task: { $ref: "#/components/schemas/Task" }
         waitingSince: { type: string, format: date-time }
-        reason: { type: string, enum: [approval, blocked, requirements_changed, idea] }
+        reason: { type: string, enum: [approval, blocked, requirements_changed, idea, job_failed] }
     Reason:
       type: object
       properties: { reason: { type: string } }

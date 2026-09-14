@@ -41,6 +41,10 @@ type Config struct {
 	StallAfter      time.Duration // running job with no events for this long becomes stalled
 	SweepEvery      time.Duration
 	RegisterTimeout time.Duration
+	// Autopilot queues a job whenever a task enters a runner-owned phase. Off in the zero
+	// value so tests opt in; gator-server turns it on unless GATOR_AUTOPILOT=0.
+	Autopilot      bool
+	DefaultBackend string // backend for autopilot jobs when the project names none; default "claude"
 }
 
 func (c *Config) defaults() {
@@ -58,6 +62,9 @@ func (c *Config) defaults() {
 	}
 	if c.RegisterTimeout == 0 {
 		c.RegisterTimeout = 10 * time.Second
+	}
+	if c.DefaultBackend == "" {
+		c.DefaultBackend = "claude"
 	}
 }
 
@@ -136,12 +143,27 @@ type NewJob struct {
 
 // CreateJob queues a job for the task's current phase and offers it to connected runners.
 func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) (db.Job, error) {
-	if strings.TrimSpace(in.Backend) == "" {
-		return db.Job{}, fmt.Errorf("%w: backend is required", ErrInvalidJob)
-	}
 	d, err := m.process.Detail(ctx, taskID)
 	if err != nil {
 		return db.Job{}, err
+	}
+	var job db.Job
+	err = m.tx(ctx, func(q *db.Queries) error {
+		var err error
+		job, err = m.insertJob(ctx, q, d, in)
+		return err
+	})
+	if err != nil {
+		return db.Job{}, err
+	}
+	m.Offer()
+	return job, nil
+}
+
+// insertJob validates and inserts a job for the task's current phase inside q's transaction.
+func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail, in NewJob) (db.Job, error) {
+	if strings.TrimSpace(in.Backend) == "" {
+		return db.Job{}, fmt.Errorf("%w: backend is required", ErrInvalidJob)
 	}
 	if d.Task.ClosedAt.Valid {
 		return db.Job{}, fmt.Errorf("%w: task is closed", ErrInvalidJob)
@@ -163,24 +185,109 @@ func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) 
 		in.Bounds.MaxToolCalls = DefaultMaxToolCalls
 	}
 	bounds, _ := json.Marshal(in.Bounds)
-	var job db.Job
-	err = m.tx(ctx, func(q *db.Queries) error {
-		var err error
-		job, err = q.CreateJob(ctx, db.CreateJobParams{
-			TaskID: taskID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
-			Backend: in.Backend, Instruction: in.Instruction, Bounds: bounds, MaxAttempts: int32(in.MaxAttempts),
-			CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID,
-		})
-		if err != nil {
-			return err
-		}
-		return m.emitJob(ctx, q, "job.queued", job, nil)
+	job, err := q.CreateJob(ctx, db.CreateJobParams{
+		TaskID: d.Task.ID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
+		Backend: in.Backend, Instruction: in.Instruction, Bounds: bounds, MaxAttempts: int32(in.MaxAttempts),
+		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID,
 	})
 	if err != nil {
 		return db.Job{}, err
 	}
-	m.Offer()
-	return job, nil
+	return job, m.emitJob(ctx, q, "job.queued", job, nil)
+}
+
+// EnsureJob is the autopilot: if the task sits in a runner-owned phase of a project with
+// autopilot on, and no job was created since it entered that phase, it queues one. A failed
+// job is not retried here; that is a person's call. Safe to call concurrently.
+func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bool, error) {
+	d, err := m.process.Detail(ctx, taskID)
+	if err != nil {
+		return db.Job{}, false, err
+	}
+	if d.Task.ClosedAt.Valid || d.Task.BlockedReason != nil || d.Phase.Owner != process.OwnerRunner || d.Phase.Role == "" {
+		return db.Job{}, false, nil
+	}
+	enabled, backend, err := m.process.Autopilot(ctx, d.Task.ProjectID, m.cfg.DefaultBackend)
+	if err != nil || !enabled {
+		return db.Job{}, false, err
+	}
+	var job db.Job
+	created := false
+	err = m.tx(ctx, func(q *db.Queries) error {
+		if err := q.LockTask(ctx, uuidString(taskID)); err != nil {
+			return err
+		}
+		t, err := q.GetTaskForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if t.Phase != d.Task.Phase || t.ClosedAt.Valid || t.BlockedReason != nil {
+			return nil // moved on while we looked
+		}
+		jobs, err := q.ListJobsByTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		for _, j := range jobs {
+			if j.Phase == t.Phase && !j.CreatedAt.Time.Before(t.PhaseEnteredAt.Time) {
+				return nil // this phase entry already has its job
+			}
+		}
+		d.Task = t
+		job, err = m.insertJob(ctx, q, d, NewJob{Backend: backend, CreatedBy: process.Actor{Kind: process.ActorSystem}})
+		created = err == nil
+		return err
+	})
+	if err != nil {
+		return db.Job{}, false, err
+	}
+	if created {
+		m.log.Info("autopilot queued a job", "task", uuidString(taskID), "phase", job.Phase, "role", job.Role, "backend", job.Backend)
+		m.Offer()
+	}
+	return job, created, nil
+}
+
+// Reconcile runs EnsureJob over every open, unblocked task. It catches events the live
+// subscription missed (the hub drops slow subscribers; the server may have restarted).
+func (m *Manager) Reconcile(ctx context.Context) (int, error) {
+	tasks, err := db.New(m.pool).ListOpenUnblockedTasks(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, t := range tasks {
+		if _, created, err := m.EnsureJob(ctx, t.ID); err != nil {
+			m.log.Warn("autopilot", "task", uuidString(t.ID), "err", err)
+		} else if created {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// RunAutopilot reacts to task events so a job is queued moments after a task enters a
+// runner phase. Reconcile in Run is the safety net.
+func (m *Manager) RunAutopilot(ctx context.Context) {
+	ch, stop := m.hub.Subscribe("inbox")
+	defer stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e := <-ch:
+			switch e.Type {
+			case "task.created", "task.phase_changed", "gate.unblocked":
+				id, ok := parseUUID(e.AggregateID)
+				if !ok {
+					continue
+				}
+				if _, _, err := m.EnsureJob(ctx, id); err != nil && ctx.Err() == nil {
+					m.log.Warn("autopilot", "task", e.AggregateID, "err", err)
+				}
+			}
+		}
+	}
 }
 
 // StopJob stops a queued job immediately, asks a connected runner to stop an active one,
@@ -343,6 +450,13 @@ func (m *Manager) Run(ctx context.Context) {
 			res, err := m.Sweep(ctx, m.now())
 			if err != nil && ctx.Err() == nil {
 				m.log.Warn("runner sweep", "err", err)
+			}
+			if m.cfg.Autopilot {
+				if n, err := m.Reconcile(ctx); err != nil && ctx.Err() == nil {
+					m.log.Warn("autopilot reconcile", "err", err)
+				} else if n > 0 {
+					m.log.Info("autopilot reconcile queued jobs", "count", n)
+				}
 			}
 			if res != (SweepResult{}) {
 				m.log.Info("runner sweep", "offline", res.Offline, "requeued", res.Requeued, "failed", res.Failed, "stalled", res.Stalled)

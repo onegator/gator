@@ -24,6 +24,12 @@ var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	"dur":       human,
 	"since":     func(t time.Time) string { return human(time.Since(t).Seconds()) },
 	"stateText": stateText,
+	"deref": func(s *string) string {
+		if s == nil {
+			return ""
+		}
+		return *s
+	},
 }).ParseFS(files, "templates/*.html"))
 
 // human formats seconds the way a person reads them: 45s, 8m 1s, 2h 5m, 3d 4h.
@@ -100,5 +106,8 @@ func (h *Handler) task(w http.ResponseWriter, r *http.Request) {
 	}
 	trs, _ := h.Process.Transitions(r.Context(), id)
 	m, _ := h.Process.Metrics(r.Context(), id, time.Now())
-	_ = tmpl.ExecuteTemplate(w, "task.html", map[string]any{"D": d, "Transitions": trs, "M": m})
+	q := db.New(h.Pool)
+	jobs, _ := q.ListJobsByTask(r.Context(), id)
+	arts, _ := q.ListArtifacts(r.Context(), id)
+	_ = tmpl.ExecuteTemplate(w, "task.html", map[string]any{"D": d, "Transitions": trs, "M": m, "Jobs": jobs, "Artifacts": arts})
 }

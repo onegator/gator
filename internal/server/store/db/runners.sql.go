@@ -466,6 +466,16 @@ func (q *Queries) ListRunners(ctx context.Context) ([]Runner, error) {
 	return items, nil
 }
 
+const lockTask = `-- name: LockTask :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Serialises job creation per task inside a transaction.
+func (q *Queries) LockTask(ctx context.Context, key string) error {
+	_, err := q.db.Exec(ctx, lockTask, key)
+	return err
+}
+
 const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
 SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()

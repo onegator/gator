@@ -34,6 +34,7 @@ type harness struct {
 	srv    *httptest.Server
 	pool   *pgxpool.Pool
 	mgr    *runners.Manager
+	hub    *events.Hub
 	admin  string // user bearer
 	runner string // runner bearer
 }
@@ -75,7 +76,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, admin: admin, runner: runner}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, admin: admin, runner: runner}
 }
 
 func (h *harness) do(method, path string, body, out any) int {

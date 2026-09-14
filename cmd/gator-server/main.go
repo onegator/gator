@@ -143,8 +143,15 @@ func serve(ctx context.Context) error {
 		log.Warn("backups not configured (GATOR_BACKUP_S3_*)")
 	}
 
-	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{})
+	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
+		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
+		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
+	})
 	go runnerMgr.Run(ctx)
+	if os.Getenv("GATOR_AUTOPILOT") != "0" {
+		go runnerMgr.RunAutopilot(ctx)
+		log.Info("autopilot on: entering a runner phase queues a job")
+	}
 
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Hub: hub, Log: log,

@@ -136,25 +136,45 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	return fin
 }
 
-// Prompt is the opening instruction for a job. Role prompts from process/roles replace the
-// generic framing in PLQ-224; the job's own instruction always comes through verbatim.
+// Prompt is the opening instruction for a job: the role's guide (resolved by the server per
+// project), the task and what the person asked for, the job's own instruction, and earlier
+// documents. Without a guide it falls back to a generic framing.
 func Prompt(job proto.Job, hasRepo bool) string {
 	var b strings.Builder
 	title := job.TaskTitle
 	if title == "" {
 		title = "untitled task"
 	}
-	fmt.Fprintf(&b, "You are working as the %s on the task %q (phase: %s).\n\n", orDefault(job.Role, "agent"), title, orDefault(job.Phase, "unknown"))
-	if strings.TrimSpace(job.Instruction) != "" {
-		b.WriteString(strings.TrimSpace(job.Instruction))
-		b.WriteString("\n\n")
-	}
-	if hasRepo {
-		b.WriteString("Work in the current directory, a git checkout on its own branch. Commit your changes with clear messages; do not push, the runner does that. ")
+	guide := strings.TrimSpace(job.Guide)
+	if guide != "" {
+		b.WriteString(guide)
+		b.WriteString("\n\n---\n\n")
+		fmt.Fprintf(&b, "Task: %q (phase: %s, your role: %s)\n", title, orDefault(job.Phase, "unknown"), orDefault(job.Role, "agent"))
 	} else {
-		b.WriteString("Work in the current directory. ")
+		fmt.Fprintf(&b, "You are working as the %s on the task %q (phase: %s).\n", orDefault(job.Role, "agent"), title, orDefault(job.Phase, "unknown"))
 	}
-	b.WriteString("Finish with a short summary of what you did and what is left.")
+	if d := strings.TrimSpace(job.TaskDescription); d != "" {
+		b.WriteString("\nWhat the person asked for:\n\n")
+		b.WriteString(d)
+		b.WriteString("\n")
+	}
+	if i := strings.TrimSpace(job.Instruction); i != "" {
+		b.WriteString("\nInstruction for this job:\n\n")
+		b.WriteString(i)
+		b.WriteString("\n")
+	}
+	for _, doc := range job.Context {
+		fmt.Fprintf(&b, "\n## Context: %s\n\n%s\n", doc.Title, strings.TrimSpace(doc.Body))
+	}
+	b.WriteString("\n")
+	if hasRepo {
+		b.WriteString("Work in the current directory, a git checkout on its own branch. Commit your changes with clear messages; do not push, the runner does that.")
+	} else {
+		b.WriteString("Work in the current directory. There is no repository for this job.")
+	}
+	if guide == "" {
+		b.WriteString(" Finish with a short summary of what you did and what is left.")
+	}
 	return b.String()
 }
 

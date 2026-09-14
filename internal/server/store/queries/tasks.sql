@@ -1,6 +1,6 @@
 -- name: CreateTask :one
-INSERT INTO tasks (project_id, kind, title, phase, urgency, owner_kind, owner_id, source_task_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO tasks (project_id, kind, title, description, phase, urgency, owner_kind, owner_id, source_task_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: GetTask :one
@@ -82,3 +82,20 @@ ORDER BY t.urgency, t.phase_entered_at;
 
 -- name: ListOpenUnblockedTasks :many
 SELECT * FROM tasks WHERE closed_at IS NULL AND blocked_reason IS NULL ORDER BY phase_entered_at;
+
+-- name: ApprovePhaseArtifacts :execrows
+UPDATE artifacts SET approved_at = now(), approved_by = $3
+WHERE task_id = $1 AND phase = $2 AND approved_at IS NULL;
+
+-- name: LastRollbackReason :one
+SELECT reason FROM phase_transitions
+WHERE task_id = $1 AND kind = 'rollback' AND to_phase = $2
+ORDER BY id DESC LIMIT 1;
+
+-- name: ListCurrentPhaseJobs :many
+-- The newest job of each open task's current phase entry, for the inbox.
+SELECT DISTINCT ON (j.task_id) j.task_id, j.status
+FROM jobs j
+JOIN tasks t ON t.id = j.task_id
+WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
+ORDER BY j.task_id, j.created_at DESC;

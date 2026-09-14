@@ -105,3 +105,7 @@ SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running
 -- name: InsertReceipt :exec
 INSERT INTO receipts (source, subject_kind, subject_id, status, payload, verified_at)
 VALUES ($1, $2, $3, $4, $5, now());
+
+-- name: LockTask :exec
+-- Serialises job creation per task inside a transaction.
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
