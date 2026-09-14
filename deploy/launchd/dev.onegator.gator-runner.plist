@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Local runner on a Mac. Gator.app installs and manages this file in M4 (PLQ-230) and keeps the
+  token in the Keychain. Until then, fill the placeholders, copy to ~/Library/LaunchAgents/ and:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.onegator.gator-runner.plist
+  A sleeping Mac shows as offline in gator; its leases return to the queue.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.onegator.gator-runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/gator-runner</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>GATOR_RUNNER_SERVER_URL</key>
+    <string>wss://gator.example.ts.net/runner</string>
+    <key>GATOR_RUNNER_TOKEN</key>
+    <string>REPLACE_WITH_RUNNER_TOKEN</string>
+    <key>GATOR_RUNNER_LOCATION</key>
+    <string>mac</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/gator-runner.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/gator-runner.log</string>
+</dict>
+</plist>

@@ -144,7 +144,8 @@ func Run(ctx context.Context, cfg Config, databaseURL string, log *slog.Logger) 
 
 // Restore replays a dump into databaseURL. It converts the custom-format archive to SQL with
 // pg_restore, drops session settings a newer client emits that an older server rejects
-// (e.g. transaction_timeout), and applies it with psql under ON_ERROR_STOP.
+// (e.g. transaction_timeout), and applies it with psql in a single transaction under
+// ON_ERROR_STOP, so it either restores everything or changes nothing.
 func Restore(ctx context.Context, databaseURL, path string) error {
 	for _, bin := range []string{"pg_restore", "psql"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -164,7 +165,9 @@ func Restore(ctx context.Context, databaseURL, path string) error {
 		filtered.WriteString(line)
 		filtered.WriteByte('\n')
 	}
-	apply := exec.CommandContext(ctx, "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", databaseURL)
+	// One transaction: a restore that fails halfway (lock conflict, bad dump) rolls back
+	// completely instead of leaving dropped tables without their constraints and triggers.
+	apply := exec.CommandContext(ctx, "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", databaseURL)
 	apply.Stdin = strings.NewReader(filtered.String())
 	var stderr strings.Builder
 	apply.Stderr = &stderr

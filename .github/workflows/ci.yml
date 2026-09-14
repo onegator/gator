@@ -32,6 +32,25 @@ jobs:
       - run: go run ./cmd/gator-server migrate-down
       - run: go run ./cmd/gator-server migrate
       - run: go test ./...
+      - run: shellcheck deploy/install.sh
       - uses: goreleaser/goreleaser-action@v6
         with:
+          version: "~> v2"
           args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: server
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

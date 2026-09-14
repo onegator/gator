@@ -1,0 +1,53 @@
+[Unit]
+Description=gator-runner (executes agent jobs in git worktrees)
+Documentation=https://github.com/onegator/gator/blob/main/docs/deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A dedicated login user: agents run with exactly this user's permissions. A worktree is
+# isolation, not a sandbox, so give this user nothing it should not have.
+User=gator-runner
+Group=gator-runner
+EnvironmentFile=/etc/gator/runner.env
+Environment=HOME=/var/lib/gator-runner
+WorkingDirectory=/var/lib/gator-runner
+ExecStart=/usr/local/bin/gator-runner run
+Restart=always
+RestartSec=5
+# The runner forwards SIGTERM to agent process groups; after the timeout systemd kills
+# whatever is left in the cgroup.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+# Hardening that still lets agents work: git, compilers and CLI caches live under $HOME
+# (/var/lib/gator-runner), which is the only writable place besides a private /tmp.
+# MemoryDenyWriteExecute stays off: Node-based agent CLIs need a JIT.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gator-runner
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

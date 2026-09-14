@@ -1,0 +1,11 @@
+# Public edge for gator: only plugin webhooks are reachable from the internet.
+# The API, WebSocket and /admin stay on the tailnet (`tailscale serve --bg 8080`).
+gator.example.com {
+	@hooks path /hooks/*
+	handle @hooks {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		respond "not found" 404
+	}
+}

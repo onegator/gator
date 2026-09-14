@@ -129,7 +129,9 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := queue.Start(ctx); err != nil {
+	// Start the queue on a context SIGTERM does not cancel: River treats a cancelled start
+	// context as a hard stop. Shutdown below stops it softly, then forces it after the timeout.
+	if err := queue.Start(context.WithoutCancel(ctx)); err != nil {
 		return fmt.Errorf("start queue: %w", err)
 	}
 	if bc.Enabled() {

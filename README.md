@@ -84,3 +84,9 @@ Cost on subscriptions is an estimate from list prices and is flagged `costEstima
 - `GET /api/v1/tasks/{id}/metrics`: totals and per-phase breakdown.
 - `GET /api/v1/projects/{id}/metrics?since=`: per task kind, with averages over closed tasks.
 - OpenTelemetry counters `gator.agent.tokens{type,backend}` and `gator.agent.cost_usd{backend}`.
+
+## Deploy
+
+`docs/deploy.md` covers a VPS with systemd (`deploy/install.sh`), Docker (`deploy/compose.yaml`)
+and the Mac runner (launchd). Tagging `v*` publishes signed-checksum archives for both binaries
+and `ghcr.io/onegator/gator-server` for amd64 and arm64.

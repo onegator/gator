@@ -1,0 +1,47 @@
+# Single-host gator with Docker: PostgreSQL, an explicit one-shot migration, the server.
+#   cp deploy/server.env.example deploy/server.env   # fill it, keep it 0600
+#   docker compose -f deploy/compose.yaml up -d
+# Upgrades: bump GATOR_IMAGE_TAG, then `up -d`; the migrate service runs before serve.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: gator
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gator"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: ghcr.io/onegator/gator-server:${GATOR_IMAGE_TAG:-latest}
+    command: ["migrate"]
+    env_file: server.env
+    environment:
+      GATOR_DATABASE_URL: postgres://gator:${POSTGRES_PASSWORD}@postgres:5432/gator?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  server:
+    image: ghcr.io/onegator/gator-server:${GATOR_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: server.env
+    environment:
+      GATOR_DATABASE_URL: postgres://gator:${POSTGRES_PASSWORD}@postgres:5432/gator?sslmode=disable
+      GATOR_LISTEN_ADDR: :8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 30s
+
+volumes:
+  pgdata:

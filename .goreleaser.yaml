@@ -27,11 +27,25 @@ archives:
   - id: server
     ids: [gator-server]
     name_template: "gator-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - deploy/install.sh
+      - deploy/server.env.example
+      - deploy/systemd/gator-server.service
+      - deploy/caddy/Caddyfile
+      - docs/deploy.md
   - id: runner
     ids: [gator-runner]
     name_template: "gator-runner_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - deploy/install.sh
+      - deploy/runner.env.example
+      - deploy/systemd/gator-runner.service
+      - deploy/launchd/dev.onegator.gator-runner.plist
+      - docs/deploy.md
 checksum:
   name_template: checksums.txt
 release:
   extra_files:
     - glob: docs/openapi.yaml
+    - glob: deploy/install.sh
+    - glob: deploy/compose.yaml

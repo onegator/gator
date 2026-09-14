@@ -1,0 +1,43 @@
+[Unit]
+Description=gator-server (process brain and API)
+Documentation=https://github.com/onegator/gator/blob/main/docs/deploy.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gator
+Group=gator
+EnvironmentFile=/etc/gator/server.env
+# Migrations are never run automatically: `sudo /usr/local/lib/gator/install.sh migrate`.
+ExecStart=/usr/local/bin/gator-server serve
+Restart=on-failure
+RestartSec=5
+# serve stops HTTP, gives queue jobs 15s, then forces them down.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Hardening: the server needs the network, the database socket and /tmp for backups.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
