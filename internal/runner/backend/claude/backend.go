@@ -40,6 +40,10 @@ const noMCP = `{"mcpServers":{}}`
 
 var _ backend.Backend = Backend{}
 
+// maxSummary bounds the final answer carried in the receipt, far below the 4 MiB message
+// limit of the runner connection.
+const maxSummary = 200_000
+
 // errToolLimit ends a run that exceeded its tool-call budget.
 var errToolLimit = errors.New("tool call limit reached")
 
@@ -190,7 +194,9 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 		out.Usage.InputTokens, out.Usage.OutputTokens = r.Tokens.Input, r.Tokens.Output
 		out.Usage.CacheReadTokens, out.Usage.CacheWriteTokens = r.Tokens.CacheRead, r.Tokens.CacheWrite
 		out.Usage.CostUSD, out.Usage.CostEstimated = r.CostUSD, r.CostEstimated
-		out.Summary = clip(r.Text, 2000)
+		// The final answer is the job's document (brief, plan, report, review), so it is kept
+		// whole; the cap only guards the connection against a runaway answer.
+		out.Summary = clip(r.Text, maxSummary)
 		if r.SessionID != "" {
 			out.SessionID = r.SessionID
 		}

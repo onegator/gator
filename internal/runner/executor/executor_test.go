@@ -168,10 +168,14 @@ func TestPromptWithGuideAndContext(t *testing.T) {
 		Context: []proto.ContextDoc{{Kind: "rollback", Title: "Why this phase was sent back", Body: "missed the migration"}, {Kind: "brief", Title: "brief from discovery (v1, approved)", Body: "## Problem\nX"}}}
 	p := Prompt(job, true)
 	for _, want := range []string{"# Role: planner", `Task: "Dark mode" (phase: planning, your role: planner)`, "Users want dark mode.", "Keep it short.",
-		"## Context: Why this phase was sent back", "missed the migration", "## Context: brief from discovery (v1, approved)", "do not push"} {
+		"## Context: Why this phase was sent back", "missed the migration", "## Context: brief from discovery (v1, approved)", "the runner pushes that branch"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, p)
 		}
+	}
+	// A read-only role (researcher, planner, reviewer) must not be told to commit by the framing.
+	if strings.Contains(p, "Commit your changes") {
+		t.Error("with a role guide the framing must not tell the agent to commit")
 	}
 	if strings.Contains(p, "Finish with a short summary") {
 		t.Error("a role guide defines the output; the generic closing line must not compete with it")

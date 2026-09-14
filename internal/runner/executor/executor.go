@@ -167,9 +167,14 @@ func Prompt(job proto.Job, hasRepo bool) string {
 		fmt.Fprintf(&b, "\n## Context: %s\n\n%s\n", doc.Title, strings.TrimSpace(doc.Body))
 	}
 	b.WriteString("\n")
-	if hasRepo {
+	switch {
+	case hasRepo && guide != "":
+		// The role guide decides whether to change anything; this line only states the facts,
+		// so a read-only role is never told to commit.
+		b.WriteString("The current directory is a git checkout of the project on its own branch; the runner pushes that branch when you finish.")
+	case hasRepo:
 		b.WriteString("Work in the current directory, a git checkout on its own branch. Commit your changes with clear messages; do not push, the runner does that.")
-	} else {
+	default:
 		b.WriteString("Work in the current directory. There is no repository for this job.")
 	}
 	if guide == "" {

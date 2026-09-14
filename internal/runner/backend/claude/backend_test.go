@@ -180,3 +180,12 @@ func TestMCPIsStrictByDefaultAndExplicitWhenConfigured(t *testing.T) {
 		t.Fatalf("explicit config must still be strict:\n%s", args)
 	}
 }
+
+// The final answer is the job's document; a brief longer than a screen must arrive whole.
+func TestLongFinalAnswerIsKeptWhole(t *testing.T) {
+	b, _ := fake(t, "synthetic-long-result.ndjson")
+	out, _ := run(t, b, context.Background(), backend.Spec{Prompt: "x"})
+	if out.Status != proto.StatusDone || len(out.Summary) < 6000 || !strings.HasSuffix(strings.TrimSpace(out.Summary), "end-of-document-marker") {
+		t.Fatalf("summary cut: %d chars, ends %q", len(out.Summary), out.Summary[max(0, len(out.Summary)-40):])
+	}
+}
