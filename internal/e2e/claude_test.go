@@ -57,6 +57,9 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	td := filepath.Join(wd, "..", "runner", "backend", "claude", "testdata")
 	t.Setenv("FAKE_CLAUDE_FIXTURE", filepath.Join(td, "claude-2.1.270-tool-success.ndjson"))
 	t.Setenv("FAKE_CLAUDE_COMMIT", "1")
+	// Without a login the runner reports claude as missing (as on a clean CI machine) and the
+	// server rightly leases it nothing; the fake binary needs no real token.
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-token-for-tests")
 	// The recording has no digest, so the executor resumes the session once to ask for it.
 	t.Setenv("FAKE_CLAUDE_RESUME_FIXTURE", filepath.Join(td, "synthetic-digest-reply.ndjson"))
 	ex := &executor.Executor{
