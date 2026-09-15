@@ -180,6 +180,43 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 	return i, err
 }
 
+const findTaskByExternalRef = `-- name: FindTaskByExternalRef :one
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description FROM tasks
+WHERE project_id = $1 AND external_refs ->> $2::text = $3::text
+ORDER BY created_at DESC LIMIT 1
+`
+
+type FindTaskByExternalRefParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Key       string      `json:"key"`
+	Value     string      `json:"value"`
+}
+
+func (q *Queries) FindTaskByExternalRef(ctx context.Context, arg FindTaskByExternalRefParams) (Task, error) {
+	row := q.db.QueryRow(ctx, findTaskByExternalRef, arg.ProjectID, arg.Key, arg.Value)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Phase,
+		&i.Urgency,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.RequirementsChanged,
+		&i.BlockedReason,
+		&i.SourceTaskID,
+		&i.ExternalRefs,
+		&i.PhaseEnteredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ClosedAt,
+		&i.Description,
+	)
+	return i, err
+}
+
 const getGate = `-- name: GetGate :one
 SELECT task_id, phase, checks, human_approved_by, human_approved_at, blocked_reason, blocked_by, updated_at FROM gates WHERE task_id = $1 AND phase = $2
 `
@@ -603,6 +640,41 @@ func (q *Queries) ListPhaseTransitions(ctx context.Context, taskID pgtype.UUID) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const mergeTaskExternalRefs = `-- name: MergeTaskExternalRefs :one
+UPDATE tasks SET external_refs = external_refs || $1::jsonb, updated_at = now()
+WHERE id = $2 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description
+`
+
+type MergeTaskExternalRefsParams struct {
+	Refs []byte      `json:"refs"`
+	ID   pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) MergeTaskExternalRefs(ctx context.Context, arg MergeTaskExternalRefsParams) (Task, error) {
+	row := q.db.QueryRow(ctx, mergeTaskExternalRefs, arg.Refs, arg.ID)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Phase,
+		&i.Urgency,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.RequirementsChanged,
+		&i.BlockedReason,
+		&i.SourceTaskID,
+		&i.ExternalRefs,
+		&i.PhaseEnteredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ClosedAt,
+		&i.Description,
+	)
+	return i, err
 }
 
 const setGateBlocked = `-- name: SetGateBlocked :exec

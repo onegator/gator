@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/proto"
@@ -24,19 +25,22 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/runners"
+	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
 )
 
 type harness struct {
-	t      *testing.T
-	srv    *httptest.Server
-	pool   *pgxpool.Pool
-	mgr    *runners.Manager
-	hub    *events.Hub
-	admin  string // user bearer
-	runner string // runner bearer
+	t       *testing.T
+	srv     *httptest.Server
+	pool    *pgxpool.Pool
+	mgr     *runners.Manager
+	hub     *events.Hub
+	plugins *plugins.Host
+	admin   string // user bearer
+	runner  string // runner bearer
 }
 
 const (
@@ -60,12 +64,27 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(pool.Close)
 	cat, _ := process.DefaultCatalog()
-	svc := process.NewService(pool, process.DBTemplates{Pool: pool, Defaults: cat}, process.StaticCapabilities(nil))
+	svc := process.NewService(pool, process.DBTemplates{Pool: pool, Defaults: cat}, plugins.Capabilities{Pool: pool})
 	hub := events.NewHub()
-	mgr := runners.New(pool, svc, hub, slog.Default(), runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second, StallAfter: testStallAfter})
-	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Hub: hub, Log: slog.Default(),
+	keys, err := secrets.ParseKeyring(secrets.NewKey("e2e"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{CallTimeout: 2 * time.Second,
+		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
+		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond})
+	hostCtx, stopHost := context.WithCancel(context.Background())
+	hostDone := make(chan struct{})
+	go func() { host.Run(hostCtx); close(hostDone) }()
+	t.Cleanup(func() { stopHost(); <-hostDone })
+	mgr := runners.New(pool, svc, hub, slog.Default(), runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
+		StallAfter: testStallAfter, Preparer: host})
+	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
-	srv := httptest.NewServer(s.Router())
+	root := chi.NewRouter()
+	root.Mount("/", s.Router())
+	root.Mount("/hooks", host.Hooks())
+	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)
 
 	_, admin, err := auth.BootstrapAdmin(ctx, pool, fmt.Sprintf("e2e-%d@t.local", time.Now().UnixNano()), "", time.Hour)
@@ -76,7 +95,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, admin: admin, runner: runner}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, plugins: host, admin: admin, runner: runner}
 }
 
 func (h *harness) do(method, path string, body, out any) int {

@@ -105,3 +105,12 @@ ORDER BY j.task_id, j.created_at DESC;
 SELECT t.id, t.project_id FROM tasks t
 JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
 WHERE t.closed_at IS NULL AND g.checks @> '[{"name": "budget", "status": "fail"}]'::jsonb;
+
+-- name: MergeTaskExternalRefs :one
+UPDATE tasks SET external_refs = external_refs || sqlc.arg(refs)::jsonb, updated_at = now()
+WHERE id = sqlc.arg(id) RETURNING *;
+
+-- name: FindTaskByExternalRef :one
+SELECT * FROM tasks
+WHERE project_id = sqlc.arg(project_id) AND external_refs ->> sqlc.arg(key)::text = sqlc.arg(value)::text
+ORDER BY created_at DESC LIMIT 1;

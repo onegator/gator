@@ -183,3 +183,11 @@ running on a different backend, since there is no silent substitution. Once the 
 spent its daily budget (UTC day, from usage records), new jobs are refused with 409 and the
 autopilot fails the gate's `budget` check, which blocks the task in the inbox; the next
 reconcile after midnight or a higher limit passes the check and the autopilot resumes.
+
+## Plugins
+
+Integrations are plugins: separate processes speaking JSON-RPC 2.0 over stdio, one process
+per project and plugin, started only by gator-server. Install with `PUT /api/v1/plugins/{name}`
+and enable per project with `PUT /api/v1/projects/{id}/plugins/{name}`; webhooks arrive at
+`POST /hooks/<project-slug>/<plugin>`. The contract and a Go SDK live in the public package
+`plugin/`; the protocol is in [docs/plugins.md](docs/plugins.md).

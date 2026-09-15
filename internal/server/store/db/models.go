@@ -120,6 +120,41 @@ type PhaseTransition struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type Plugin struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
+	Command   []string           `json:"command"`
+	Version   string             `json:"version"`
+	Manifest  []byte             `json:"manifest"`
+	Enabled   bool               `json:"enabled"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PluginCall struct {
+	ID              int64              `json:"id"`
+	ProjectPluginID pgtype.UUID        `json:"project_plugin_id"`
+	Direction       string             `json:"direction"`
+	Method          string             `json:"method"`
+	Payload         []byte             `json:"payload"`
+	Result          []byte             `json:"result"`
+	Error           *string            `json:"error"`
+	DurationMs      int32              `json:"duration_ms"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type PluginEventCursor struct {
+	ID          int32 `json:"id"`
+	LastEventID int64 `json:"last_event_id"`
+}
+
+type PluginKv struct {
+	ProjectPluginID pgtype.UUID        `json:"project_plugin_id"`
+	Key             string             `json:"key"`
+	Value           []byte             `json:"value"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Project struct {
 	ID            pgtype.UUID        `json:"id"`
 	Slug          string             `json:"slug"`
@@ -128,6 +163,18 @@ type Project struct {
 	ProcessConfig []byte             `json:"process_config"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProjectPlugin struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	PluginID       pgtype.UUID        `json:"plugin_id"`
+	Config         []byte             `json:"config"`
+	Secrets        string             `json:"secrets"`
+	Enabled        bool               `json:"enabled"`
+	DisabledReason *string            `json:"disabled_reason"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ProjectRepo struct {
@@ -216,4 +263,10 @@ type User struct {
 	OidcSubject   *string            `json:"oidc_subject"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	WorkspaceRole string             `json:"workspace_role"`
+}
+
+type WebhookDelivery struct {
+	ProjectPluginID pgtype.UUID        `json:"project_plugin_id"`
+	DeliveryID      string             `json:"delivery_id"`
+	ReceivedAt      pgtype.Timestamptz `json:"received_at"`
 }

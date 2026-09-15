@@ -22,6 +22,7 @@ import (
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
+	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
@@ -98,7 +99,8 @@ func serve(ctx context.Context) error {
 	log := slog.New(secrets.RedactingHandler{Inner: slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)})})
 	slog.SetDefault(log)
 
-	if _, err := secrets.LoadKeyring(); err != nil {
+	keyring, err := secrets.LoadKeyring()
+	if err != nil {
 		return err
 	}
 	shutdownTelemetry, err := telemetry.Setup(ctx, "gator-server", version.Version)
@@ -121,11 +123,13 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Capabilities come from enabled plugins once PLQ-225 lands; until then none.
-	svc := process.NewService(db.Pool, process.DBTemplates{Pool: db.Pool, Defaults: catalog}, process.StaticCapabilities(nil))
+	// A project's capabilities are those of its enabled plugins.
+	svc := process.NewService(db.Pool, process.DBTemplates{Pool: db.Pool, Defaults: catalog}, plugins.Capabilities{Pool: db.Pool})
 	hub := events.NewHub()
 	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
 	go relay.Run(ctx)
+	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, plugins.Config{})
+	go pluginHost.Run(ctx)
 
 	bc := backup.LoadConfig()
 	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL, Log: log})
@@ -146,6 +150,7 @@ func serve(ctx context.Context) error {
 	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
 		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
+		Preparer:       pluginHost,
 	})
 	go runnerMgr.Run(ctx)
 	if os.Getenv("GATOR_AUTOPILOT") != "0" {
@@ -154,7 +159,7 @@ func serve(ctx context.Context) error {
 	}
 
 	apiServer := &api.Server{
-		Pool: db.Pool, Process: svc, Runners: runnerMgr, Hub: hub, Log: log,
+		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
 		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst,
 	}
@@ -173,6 +178,8 @@ func serve(ctx context.Context) error {
 	}
 	root := chi.NewRouter()
 	root.Mount("/", apiServer.Router())
+	// The only public endpoint: plugin webhooks. Plugins verify the sender's signature.
+	root.Mount("/hooks", pluginHost.Hooks())
 	adminRouter := chi.NewRouter()
 	adminRouter.Use(auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log), auth.RequireAuth, auth.RequireWorkspaceAdmin)
 	adminRouter.Mount("/", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())

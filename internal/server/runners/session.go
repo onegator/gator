@@ -324,6 +324,11 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 					pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
 				}
 			}
+			if p := s.m.cfg.Preparer; p != nil {
+				for _, d := range p.PrepareJob(ctx, j) {
+					pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+				}
+			}
 			if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 				pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
 			}

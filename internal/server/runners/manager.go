@@ -47,6 +47,13 @@ type Config struct {
 	// value so tests opt in; gator-server turns it on unless GATOR_AUTOPILOT=0.
 	Autopilot      bool
 	DefaultBackend string // backend for autopilot jobs when the project names none; default "claude"
+	// Preparer adds plugin instructions to a job before it is leased. Optional.
+	Preparer JobPreparer
+}
+
+// JobPreparer lets plugins add context to a job before a runner gets it.
+type JobPreparer interface {
+	PrepareJob(ctx context.Context, job db.Job) []process.ContextDoc
 }
 
 func (c *Config) defaults() {

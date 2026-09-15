@@ -120,6 +120,57 @@ paths:
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /plugins:
+    get:
+      operationId: listPlugins
+      description: Installed plugins. Workspace admins only.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/InstalledPlugin" } } } } }
+  /plugins/{pluginName}:
+    put:
+      operationId: installPlugin
+      description: Install or update a plugin from a command on the server. The command runs once to report its manifest. Workspace admins only.
+      parameters: [ { $ref: "#/components/parameters/pluginName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/InstallPlugin" } } }
+      responses:
+        "200": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/InstalledPlugin" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/plugins:
+    get:
+      operationId: listProjectPlugins
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectPlugin" } } } } }
+  /projects/{projectId}/plugins/{pluginName}:
+    put:
+      operationId: configureProjectPlugin
+      description: Enable, disable or configure a plugin for the project. Secret settings are write-only; leaving one out keeps its value, an empty string removes it. Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/pluginName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPluginSettings" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPlugin" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/plugins/{pluginName}/calls:
+    get:
+      operationId: listPluginCalls
+      description: Recent calls between the core and the plugin for this project, secrets redacted. Project admins only.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/pluginName" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/PluginCall" } } } } }
+  /tasks/{taskId}/plugin-ui:
+    get:
+      operationId: getTaskPluginUI
+      description: Markdown tabs and chips the project's plugins contribute to a task.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PluginUI" } } } }
   /inbox:
     get:
       operationId: listInbox
@@ -309,6 +360,7 @@ components:
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
+    pluginName: { name: pluginName, in: path, required: true, schema: { type: string } }
   responses:
     Error:
       description: error
@@ -567,6 +619,76 @@ components:
         name: { type: string }
         tags: { type: array, items: { type: string } }
         createdAt: { type: string, format: date-time }
+    InstallPlugin:
+      type: object
+      required: [command]
+      properties:
+        command: { type: array, minItems: 1, items: { type: string }, description: "argv of the plugin process on the server" }
+    InstalledPlugin:
+      type: object
+      required: [name, version, command, capabilities, hooks, enabled]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        command: { type: array, items: { type: string } }
+        capabilities: { type: array, items: { type: string } }
+        hooks: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+        manifest: { type: object, additionalProperties: true }
+    ProjectPluginSettings:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        config: { type: object, additionalProperties: true }
+    ProjectPlugin:
+      type: object
+      required: [name, version, enabled, running, capabilities, hooks, config, secretsSet]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        enabled: { type: boolean }
+        disabledReason: { type: string }
+        running: { type: boolean }
+        capabilities: { type: array, items: { type: string } }
+        hooks: { type: array, items: { type: string } }
+        ui: { type: array, items: { type: string } }
+        config: { type: object, additionalProperties: true, description: non-secret settings }
+        secretsSet: { type: array, items: { type: string }, description: secret settings that hold a value }
+        configSchema: { type: object, additionalProperties: true }
+    PluginCall:
+      type: object
+      required: [id, direction, method, durationMs, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        direction: { type: string, description: "core_to_plugin | plugin_to_core" }
+        method: { type: string }
+        payload: {}
+        result: {}
+        error: { type: string }
+        durationMs: { type: integer }
+        createdAt: { type: string, format: date-time }
+    PluginUI:
+      type: object
+      required: [tabs, chips]
+      properties:
+        tabs: { type: array, items: { $ref: "#/components/schemas/PluginTab" } }
+        chips: { type: array, items: { $ref: "#/components/schemas/PluginChip" } }
+    PluginTab:
+      type: object
+      required: [plugin, title, markdown]
+      properties:
+        plugin: { type: string }
+        title: { type: string }
+        markdown: { type: string }
+    PluginChip:
+      type: object
+      required: [plugin, text]
+      properties:
+        plugin: { type: string }
+        text: { type: string }
+        color: { type: string }
+        url: { type: string }
     NewTask:
       type: object
       required: [kind, title]
