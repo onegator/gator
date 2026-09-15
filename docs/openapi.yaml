@@ -248,7 +248,7 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/UsageInput" } } }
       responses:
         "201": { description: recorded, content: { application/json: { schema: { $ref: "#/components/schemas/UsageAck" } } } }
-        "200": { description: duplicate idempotencyKey, nothing recorded, content: { application/json: { schema: { $ref: "#/components/schemas/UsageAck" } } } }
+        "200": { description: "duplicate idempotencyKey, nothing recorded", content: { application/json: { schema: { $ref: "#/components/schemas/UsageAck" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/metrics:
@@ -506,14 +506,14 @@ components:
       required: [phase, owner, visits, seconds, blockedSeconds, agentSeconds, workSeconds, queueSeconds, waitingSeconds, tokens, costUsd, jobs]
       properties:
         phase: { type: string }
-        owner: { type: string, description: human | runner | plugin, from the template }
+        owner: { type: string, description: "human | runner | plugin, from the template" }
         visits: { type: integer, description: times the task entered this phase (rollbacks add visits) }
         seconds: { type: number, format: double, description: wall time spent in the phase }
         blockedSeconds: { type: number, format: double }
         agentSeconds: { type: number, format: double, description: time agents ran during this phase }
         workSeconds: { type: number, format: double, description: job wall time from start to finish }
         queueSeconds: { type: number, format: double, description: jobs waiting for a runner }
-        waitingSeconds: { type: number, format: double, description: rest of the phase time, waiting for a person }
+        waitingSeconds: { type: number, format: double, description: "rest of the phase time, waiting for a person" }
         tokens: { $ref: "#/components/schemas/Tokens" }
         costUsd: { type: number, format: double }
         jobs: { type: integer }
@@ -523,7 +523,7 @@ components:
       properties:
         taskId: { type: string, format: uuid }
         closed: { type: boolean }
-        leadSeconds: { type: number, format: double, description: created to closed, or to now while open }
+        leadSeconds: { type: number, format: double, description: "created to closed, or to now while open" }
         blockedSeconds: { type: number, format: double }
         agentSeconds: { type: number, format: double }
         workSeconds: { type: number, format: double, description: "lead = work + queue + blocked + waiting" }
@@ -596,7 +596,7 @@ components:
         - type: object
           required: [token]
           properties:
-            token: { type: string, description: plaintext, shown once }
+            token: { type: string, description: "plaintext, shown once" }
     Member:
       type: object
       required: [userId, role]
@@ -695,7 +695,7 @@ components:
       properties:
         kind: { type: string, enum: [feature, bug, incident, chore] }
         title: { type: string }
-        description: { type: string, description: what the person wants, in their words; jobs get it in their prompt }
+        description: { type: string, description: "what the person wants, in their words; jobs get it in their prompt" }
         urgency: { type: integer, minimum: 1, maximum: 4 }
     Artifact:
       type: object
