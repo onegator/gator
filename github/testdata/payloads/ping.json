@@ -1,0 +1,1 @@
+{"zen":"Keep it logically awesome.","hook_id":1,"hook":{"type":"Repository","events":["issues","pull_request","check_run"],"config":{"content_type":"json"}},"repository":{"id":1,"full_name":"acme/app","default_branch":"main"},"sender":{"login":"jdoe"}}

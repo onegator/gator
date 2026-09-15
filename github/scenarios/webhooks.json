@@ -1,0 +1,32 @@
+{
+  "project": {"slug": "demo"},
+  "config": {"repo": "acme/app"},
+  "secrets": {"token": "unused-in-this-scenario", "webhook_secret": "dev-secret"},
+  "tasks": [{"id": "t1", "kind": "feature", "title": "Search", "phase": "implementation",
+             "external_refs": {"github_pr": "acme/app#1", "github_branch": "gator/t1-job1"}}],
+  "steps": [
+    {"hook": "webhook", "body_file": "../testdata/payloads/ping.json", "headers": {"X-GitHub-Event": "ping"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="}},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-opened.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.find", "task.create"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-opened.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.find"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-opened-other-repo.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["log"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-opened.json",
+     "headers": {"X-GitHub-Event": "issues", "X-Hub-Signature-256": "sha256=0000"}, "expect_error": true},
+    {"hook": "webhook", "body_file": "../testdata/payloads/check_run-completed-failure.json", "headers": {"X-GitHub-Event": "check_run"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["gate.setCheck"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/check_run-completed-success.json", "headers": {"X-GitHub-Event": "check_run"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["gate.setCheck"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/pull_request-closed-merged.json", "headers": {"X-GitHub-Event": "pull_request"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["kv.put", "artifact.put"]},
+    {"hook": "renderUI", "task": "t1"}
+  ]
+}

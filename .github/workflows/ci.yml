@@ -1,0 +1,29 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GOPRIVATE: github.com/onegator/*
+    steps:
+      - uses: actions/checkout@v4
+      # onegator/gator (the plugin SDK) is private: a fine-grained token with Contents: read on it.
+      - name: Read access to onegator/gator
+        env:
+          GATOR_READ_TOKEN: ${{ secrets.GATOR_READ_TOKEN }}
+        run: |
+          if [ -z "$GATOR_READ_TOKEN" ]; then
+            echo "::error::Add the GATOR_READ_TOKEN secret: a fine-grained token with Contents: read on onegator/gator"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${GATOR_READ_TOKEN}@github.com/onegator/".insteadOf "https://github.com/onegator/"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: make dev
