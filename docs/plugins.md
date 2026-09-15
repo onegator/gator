@@ -187,3 +187,56 @@ func main() {
 `Serve` fills `hooks` from the handlers you set. `core.Setting(key)` and `core.Secret(key)`
 read the configuration, and the `core` methods map one-to-one to the table above.
 `internal/server/plugins/testdata/echo` is a complete example that exercises every hook.
+
+## Testing without a server
+
+`gator-plugin` runs a plugin against an in-memory core that follows the server's rules: task
+kinds and first phases, per-project scoping, check and artifact versioning, and the key-value
+store. It is built from `cmd/gator-plugin`:
+
+```sh
+go run github.com/onegator/gator/cmd/gator-plugin new acme-tracker plugins/acme-tracker
+cd plugins/acme-tracker && go build -o bin/acme-tracker .
+go run github.com/onegator/gator/cmd/gator-plugin dev scenarios/basic.json -- ./bin/acme-tracker
+go run github.com/onegator/gator/cmd/gator-plugin manifest -- ./bin/acme-tracker
+```
+
+- `new` writes `main.go`, `scenarios/basic.json` and a README. The skeleton plugin verifies a
+  signed webhook, creates a task once per event, and logs phase changes. It never overwrites
+  files.
+- `dev` plays a scenario and prints each step, the core calls the plugin made, and the final
+  state. It exits 1 when a step misses its expectation. Use `-json` for a machine-readable
+  report.
+
+A scenario seeds a project and calls hooks in order:
+
+```json
+{
+  "project": {"slug": "demo"},
+  "config": {"repo": "acme/app"},
+  "secrets": {"webhook_secret": "dev-secret"},
+  "tasks": [{"id": "t1", "kind": "feature", "title": "Search", "phase": "planning"}],
+  "steps": [
+    {"hook": "webhook", "body_file": "payloads/issue-opened.json",
+     "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.create"]},
+    {"hook": "phaseTransition", "task": "t1", "from": "planning", "to": "implementation"},
+    {"hook": "gateEvaluate", "task": "t1"},
+    {"hook": "jobFinish", "task": "t1", "receipt": {"status": "done", "branch": "gator/t1"}},
+    {"hook": "webhook", "body": {"forged": true}, "expect_error": true}
+  ]
+}
+```
+
+- **Webhooks:** `sign` adds an HMAC-SHA256 of the body, keyed with a secret setting. Webhook
+  bodies can be recorded payloads (`body_file`, resolved next to the scenario) or inline JSON.
+- **Tasks:** steps name tasks by id, either seeded ones or the id of a task a plugin created.
+- **Expectations:** `expect_error` expects the hook to fail, and `expect_core` lists core
+  methods the plugin must call in that step.
+
+Go plugins can use the same machinery in their own tests: `plugintest.NewCore`,
+`plugintest.Start` and `plugintest.Run` in `github.com/onegator/gator/plugin/plugintest`.
+
+While `onegator/gator` is private, a separate plugin repository needs `GOPRIVATE=github.com/onegator/*`
+and a token that can read it, both locally and in CI.
