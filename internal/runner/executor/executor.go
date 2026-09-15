@@ -75,7 +75,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 				budget = 1
 			}
 		}
-		last = be.Run(runCtx, backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, MaxToolCalls: budget}, backend.Emit(io.Emit))
+		last = be.Run(runCtx, backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: budget, MaxCostUSD: costLeft(job, usage)}, backend.Emit(io.Emit))
 		close(done)
 		cancelRun(nil)
 		addUsage(&usage, last.Usage)
@@ -97,6 +97,11 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		break
 	}
 
+	// The cost cap holds for every backend, including those that cannot enforce it mid-run.
+	if limit := job.Bounds.MaxCostUSD; limit > 0 && usage.CostUSD > limit && last.Status == proto.StatusDone {
+		last.Status, last.Reason = proto.StatusFailed, fmt.Sprintf("cost bound ($%.2f) exceeded: $%.2f", limit, usage.CostUSD)
+	}
+
 	digest, summary := ExtractDigest(last.Summary)
 	fin := proto.Finish{Status: last.Status, StopReason: last.Reason, SessionID: session, Summary: summary, Usage: usage}
 	if last.Interrupted {
@@ -115,7 +120,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	// because the context is cached, and it keeps the working state complete.
 	if fin.Status == proto.StatusDone && digest == nil && session != "" && ctx.Err() == nil {
 		io.Emit("digest_requested", map[string]any{"session_id": session})
-		out := be.Run(ctx, backend.Spec{Dir: ws.Dir, Prompt: DigestPrompt, SessionID: session, MaxToolCalls: 1}, backend.Emit(io.Emit))
+		out := be.Run(ctx, backend.Spec{Dir: ws.Dir, Prompt: DigestPrompt, SessionID: session, Model: job.Model, MaxToolCalls: 1}, backend.Emit(io.Emit))
 		addUsage(&usage, out.Usage)
 		fin.Usage = usage
 		if out.Status == proto.StatusDone {
@@ -238,4 +243,15 @@ func orDefault(s, d string) string {
 		return d
 	}
 	return s
+}
+
+// costLeft is what the job may still spend in its next run; 0 = no cap.
+func costLeft(job proto.Job, used proto.Usage) float64 {
+	if job.Bounds.MaxCostUSD <= 0 {
+		return 0
+	}
+	if left := job.Bounds.MaxCostUSD - used.CostUSD; left > 0.01 {
+		return left
+	}
+	return 0.01
 }

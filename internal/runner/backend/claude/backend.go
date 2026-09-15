@@ -95,6 +95,9 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	if m := firstNonEmpty(spec.Model, b.Model); m != "" {
 		args = append(args, "--model", m)
 	}
+	if spec.MaxCostUSD > 0 {
+		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", spec.MaxCostUSD))
+	}
 
 	cmd := exec.Command(b.bin(), args...)
 	cmd.Dir = spec.Dir

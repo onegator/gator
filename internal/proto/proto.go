@@ -141,8 +141,9 @@ type LeaseRequest struct {
 
 // Bounds limit a job so a runaway cannot burn a session.
 type Bounds struct {
-	TimeoutSeconds int `json:"timeout_seconds"`
-	MaxToolCalls   int `json:"max_tool_calls"`
+	TimeoutSeconds int     `json:"timeout_seconds"`
+	MaxToolCalls   int     `json:"max_tool_calls"`
+	MaxCostUSD     float64 `json:"max_cost_usd,omitempty"` // 0 = no cap
 }
 
 // Repo tells the runner where to check out code. Absent for jobs that need no repository.
@@ -173,6 +174,7 @@ type Job struct {
 	Phase           string       `json:"phase"`
 	Role            string       `json:"role"`
 	Backend         string       `json:"backend"`
+	Model           string       `json:"model,omitempty"` // empty = the backend's default
 	Instruction     string       `json:"instruction"`
 	Bounds          Bounds       `json:"bounds"`
 	Attempt         int          `json:"attempt"`

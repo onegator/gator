@@ -42,3 +42,8 @@ LEFT JOIN (
 WHERE t.project_id = sqlc.arg(project_id) AND t.created_at >= sqlc.arg(since)
 GROUP BY t.kind
 ORDER BY t.kind;
+
+-- name: ProjectCostSince :one
+-- What a project spent on agents since a moment; the daily budget compares against it.
+SELECT COALESCE(sum(cost_usd), 0)::double precision AS cost_usd
+FROM usage_records WHERE project_id = sqlc.arg(project_id) AND created_at >= sqlc.arg(since);

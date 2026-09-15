@@ -115,7 +115,7 @@ func (h *harness) task() gen.Task {
 
 func (h *harness) job(task gen.Task, backend, instruction string, maxAttempts int) gen.Job {
 	h.t.Helper()
-	in := gen.NewJob{Backend: backend, Instruction: &instruction}
+	in := gen.NewJob{Backend: &backend, Instruction: &instruction}
 	if maxAttempts > 0 {
 		in.MaxAttempts = &maxAttempts
 	}

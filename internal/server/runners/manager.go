@@ -32,6 +32,8 @@ var (
 	ErrJobFinished   = errors.New("job already finished")
 	ErrRunnerOffline = errors.New("runner is not connected")
 	ErrJobNotActive  = errors.New("job is not running")
+	// ErrBudgetExceeded refuses new jobs once the project spent its daily budget.
+	ErrBudgetExceeded = errors.New("daily budget spent")
 )
 
 // Config tunes timing. Zero values take the protocol defaults.
@@ -132,7 +134,8 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // NewJob describes a job to create for a task's current phase.
 type NewJob struct {
-	Backend      string
+	Backend      string // defaults to the project's policy for the role
+	Model        string // defaults to the policy's model when the backend is the policy's
 	Instruction  string
 	Role         string // defaults to the phase's runner role
 	MaxAttempts  int
@@ -162,9 +165,6 @@ func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) 
 
 // insertJob validates and inserts a job for the task's current phase inside q's transaction.
 func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail, in NewJob) (db.Job, error) {
-	if strings.TrimSpace(in.Backend) == "" {
-		return db.Job{}, fmt.Errorf("%w: backend is required", ErrInvalidJob)
-	}
 	if d.Task.ClosedAt.Valid {
 		return db.Job{}, fmt.Errorf("%w: task is closed", ErrInvalidJob)
 	}
@@ -174,6 +174,27 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	}
 	if role == "" {
 		return db.Job{}, fmt.Errorf("%w: phase %q has no runner role; pass one explicitly", ErrInvalidJob, d.Task.Phase)
+	}
+	pol, err := m.process.JobPolicy(ctx, d.Task.ProjectID, role, m.cfg.DefaultBackend)
+	if err != nil {
+		return db.Job{}, err
+	}
+	if strings.TrimSpace(in.Backend) == "" {
+		in.Backend = pol.Backend
+	}
+	if strings.TrimSpace(in.Backend) == "" {
+		return db.Job{}, fmt.Errorf("%w: backend is required: pass one or set policy.default.backend", ErrInvalidJob)
+	}
+	if in.Model == "" && in.Backend == pol.Backend {
+		in.Model = pol.Model
+	}
+	if in.Bounds.MaxCostUSD <= 0 {
+		in.Bounds.MaxCostUSD = pol.MaxCostUSD
+	}
+	if over, err := m.overBudget(ctx, d.Task.ProjectID); err != nil {
+		return db.Job{}, err
+	} else if over != "" {
+		return db.Job{}, fmt.Errorf("%w: %s", ErrBudgetExceeded, over)
 	}
 	if in.MaxAttempts <= 0 {
 		in.MaxAttempts = DefaultMaxAttempts
@@ -188,7 +209,7 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	job, err := q.CreateJob(ctx, db.CreateJobParams{
 		TaskID: d.Task.ID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
 		Backend: in.Backend, Instruction: in.Instruction, Bounds: bounds, MaxAttempts: int32(in.MaxAttempts),
-		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID,
+		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID, Model: in.Model,
 	})
 	if err != nil {
 		return db.Job{}, err
@@ -207,9 +228,16 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 	if d.Task.ClosedAt.Valid || d.Task.BlockedReason != nil || d.Phase.Owner != process.OwnerRunner || d.Phase.Role == "" {
 		return db.Job{}, false, nil
 	}
-	enabled, backend, err := m.process.Autopilot(ctx, d.Task.ProjectID, m.cfg.DefaultBackend)
+	enabled, _, err := m.process.Autopilot(ctx, d.Task.ProjectID, m.cfg.DefaultBackend)
 	if err != nil || !enabled {
 		return db.Job{}, false, err
+	}
+	// Over budget, the gate says why and the task waits; Reconcile releases it.
+	if over, err := m.overBudget(ctx, d.Task.ProjectID); err != nil || over != "" {
+		if err != nil {
+			return db.Job{}, false, err
+		}
+		return db.Job{}, false, m.process.SetCheck(ctx, taskID, process.Check{Name: BudgetCheck, Source: "system", Status: "fail", Detail: over})
 	}
 	var job db.Job
 	created := false
@@ -234,7 +262,7 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 			}
 		}
 		d.Task = t
-		job, err = m.insertJob(ctx, q, d, NewJob{Backend: backend, CreatedBy: process.Actor{Kind: process.ActorSystem}})
+		job, err = m.insertJob(ctx, q, d, NewJob{CreatedBy: process.Actor{Kind: process.ActorSystem}})
 		created = err == nil
 		return err
 	})
@@ -251,6 +279,7 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 // Reconcile runs EnsureJob over every open, unblocked task. It catches events the live
 // subscription missed (the hub drops slow subscribers; the server may have restarted).
 func (m *Manager) Reconcile(ctx context.Context) (int, error) {
+	m.releaseBudgetBlocks(ctx)
 	tasks, err := db.New(m.pool).ListOpenUnblockedTasks(ctx)
 	if err != nil {
 		return 0, err
@@ -524,5 +553,35 @@ func parseUUID(s string) (pgtype.UUID, bool) {
 func runnersOnline(ctx context.Context, delta int64) {
 	if m, err := telemetry.Instruments(); err == nil {
 		m.RunnersOnline.Add(ctx, delta, metric.WithAttributes())
+	}
+}
+
+// BudgetCheck is the gate check the autopilot fails when a project spent its daily budget.
+const BudgetCheck = "budget"
+
+// overBudget describes why the project may not start new work today, or returns "".
+func (m *Manager) overBudget(ctx context.Context, projectID pgtype.UUID) (string, error) {
+	limit, spent, err := m.process.Budget(ctx, projectID, m.now())
+	if err != nil || limit <= 0 || spent < limit {
+		return "", err
+	}
+	return fmt.Sprintf("spent $%.2f of the $%.2f daily budget; new jobs wait for the next UTC day or a higher limit", spent, limit), nil
+}
+
+// releaseBudgetBlocks passes the budget check of tasks whose project is within its budget
+// again (a new day, or a raised limit). That unblocks the gate and the autopilot resumes.
+func (m *Manager) releaseBudgetBlocks(ctx context.Context) {
+	rows, err := db.New(m.pool).ListBudgetBlockedTasks(ctx)
+	if err != nil {
+		m.log.Warn("budget blocks", "err", err)
+		return
+	}
+	for _, r := range rows {
+		if over, err := m.overBudget(ctx, r.ProjectID); err != nil || over != "" {
+			continue
+		}
+		if err := m.process.SetCheck(ctx, r.ID, process.Check{Name: BudgetCheck, Source: "system", Status: "pass", Detail: "within the daily budget"}); err != nil {
+			m.log.Warn("budget release", "task", uuidString(r.ID), "err", err)
+		}
 	}
 }

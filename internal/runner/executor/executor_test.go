@@ -250,3 +250,27 @@ func TestNoDigestRoundWithoutASession(t *testing.T) {
 		t.Fatalf("%+v runs %d", fin, len(be.specs))
 	}
 }
+
+func TestModelAndCostCapReachTheBackend(t *testing.T) {
+	be := &scripted{run: func(_ context.Context, _ int, _ backend.Spec, _ backend.Emit) backend.Outcome {
+		return backend.Outcome{Status: proto.StatusDone, Summary: "ok" + digestBlock, SessionID: "s1", Usage: usage()}
+	}}
+	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _, _, _ := jobIO()
+	fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake", Model: "small", Bounds: proto.Bounds{MaxCostUSD: 2}}, io)
+	if fin.Status != proto.StatusDone || be.specs[0].Model != "small" || be.specs[0].MaxCostUSD != 2 {
+		t.Fatalf("finish %+v spec %+v", fin, be.specs[0])
+	}
+}
+
+func TestCostBoundFailsTheJob(t *testing.T) {
+	be := &scripted{run: func(_ context.Context, _ int, _ backend.Spec, _ backend.Emit) backend.Outcome {
+		return backend.Outcome{Status: proto.StatusDone, Summary: "ok" + digestBlock, SessionID: "s1", Usage: usage()} // costs $0.01
+	}}
+	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _, _, _ := jobIO()
+	fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake", Bounds: proto.Bounds{MaxCostUSD: 0.005}}, io)
+	if fin.Status != proto.StatusFailed || !strings.Contains(fin.StopReason, "cost bound") || fin.Usage.CostUSD != 0.01 {
+		t.Fatalf("finish %+v", fin)
+	}
+}

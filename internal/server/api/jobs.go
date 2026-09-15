@@ -50,12 +50,15 @@ func (s *Server) CreateTaskJob(w http.ResponseWriter, r *http.Request, taskId ge
 	if !decode(w, r, &in) {
 		return
 	}
-	nj := runners.NewJob{Backend: in.Backend, Instruction: deref(in.Instruction), Role: deref(in.Role), CreatedBy: ActorFromContext(r.Context())}
+	nj := runners.NewJob{Backend: deref(in.Backend), Model: deref(in.Model), Instruction: deref(in.Instruction), Role: deref(in.Role), CreatedBy: ActorFromContext(r.Context())}
 	if in.MaxAttempts != nil {
 		nj.MaxAttempts = *in.MaxAttempts
 	}
 	if in.TimeoutSeconds != nil {
 		nj.Bounds.TimeoutSeconds = *in.TimeoutSeconds
+	}
+	if in.MaxCostUsd != nil {
+		nj.Bounds.MaxCostUSD = *in.MaxCostUsd
 	}
 	if in.MaxToolCalls != nil {
 		nj.Bounds.MaxToolCalls = *in.MaxToolCalls
@@ -183,6 +186,9 @@ func toJob(j db.Job) gen.Job {
 		Backend: j.Backend, Instruction: j.Instruction, Status: gen.JobStatus(j.Status), RunnerId: toUUIDPtr(j.RunnerID),
 		Attempts: int(j.Attempts), MaxAttempts: int(j.MaxAttempts), StopReason: j.StopReason, CreatedAt: j.CreatedAt.Time,
 	}
+	if j.Model != "" {
+		out.Model = &j.Model
+	}
 	if j.LeaseExpiresAt.Valid {
 		v := j.LeaseExpiresAt.Time
 		out.LeaseExpiresAt = &v
@@ -246,7 +252,7 @@ func runnerErrStatus(err error) (int, bool) {
 	switch {
 	case errors.Is(err, runners.ErrInvalidJob):
 		return http.StatusBadRequest, true
-	case errors.Is(err, runners.ErrJobFinished), errors.Is(err, runners.ErrRunnerOffline), errors.Is(err, runners.ErrJobNotActive):
+	case errors.Is(err, runners.ErrBudgetExceeded), errors.Is(err, runners.ErrJobFinished), errors.Is(err, runners.ErrRunnerOffline), errors.Is(err, runners.ErrJobNotActive):
 		return http.StatusConflict, true
 	}
 	return 0, false

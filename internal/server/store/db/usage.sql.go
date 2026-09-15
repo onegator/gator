@@ -117,6 +117,24 @@ func (q *Queries) ListUsageByTask(ctx context.Context, taskID pgtype.UUID) ([]Us
 	return items, nil
 }
 
+const projectCostSince = `-- name: ProjectCostSince :one
+SELECT COALESCE(sum(cost_usd), 0)::double precision AS cost_usd
+FROM usage_records WHERE project_id = $1 AND created_at >= $2
+`
+
+type ProjectCostSinceParams struct {
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Since     pgtype.Timestamptz `json:"since"`
+}
+
+// What a project spent on agents since a moment; the daily budget compares against it.
+func (q *Queries) ProjectCostSince(ctx context.Context, arg ProjectCostSinceParams) (float64, error) {
+	row := q.db.QueryRow(ctx, projectCostSince, arg.ProjectID, arg.Since)
+	var cost_usd float64
+	err := row.Scan(&cost_usd)
+	return cost_usd, err
+}
+
 const projectMetricsByKind = `-- name: ProjectMetricsByKind :many
 SELECT
     t.kind,

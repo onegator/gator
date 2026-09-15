@@ -35,6 +35,7 @@ type ProjectConfig struct {
 	Templates map[string]Template `json:"templates"`
 	Roles     map[string]string   `json:"roles"` // role name → prompt that replaces the default
 	Autopilot *AutopilotConfig    `json:"autopilot"`
+	Policy    *Policy             `json:"policy"`
 }
 
 // ParseProjectConfig reads process_config; empty input is an empty config.
@@ -76,15 +77,11 @@ func (s *Service) Autopilot(ctx context.Context, projectID pgtype.UUID, defaultB
 	if err != nil {
 		return false, "", err
 	}
-	enabled, backend := true, defaultBackend
-	if c.Autopilot != nil {
-		if c.Autopilot.Enabled != nil {
-			enabled = *c.Autopilot.Enabled
-		}
-		if c.Autopilot.Backend != "" {
-			backend = c.Autopilot.Backend
-		}
+	enabled := true
+	if c.Autopilot != nil && c.Autopilot.Enabled != nil {
+		enabled = *c.Autopilot.Enabled
 	}
+	backend := c.PolicyFor("", defaultBackend).Backend
 	return enabled && backend != "", backend, nil
 }
 

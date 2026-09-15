@@ -360,6 +360,38 @@ func (q *Queries) ListArtifacts(ctx context.Context, taskID pgtype.UUID) ([]Arti
 	return items, nil
 }
 
+const listBudgetBlockedTasks = `-- name: ListBudgetBlockedTasks :many
+SELECT t.id, t.project_id FROM tasks t
+JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+WHERE t.closed_at IS NULL AND g.checks @> '[{"name": "budget", "status": "fail"}]'::jsonb
+`
+
+type ListBudgetBlockedTasksRow struct {
+	ID        pgtype.UUID `json:"id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+// Open tasks whose current gate fails the budget check.
+func (q *Queries) ListBudgetBlockedTasks(ctx context.Context) ([]ListBudgetBlockedTasksRow, error) {
+	rows, err := q.db.Query(ctx, listBudgetBlockedTasks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBudgetBlockedTasksRow
+	for rows.Next() {
+		var i ListBudgetBlockedTasksRow
+		if err := rows.Scan(&i.ID, &i.ProjectID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCurrentPhaseJobs = `-- name: ListCurrentPhaseJobs :many
 SELECT DISTINCT ON (j.task_id) j.task_id, j.status
 FROM jobs j

@@ -89,6 +89,7 @@ type Job struct {
 	StartedAt      pgtype.Timestamptz `json:"started_at"`
 	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	Model          string             `json:"model"`
 }
 
 type JobEvent struct {

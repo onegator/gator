@@ -31,6 +31,8 @@ type session struct {
 	tokenID  pgtype.UUID
 	name     string
 	caps     proto.Capabilities
+	authMu   sync.Mutex
+	auth     map[string]string // backend → login state from the last heartbeat
 	projects []pgtype.UUID
 	seq      atomic.Uint64
 
@@ -245,6 +247,9 @@ func (s *session) heartbeat(hb proto.Heartbeat) {
 	if len(hb.ActiveJobs) >= s.caps.MaxParallel {
 		status = "busy"
 	}
+	s.authMu.Lock()
+	s.auth = hb.AuthState
+	s.authMu.Unlock()
 	auth, _ := json.Marshal(hb.AuthState)
 	if hb.AuthState == nil {
 		auth = []byte("{}")
@@ -287,14 +292,15 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 		}
 	}
 	var out []proto.Job
-	if free > 0 {
+	backends := s.leasable()
+	if free > 0 && len(backends) > 0 {
 		projects := s.projects
 		if projects == nil {
 			projects = []pgtype.UUID{}
 		}
 		jobs, err := q.LeaseJobs(ctx, db.LeaseJobsParams{
 			RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
-			Backends: s.caps.Backends, Projects: projects, Slots: int32(free),
+			Backends: backends, Projects: projects, Slots: int32(free),
 		})
 		if err != nil {
 			return err
@@ -304,7 +310,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			_ = json.Unmarshal(j.Bounds, &b)
 			pj := proto.Job{
 				JobID: uuidString(j.ID), TaskID: uuidString(j.TaskID), ProjectID: uuidString(j.ProjectID),
-				Phase: j.Phase, Role: j.Role, Backend: j.Backend, Instruction: j.Instruction, Bounds: b,
+				Phase: j.Phase, Role: j.Role, Backend: j.Backend, Model: j.Model, Instruction: j.Instruction, Bounds: b,
 				Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
 			}
 			if t, err := q.GetTask(ctx, j.TaskID); err == nil {
@@ -519,4 +525,20 @@ func artifactContent(role string, fin proto.Finish) string {
 	}
 	_ = role
 	return b.String()
+}
+
+// leasable is the runner's backends minus those it reports as logged out: the job waits for
+// a logged-in backend instead of running on another one.
+func (s *session) leasable() []string {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	out := make([]string, 0, len(s.caps.Backends))
+	for _, b := range s.caps.Backends {
+		switch s.auth[b] {
+		case "expired", "missing":
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
 }

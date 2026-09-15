@@ -346,9 +346,10 @@ components:
         primary: { type: boolean }
     NewJob:
       type: object
-      required: [backend]
       properties:
-        backend: { type: string, description: "claude | codex | pi" }
+        backend: { type: string, description: "claude | codex | pi; defaults to the project's policy for the role" }
+        model: { type: string, description: "defaults to the policy's model when the backend is the policy's" }
+        maxCostUsd: { type: number, format: double, minimum: 0, description: "cost cap for this job; defaults to the policy's" }
         instruction: { type: string }
         role: { type: string }
         maxAttempts: { type: integer, minimum: 1, maximum: 10 }
@@ -364,6 +365,7 @@ components:
         phase: { type: string }
         role: { type: string }
         backend: { type: string }
+        model: { type: string }
         instruction: { type: string }
         status: { type: string, enum: [queued, leased, running, stalled, done, failed, stopped] }
         runnerId: { type: string, format: uuid }

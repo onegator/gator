@@ -161,3 +161,25 @@ once, in the same session, to ask for only the block. Each done job then rebuild
 left, and the latest branch and commit. The next job of the task gets it as its first context
 document whatever backend or model runs it. `job.digest` events carry each digest for the
 curator (M5); `job.digest_missing` records sessions that gave none.
+
+## Backend, model and budget policy
+
+`process_config.policy` picks the backend, model and per-job cost cap for each role, and a
+daily budget for the project:
+
+```json
+{"policy": {
+  "default": {"backend": "claude", "model": "claude-opus-5", "max_cost_usd": 5},
+  "roles": {"reviewer": {"model": "claude-sonnet-5", "max_cost_usd": 1}},
+  "daily_budget_usd": 25
+}}
+```
+
+A role's entry overrides the default; a role that switches backend drops the default model.
+Jobs created without a backend or model take them from the policy. The cost cap travels in the
+job bounds: Claude gets `--max-budget-usd`, and the runner fails any job whose receipt went over
+it. Runners only lease jobs for backends they report as logged in; a job waits rather than
+running on a different backend, since there is no silent substitution. Once the project has
+spent its daily budget (UTC day, from usage records), new jobs are refused with 409 and the
+autopilot fails the gate's `budget` check, which blocks the task in the inbox; the next
+reconcile after midnight or a higher limit passes the check and the autopilot resumes.

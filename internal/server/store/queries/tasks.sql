@@ -99,3 +99,9 @@ FROM jobs j
 JOIN tasks t ON t.id = j.task_id
 WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
 ORDER BY j.task_id, j.created_at DESC;
+
+-- name: ListBudgetBlockedTasks :many
+-- Open tasks whose current gate fails the budget check.
+SELECT t.id, t.project_id FROM tasks t
+JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+WHERE t.closed_at IS NULL AND g.checks @> '[{"name": "budget", "status": "fail"}]'::jsonb;

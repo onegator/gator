@@ -12,9 +12,10 @@ import (
 type Spec struct {
 	Dir          string
 	Prompt       string
-	SessionID    string // resume this session when set
-	Model        string // overrides the backend default
-	MaxToolCalls int    // 0 = unlimited
+	SessionID    string  // resume this session when set
+	Model        string  // overrides the backend default
+	MaxToolCalls int     // 0 = unlimited
+	MaxCostUSD   float64 // dollars this run may spend, for backends that can cap it; 0 = no cap
 }
 
 // Emit streams one event.
