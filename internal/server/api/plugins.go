@@ -206,3 +206,30 @@ func (s *Server) GetTaskPluginUI(w http.ResponseWriter, r *http.Request, taskId 
 	}
 	writeJSON(w, http.StatusOK, out)
 }
+
+func (s *Server) ListProjectTemplates(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+		return
+	}
+	views, err := s.Process.Templates(r.Context(), fromUUID(projectId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]gen.ProjectTemplate, 0, len(views))
+	for _, v := range views {
+		t := gen.ProjectTemplate{Kind: v.Kind, MaxRollbacks: v.MaxRollbacks, Phases: []gen.TemplatePhase{}}
+		for _, p := range v.Phases {
+			phase := gen.TemplatePhase{Name: p.Name, Owner: p.Owner, Gate: p.Gate, Active: p.Active}
+			if p.Role != "" {
+				phase.Role = &p.Role
+			}
+			if p.Requires != "" {
+				phase.Requires = &p.Requires
+			}
+			t.Phases = append(t.Phases, phase)
+		}
+		out = append(out, t)
+	}
+	writeJSON(w, http.StatusOK, out)
+}

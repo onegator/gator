@@ -137,6 +137,13 @@ paths:
       responses:
         "200": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/InstalledPlugin" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/templates:
+    get:
+      operationId: listProjectTemplates
+      description: The project's process for each kind of task, in phase order. Phases that need a plugin capability the project lacks are listed as inactive.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectTemplate" } } } } }
   /projects/{projectId}/plugins:
     get:
       operationId: listProjectPlugins
@@ -624,6 +631,23 @@ components:
         name: { type: string }
         tags: { type: array, items: { type: string } }
         createdAt: { type: string, format: date-time }
+    ProjectTemplate:
+      type: object
+      required: [kind, maxRollbacks, phases]
+      properties:
+        kind: { type: string }
+        maxRollbacks: { type: integer }
+        phases: { type: array, items: { $ref: "#/components/schemas/TemplatePhase" } }
+    TemplatePhase:
+      type: object
+      required: [name, owner, gate, active]
+      properties:
+        name: { type: string }
+        owner: { type: string, description: "human | runner | plugin" }
+        role: { type: string, description: runner role for this phase }
+        gate: { type: string, description: "human | auto | both" }
+        requires: { type: string, description: plugin capability that activates the phase }
+        active: { type: boolean }
     InstallPlugin:
       type: object
       required: [command]
