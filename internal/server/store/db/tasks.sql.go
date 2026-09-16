@@ -57,6 +57,22 @@ func (q *Queries) ApprovePhaseArtifacts(ctx context.Context, arg ApprovePhaseArt
 	return result.RowsAffected(), nil
 }
 
+const clearGateApproval = `-- name: ClearGateApproval :exec
+UPDATE gates SET human_approved_by = NULL, human_approved_at = NULL, updated_at = now()
+WHERE task_id = $1 AND phase = $2
+`
+
+type ClearGateApprovalParams struct {
+	TaskID pgtype.UUID `json:"task_id"`
+	Phase  string      `json:"phase"`
+}
+
+// A phase entered again must be approved again.
+func (q *Queries) ClearGateApproval(ctx context.Context, arg ClearGateApprovalParams) error {
+	_, err := q.db.Exec(ctx, clearGateApproval, arg.TaskID, arg.Phase)
+	return err
+}
+
 const clearGateBlocked = `-- name: ClearGateBlocked :exec
 UPDATE gates SET blocked_reason = NULL, blocked_by = NULL, updated_at = now() WHERE task_id = $1 AND phase = $2
 `
@@ -632,6 +648,38 @@ func (q *Queries) ListPhaseTransitions(ctx context.Context, taskID pgtype.UUID) 
 			&i.Evidence,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRollbackCounts = `-- name: ListRollbackCounts :many
+SELECT task_id, to_phase, count(*)::int AS rollbacks
+FROM phase_transitions WHERE kind = 'rollback' GROUP BY task_id, to_phase
+`
+
+type ListRollbackCountsRow struct {
+	TaskID    pgtype.UUID `json:"task_id"`
+	ToPhase   string      `json:"to_phase"`
+	Rollbacks int32       `json:"rollbacks"`
+}
+
+// How often each task was sent back into a phase; the inbox shows it on the row.
+func (q *Queries) ListRollbackCounts(ctx context.Context) ([]ListRollbackCountsRow, error) {
+	rows, err := q.db.Query(ctx, listRollbackCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRollbackCountsRow
+	for rows.Next() {
+		var i ListRollbackCountsRow
+		if err := rows.Scan(&i.TaskID, &i.ToPhase, &i.Rollbacks); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

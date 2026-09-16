@@ -256,7 +256,11 @@ func (s *Service) Rollback(ctx context.Context, taskID pgtype.UUID, to string, a
 		if err := q.UpsertGate(ctx, db.UpsertGateParams{TaskID: taskID, Phase: to}); err != nil {
 			return err
 		}
-		// A rolled-back phase must be re-approved: clear any earlier approval on the target gate.
+		// A rolled-back phase must be re-approved: clear the earlier approval and checks on
+		// the target gate, or the task would leave the inbox and advance on an old decision.
+		if err := q.ClearGateApproval(ctx, db.ClearGateApprovalParams{TaskID: taskID, Phase: to}); err != nil {
+			return err
+		}
 		if err := q.SetGateChecks(ctx, db.SetGateChecksParams{TaskID: taskID, Phase: to, Checks: []byte("[]")}); err != nil {
 			return err
 		}

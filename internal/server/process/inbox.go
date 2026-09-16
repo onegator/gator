@@ -29,15 +29,34 @@ type Decision struct {
 	Phase        Phase
 	Reason       DecisionReason
 	WaitingSince time.Time
+	Rollbacks    int // times this task was sent back into its current phase
+}
+
+// InboxFilter narrows the inbox to one project, to the tasks handed to one person, or both.
+type InboxFilter struct {
+	ProjectID pgtype.UUID
+	OwnerID   pgtype.UUID // set: only tasks whose owner is this user
 }
 
 // Inbox lists open tasks whose current phase waits on a person: a human-gated phase without
 // approval, a blocked task, or one whose requirements changed. Most urgent first.
-func (s *Service) Inbox(ctx context.Context, projectID pgtype.UUID) ([]Decision, error) {
+func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) {
 	q := db.New(s.pool)
-	rows, err := q.ListOpenTasksWithGates(ctx, projectID)
+	rows, err := q.ListOpenTasksWithGates(ctx, f.ProjectID)
 	if err != nil {
 		return nil, err
+	}
+	rollbackRows, err := q.ListRollbackCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type phaseKey struct {
+		task  [16]byte
+		phase string
+	}
+	rollbacks := map[phaseKey]int{}
+	for _, r := range rollbackRows {
+		rollbacks[phaseKey{r.TaskID.Bytes, r.ToPhase}] = int(r.Rollbacks)
 	}
 	jobRows, err := q.ListCurrentPhaseJobs(ctx)
 	if err != nil {
@@ -50,6 +69,9 @@ func (s *Service) Inbox(ctx context.Context, projectID pgtype.UUID) ([]Decision,
 	machines := map[string]*Machine{}
 	var out []Decision
 	for _, r := range rows {
+		if f.OwnerID.Valid && !ownedBy(r.Task, f.OwnerID) {
+			continue
+		}
 		key := uuidString(r.Task.ProjectID) + "/" + r.Task.Kind
 		m, ok := machines[key]
 		if !ok {
@@ -67,9 +89,15 @@ func (s *Service) Inbox(ctx context.Context, projectID pgtype.UUID) ([]Decision,
 		if !ok {
 			continue
 		}
-		out = append(out, Decision{Task: r.Task, Gate: r.Gate, Phase: p, Reason: reason, WaitingSince: r.Task.PhaseEnteredAt.Time})
+		out = append(out, Decision{Task: r.Task, Gate: r.Gate, Phase: p, Reason: reason,
+			WaitingSince: r.Task.PhaseEnteredAt.Time, Rollbacks: rollbacks[phaseKey{r.Task.ID.Bytes, r.Task.Phase}]})
 	}
 	return out, nil
+}
+
+// ownedBy reports whether the task was handed to this person.
+func ownedBy(t db.Task, userID pgtype.UUID) bool {
+	return t.OwnerKind != nil && *t.OwnerKind == string(ActorUser) && t.OwnerID == userID
 }
 
 func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string) (DecisionReason, bool) {

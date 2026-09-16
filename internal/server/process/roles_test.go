@@ -128,7 +128,7 @@ func TestInboxWaitsWhileAnAgentWorksAndFlagsFailedJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	reason := func() string {
-		ds, err := svc.Inbox(ctx, project)
+		ds, err := svc.Inbox(ctx, InboxFilter{ProjectID: project})
 		if err != nil {
 			t.Fatal(err)
 		}

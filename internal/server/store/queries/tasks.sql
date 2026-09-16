@@ -56,6 +56,11 @@ WHERE task_id = $1 AND phase = $2;
 -- name: SetGateBlocked :exec
 UPDATE gates SET blocked_reason = $3, blocked_by = $4, updated_at = now() WHERE task_id = $1 AND phase = $2;
 
+-- name: ClearGateApproval :exec
+-- A phase entered again must be approved again.
+UPDATE gates SET human_approved_by = NULL, human_approved_at = NULL, updated_at = now()
+WHERE task_id = $1 AND phase = $2;
+
 -- name: ClearGateBlocked :exec
 UPDATE gates SET blocked_reason = NULL, blocked_by = NULL, updated_at = now() WHERE task_id = $1 AND phase = $2;
 
@@ -114,3 +119,8 @@ WHERE id = sqlc.arg(id) RETURNING *;
 SELECT * FROM tasks
 WHERE project_id = sqlc.arg(project_id) AND external_refs ->> sqlc.arg(key)::text = sqlc.arg(value)::text
 ORDER BY created_at DESC LIMIT 1;
+
+-- name: ListRollbackCounts :many
+-- How often each task was sent back into a phase; the inbox shows it on the row.
+SELECT task_id, to_phase, count(*)::int AS rollbacks
+FROM phase_transitions WHERE kind = 'rollback' GROUP BY task_id, to_phase;

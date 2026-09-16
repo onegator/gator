@@ -85,7 +85,7 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	inbox, err := h.Process.Inbox(r.Context(), pgtype.UUID{})
+	inbox, err := h.Process.Inbox(r.Context(), process.InboxFilter{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

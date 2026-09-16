@@ -254,7 +254,11 @@ func (s *Server) ListInbox(w http.ResponseWriter, r *http.Request, params gen.Li
 		s.fail(w, err)
 		return
 	}
-	rows, err := s.Process.Inbox(r.Context(), pid)
+	var owner pgtype.UUID
+	if params.Mine != nil && *params.Mine {
+		owner = p.UserID
+	}
+	rows, err := s.Process.Inbox(r.Context(), process.InboxFilter{ProjectID: pid, OwnerID: owner})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -264,7 +268,8 @@ func (s *Server) ListInbox(w http.ResponseWriter, r *http.Request, params gen.Li
 		if visible != nil && !visible[d.Task.ProjectID.Bytes] {
 			continue
 		}
-		out = append(out, gen.Decision{Task: toTask(d.Task), Reason: gen.DecisionReason(d.Reason), WaitingSince: d.WaitingSince})
+		rollbacks := d.Rollbacks
+		out = append(out, gen.Decision{Task: toTask(d.Task), Reason: gen.DecisionReason(d.Reason), WaitingSince: d.WaitingSince, Rollbacks: &rollbacks})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

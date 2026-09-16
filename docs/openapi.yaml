@@ -180,6 +180,11 @@ paths:
           in: query
           required: false
           schema: { type: string, format: uuid }
+        - name: mine
+          in: query
+          required: false
+          description: only tasks handed to the caller
+          schema: { type: boolean }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Decision" } } } } }
   /tasks/{taskId}:
@@ -761,6 +766,7 @@ components:
         task: { $ref: "#/components/schemas/Task" }
         waitingSince: { type: string, format: date-time }
         reason: { type: string, enum: [approval, blocked, requirements_changed, idea, job_failed] }
+        rollbacks: { type: integer, description: times this task was sent back into its current phase }
     Reason:
       type: object
       properties: { reason: { type: string } }
