@@ -42,6 +42,63 @@ func (q *Queries) DisableProjectPlugin(ctx context.Context, arg DisableProjectPl
 	return err
 }
 
+const eventsAfter = `-- name: EventsAfter :many
+SELECT id, type, aggregate, aggregate_id, payload FROM events
+WHERE id > $1 AND type = ANY($2::text[])
+ORDER BY id LIMIT $3
+`
+
+type EventsAfterParams struct {
+	After   int64    `json:"after"`
+	Types   []string `json:"types"`
+	MaxRows int32    `json:"max_rows"`
+}
+
+type EventsAfterRow struct {
+	ID          int64       `json:"id"`
+	Type        string      `json:"type"`
+	Aggregate   string      `json:"aggregate"`
+	AggregateID pgtype.UUID `json:"aggregate_id"`
+	Payload     []byte      `json:"payload"`
+}
+
+func (q *Queries) EventsAfter(ctx context.Context, arg EventsAfterParams) ([]EventsAfterRow, error) {
+	rows, err := q.db.Query(ctx, eventsAfter, arg.After, arg.Types, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EventsAfterRow
+	for rows.Next() {
+		var i EventsAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Type,
+			&i.Aggregate,
+			&i.AggregateID,
+			&i.Payload,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getEventCursor = `-- name: GetEventCursor :one
+SELECT last_event_id FROM event_cursors WHERE name = $1
+`
+
+func (q *Queries) GetEventCursor(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, getEventCursor, name)
+	var last_event_id int64
+	err := row.Scan(&last_event_id)
+	return last_event_id, err
+}
+
 const getPluginByName = `-- name: GetPluginByName :one
 SELECT id, name, command, version, manifest, enabled, created_at, updated_at FROM plugins WHERE name = $1
 `
@@ -60,17 +117,6 @@ func (q *Queries) GetPluginByName(ctx context.Context, name string) (Plugin, err
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-const getPluginCursor = `-- name: GetPluginCursor :one
-SELECT last_event_id FROM plugin_event_cursor WHERE id = 1
-`
-
-func (q *Queries) GetPluginCursor(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, getPluginCursor)
-	var last_event_id int64
-	err := row.Scan(&last_event_id)
-	return last_event_id, err
 }
 
 const getProjectPlugin = `-- name: GetProjectPlugin :one
@@ -163,15 +209,15 @@ func (q *Queries) GetProjectPluginBySlug(ctx context.Context, arg GetProjectPlug
 	return i, err
 }
 
-const initPluginCursor = `-- name: InitPluginCursor :exec
-INSERT INTO plugin_event_cursor (id, last_event_id)
-SELECT 1, COALESCE(max(id), 0) FROM events
-ON CONFLICT (id) DO NOTHING
+const initEventCursor = `-- name: InitEventCursor :exec
+INSERT INTO event_cursors (name, last_event_id)
+SELECT $1, COALESCE(max(id), 0) FROM events
+ON CONFLICT (name) DO NOTHING
 `
 
-// The first boot starts at the newest event: plugins do not replay history.
-func (q *Queries) InitPluginCursor(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, initPluginCursor)
+// A consumer's first boot starts at the newest event: it does not replay history.
+func (q *Queries) InitEventCursor(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, initEventCursor, name)
 	return err
 }
 
@@ -381,52 +427,6 @@ func (q *Queries) ListProjectPlugins(ctx context.Context, projectID pgtype.UUID)
 	return items, nil
 }
 
-const pluginEventsAfter = `-- name: PluginEventsAfter :many
-SELECT id, type, aggregate, aggregate_id, payload FROM events
-WHERE id > $1 AND type = ANY($2::text[])
-ORDER BY id LIMIT $3
-`
-
-type PluginEventsAfterParams struct {
-	After   int64    `json:"after"`
-	Types   []string `json:"types"`
-	MaxRows int32    `json:"max_rows"`
-}
-
-type PluginEventsAfterRow struct {
-	ID          int64       `json:"id"`
-	Type        string      `json:"type"`
-	Aggregate   string      `json:"aggregate"`
-	AggregateID pgtype.UUID `json:"aggregate_id"`
-	Payload     []byte      `json:"payload"`
-}
-
-func (q *Queries) PluginEventsAfter(ctx context.Context, arg PluginEventsAfterParams) ([]PluginEventsAfterRow, error) {
-	rows, err := q.db.Query(ctx, pluginEventsAfter, arg.After, arg.Types, arg.MaxRows)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PluginEventsAfterRow
-	for rows.Next() {
-		var i PluginEventsAfterRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Type,
-			&i.Aggregate,
-			&i.AggregateID,
-			&i.Payload,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const pluginKVGet = `-- name: PluginKVGet :one
 SELECT value FROM plugin_kv WHERE project_plugin_id = $1 AND key = $2
 `
@@ -501,12 +501,18 @@ func (q *Queries) ReleaseWebhookDelivery(ctx context.Context, arg ReleaseWebhook
 	return err
 }
 
-const setPluginCursor = `-- name: SetPluginCursor :exec
-UPDATE plugin_event_cursor SET last_event_id = $1 WHERE id = 1 AND last_event_id < $1
+const setEventCursor = `-- name: SetEventCursor :exec
+UPDATE event_cursors SET last_event_id = $1, updated_at = now()
+WHERE name = $2 AND last_event_id < $1
 `
 
-func (q *Queries) SetPluginCursor(ctx context.Context, eventID int64) error {
-	_, err := q.db.Exec(ctx, setPluginCursor, eventID)
+type SetEventCursorParams struct {
+	EventID int64  `json:"event_id"`
+	Name    string `json:"name"`
+}
+
+func (q *Queries) SetEventCursor(ctx context.Context, arg SetEventCursorParams) error {
+	_, err := q.db.Exec(ctx, setEventCursor, arg.EventID, arg.Name)
 	return err
 }
 

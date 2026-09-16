@@ -57,6 +57,24 @@ paths:
       responses:
         "204": { description: revoked }
         "403": { $ref: "#/components/responses/Error" }
+  /devices:
+    post:
+      operationId: registerDevice
+      description: Register this device for push notifications. Registering again refreshes it.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewDevice" } } }
+      responses:
+        "200": { description: registered, content: { application/json: { schema: { $ref: "#/components/schemas/Device" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /devices/{deviceToken}:
+    delete:
+      operationId: forgetDevice
+      description: Stop sending notifications to this device.
+      parameters: [ { name: deviceToken, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "204": { description: forgotten }
+        "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/members:
     put:
       operationId: setMember
@@ -630,6 +648,21 @@ components:
         slug: { type: string }
         name: { type: string }
         tags: { type: array, items: { type: string } }
+        createdAt: { type: string, format: date-time }
+    NewDevice:
+      type: object
+      required: [token, platform]
+      properties:
+        token: { type: string, description: APNs device token }
+        platform: { type: string, enum: [ios, macos] }
+        appVersion: { type: string }
+    Device:
+      type: object
+      required: [id, platform, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string }
+        appVersion: { type: string }
         createdAt: { type: string, format: date-time }
     ProjectTemplate:
       type: object

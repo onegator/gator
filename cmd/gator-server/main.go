@@ -22,6 +22,7 @@ import (
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
+	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/runners"
@@ -130,6 +131,14 @@ func serve(ctx context.Context) error {
 	go relay.Run(ctx)
 	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, plugins.Config{})
 	go pluginHost.Run(ctx)
+	// Push notifications: without an APNs key the sender is disabled and nothing leaves here.
+	var sender notify.Sender = notify.Disabled{}
+	if apns, err := notify.LoadAPNs(); err != nil {
+		return err
+	} else if apns != nil {
+		sender = apns
+	}
+	go notify.New(db.Pool, svc, sender, hub, log, 0).Run(ctx)
 
 	bc := backup.LoadConfig()
 	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL, Log: log})

@@ -154,7 +154,7 @@ func (h *Host) Run(ctx context.Context) {
 	defer unsub()
 	defer h.stopAll()
 	h.syncLogged(ctx)
-	if err := db.New(h.pool).InitPluginCursor(ctx); err != nil && ctx.Err() == nil {
+	if err := db.New(h.pool).InitEventCursor(ctx, cursorName); err != nil && ctx.Err() == nil {
 		h.log.Warn("plugin event cursor", "err", err)
 	}
 	syncT := time.NewTicker(h.cfg.SyncEvery)
@@ -175,6 +175,9 @@ func (h *Host) Run(ctx context.Context) {
 	}
 }
 
+// cursorName is this consumer's row in event_cursors.
+const cursorName = "plugins"
+
 // hookEvents are the domain events plugins hear about.
 var hookEvents = []string{"task.created", "task.phase_changed", "gate.approved", "job.finished"}
 
@@ -183,11 +186,11 @@ var hookEvents = []string{"task.created", "task.phase_changed", "gate.approved",
 func (h *Host) drain(ctx context.Context) {
 	q := db.New(h.pool)
 	for ctx.Err() == nil {
-		cur, err := q.GetPluginCursor(ctx)
+		cur, err := q.GetEventCursor(ctx, cursorName)
 		if err != nil {
 			return
 		}
-		rows, err := q.PluginEventsAfter(ctx, db.PluginEventsAfterParams{After: cur, Types: hookEvents, MaxRows: 100})
+		rows, err := q.EventsAfter(ctx, db.EventsAfterParams{After: cur, Types: hookEvents, MaxRows: 100})
 		if err != nil || len(rows) == 0 {
 			return
 		}
@@ -196,7 +199,7 @@ func (h *Host) drain(ctx context.Context) {
 				h.onEvent(ctx, events.Event{ID: r.ID, Type: r.Type, Aggregate: r.Aggregate, AggregateID: uuidString(r.AggregateID), Payload: r.Payload})
 			}
 		}
-		if err := q.SetPluginCursor(ctx, rows[len(rows)-1].ID); err != nil {
+		if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursorName, EventID: rows[len(rows)-1].ID}); err != nil {
 			return
 		}
 	}

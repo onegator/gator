@@ -45,6 +45,17 @@ type AuditLog struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type Device struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Token      string             `json:"token"`
+	Platform   string             `json:"platform"`
+	AppVersion string             `json:"app_version"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+	FailedAt   pgtype.Timestamptz `json:"failed_at"`
+}
+
 type Event struct {
 	ID          int64              `json:"id"`
 	Type        string             `json:"type"`
@@ -53,6 +64,12 @@ type Event struct {
 	Payload     []byte             `json:"payload"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	PublishedAt pgtype.Timestamptz `json:"published_at"`
+}
+
+type EventCursor struct {
+	Name        string             `json:"name"`
+	LastEventID int64              `json:"last_event_id"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Gate struct {
@@ -141,11 +158,6 @@ type PluginCall struct {
 	Error           *string            `json:"error"`
 	DurationMs      int32              `json:"duration_ms"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-}
-
-type PluginEventCursor struct {
-	ID          int32 `json:"id"`
-	LastEventID int64 `json:"last_event_id"`
 }
 
 type PluginKv struct {

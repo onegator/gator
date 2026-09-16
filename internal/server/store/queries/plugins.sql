@@ -70,19 +70,20 @@ SELECT value FROM plugin_kv WHERE project_plugin_id = $1 AND key = $2;
 INSERT INTO plugin_kv (project_plugin_id, key, value) VALUES ($1, $2, $3)
 ON CONFLICT (project_plugin_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 
--- name: InitPluginCursor :exec
--- The first boot starts at the newest event: plugins do not replay history.
-INSERT INTO plugin_event_cursor (id, last_event_id)
-SELECT 1, COALESCE(max(id), 0) FROM events
-ON CONFLICT (id) DO NOTHING;
+-- name: InitEventCursor :exec
+-- A consumer's first boot starts at the newest event: it does not replay history.
+INSERT INTO event_cursors (name, last_event_id)
+SELECT sqlc.arg(name), COALESCE(max(id), 0) FROM events
+ON CONFLICT (name) DO NOTHING;
 
--- name: GetPluginCursor :one
-SELECT last_event_id FROM plugin_event_cursor WHERE id = 1;
+-- name: GetEventCursor :one
+SELECT last_event_id FROM event_cursors WHERE name = $1;
 
--- name: SetPluginCursor :exec
-UPDATE plugin_event_cursor SET last_event_id = sqlc.arg(event_id) WHERE id = 1 AND last_event_id < sqlc.arg(event_id);
+-- name: SetEventCursor :exec
+UPDATE event_cursors SET last_event_id = sqlc.arg(event_id), updated_at = now()
+WHERE name = sqlc.arg(name) AND last_event_id < sqlc.arg(event_id);
 
--- name: PluginEventsAfter :many
+-- name: EventsAfter :many
 SELECT id, type, aggregate, aggregate_id, payload FROM events
 WHERE id > sqlc.arg(after) AND type = ANY(sqlc.arg(types)::text[])
 ORDER BY id LIMIT sqlc.arg(max_rows);
