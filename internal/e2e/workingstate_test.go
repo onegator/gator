@@ -61,7 +61,7 @@ func TestWorkingStateCarriesAcrossBackends(t *testing.T) {
 	h.startRunner(second, rec)
 	j2 := h.job(task, second, "continue", 0)
 	h.waitJob(j2.Id.String(), "done")
-	got := rec.last()
+	got := rec.last(t)
 	if len(got.Context) == 0 || got.Context[0].Kind != "working_state" || !strings.Contains(got.Context[0].Body, "fix the cache, not the caller") {
 		t.Fatalf("the next job should start from the working state: %+v", got.Context)
 	}

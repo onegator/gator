@@ -244,11 +244,11 @@ func TestPluginHooksReachGatesAndJobs(t *testing.T) {
 	j := h.job(task, b, "plan it", 0)
 	h.waitJob(j.Id.String(), "done")
 	prepared := false
-	for _, d := range rec.last().Context {
+	for _, d := range rec.last(t).Context {
 		prepared = prepared || (d.Kind == "plugin" && strings.Contains(d.Body, "Echo says: hi"))
 	}
 	if !prepared {
-		t.Fatalf("jobPrepare should add to the lease: %+v", rec.last().Context)
+		t.Fatalf("jobPrepare should add to the lease: %+v", rec.last(t).Context)
 	}
 	h.until("jobFinish leaves a note", func() bool {
 		for _, a := range h.artifacts(task) {

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -257,7 +258,14 @@ func (r *rawRunner) lease(slots int) []proto.Job {
 	return l.Jobs
 }
 
-func uniqueBackend() string { return fmt.Sprintf("fake-%d", time.Now().UnixNano()) }
+// uniqueBackend names a backend no other runner in this process answers for. The clock alone
+// is not enough: two calls in the same microsecond used to return the same name, and then one
+// runner could take the other's job.
+var backendSeq atomic.Int64
+
+func uniqueBackend() string {
+	return fmt.Sprintf("fake-%d-%d", time.Now().UnixNano(), backendSeq.Add(1))
+}
 
 func deref(s *string) string {
 	if s == nil {

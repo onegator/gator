@@ -37,9 +37,15 @@ func (r *recordingExec) Run(_ context.Context, job proto.Job, io client.JobIO) p
 	return proto.Finish{Status: proto.StatusDone, Summary: summary, Usage: proto.Usage{Backend: job.Backend, DurationMS: 1000, InputTokens: 10}}
 }
 
-func (r *recordingExec) last() proto.Job {
+// last is the newest job this executor ran; it fails the test rather than panicking when
+// another runner took the work.
+func (r *recordingExec) last(t *testing.T) proto.Job {
+	t.Helper()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(r.jobs) == 0 {
+		t.Fatal("this runner ran no job")
+	}
 	return r.jobs[len(r.jobs)-1]
 }
 
@@ -138,7 +144,7 @@ func TestAutopilotRunsEachRunnerPhase(t *testing.T) {
 	}
 	h.waitJob(job.Id.String(), "done")
 
-	got := exec.last()
+	got := exec.last(t)
 	if !strings.Contains(got.Guide, "# Role: researcher") || got.TaskDescription != "Users want a dark mode toggle in settings." || got.TaskTitle != "Dark mode" || len(got.Context) != 0 {
 		t.Fatalf("researcher lease: guide=%v desc=%q ctx=%d", strings.Contains(got.Guide, "researcher"), got.TaskDescription, len(got.Context))
 	}
@@ -159,7 +165,7 @@ func TestAutopilotRunsEachRunnerPhase(t *testing.T) {
 		t.Fatalf("planning job role %s", job.Role)
 	}
 	h.waitJob(job.Id.String(), "done")
-	if got := exec.last(); len(got.Context) != 2 || got.Context[0].Kind != "working_state" || got.Context[1].Kind != "brief" || !strings.Contains(got.Context[1].Title, "approved") {
+	if got := exec.last(t); len(got.Context) != 2 || got.Context[0].Kind != "working_state" || got.Context[1].Kind != "brief" || !strings.Contains(got.Context[1].Title, "approved") {
 		t.Fatalf("planner context should be the working state, then the approved brief: %+v", got.Context)
 	}
 
@@ -180,7 +186,7 @@ func TestAutopilotRunsEachRunnerPhase(t *testing.T) {
 		t.Fatalf("re-entering planning needs a new job: %+v %v", job, created)
 	}
 	h.waitJob(job.Id.String(), "done")
-	ctx := exec.last().Context
+	ctx := exec.last(t).Context
 	if len(ctx) < 4 || ctx[0].Kind != "rollback" || ctx[0].Body != reason {
 		t.Fatalf("replanning context should lead with the rollback reason: %+v", ctx)
 	}

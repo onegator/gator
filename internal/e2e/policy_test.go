@@ -73,7 +73,7 @@ func TestPolicyChoosesBackendModelAndCostCapPerRole(t *testing.T) {
 	rec := &recordingExec{}
 	h.startRunner(b, rec)
 	h.waitJob(job.Id.String(), "done")
-	if got := rec.last(); got.Model != "small" || got.Bounds.MaxCostUSD != 0.5 {
+	if got := rec.last(t); got.Model != "small" || got.Bounds.MaxCostUSD != 0.5 {
 		t.Fatalf("lease: model %q bounds %+v", got.Model, got.Bounds)
 	}
 	// A person's job on another backend does not inherit a model meant for this one.
