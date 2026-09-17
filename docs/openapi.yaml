@@ -155,6 +155,93 @@ paths:
       responses:
         "200": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/InstalledPlugin" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /knowledge:
+    get:
+      operationId: listWorkspaceKnowledge
+      description: Technical entries shared by every project.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeEntry" } } } } }
+    post:
+      operationId: addWorkspaceKnowledge
+      description: Write a workspace-wide entry. Workspace admins only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewKnowledgeEntry" } } }
+      responses:
+        "201": { description: written, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /knowledge/{entryId}:
+    delete:
+      operationId: deleteKnowledgeEntry
+      parameters: [ { name: entryId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Error" }
+  /packs:
+    get:
+      operationId: listKnowledgePacks
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgePack" } } } } }
+    post:
+      operationId: fetchKnowledgePacks
+      description: Shallow-clone a registry and store every pack whose files match the checksum its index promises. Workspace admins only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/FetchPacks" } } }
+      responses:
+        "200": { description: fetched, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgePack" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/knowledge:
+    get:
+      operationId: listProjectKnowledge
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgeEntry" } } } } }
+    post:
+      operationId: addProjectKnowledge
+      description: Write an entry for this project. It overrides a workspace entry or a pack with the same scope and title.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewKnowledgeEntry" } } }
+      responses:
+        "201": { description: written, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgeEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/packs:
+    get:
+      operationId: listProjectPacks
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/KnowledgePack" } } } } }
+    put:
+      operationId: setProjectPack
+      description: Switch a pack on for this project, or move it in the order.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPack" } } }
+      responses:
+        "204": { description: enabled }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/packs/{packName}:
+    delete:
+      operationId: removeProjectPack
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: packName, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: removed }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/knowledge/preview:
+    get:
+      operationId: previewKnowledge
+      description: The technical part of a prompt as a job would receive it, with what one entry hides from another.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: role, in: query, required: true, schema: { type: string } }
+        - { name: phase, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgePreview" } } } }
   /projects/{projectId}/product:
     get:
       operationId: listProductContext
@@ -692,6 +779,67 @@ components:
         platform: { type: string }
         appVersion: { type: string }
         createdAt: { type: string, format: date-time }
+    KnowledgeEntry:
+      type: object
+      required: [id, scope, title, content, position, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: absent for a workspace-wide entry }
+        scope: { type: string, enum: [language, architecture, requirements, testing, security] }
+        title: { type: string }
+        content: { type: string }
+        position: { type: integer }
+        createdAt: { type: string, format: date-time }
+    NewKnowledgeEntry:
+      type: object
+      required: [scope, title, content]
+      properties:
+        scope: { type: string, enum: [language, architecture, requirements, testing, security] }
+        title: { type: string }
+        content: { type: string }
+        position: { type: integer }
+    KnowledgePack:
+      type: object
+      required: [id, name, version, scope, checksum, files]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        version: { type: string }
+        scope: { type: string }
+        url: { type: string }
+        checksum: { type: string }
+        appliesTo: { type: array, items: { type: string } }
+        roles: { type: array, items: { type: string } }
+        phases: { type: array, items: { type: string } }
+        files: { type: array, items: { type: string } }
+        enabled: { type: boolean, description: present when listed for a project }
+        fetchedAt: { type: string, format: date-time }
+    FetchPacks:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, description: git url of the registry }
+    ProjectPack:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        version: { type: string, description: defaults to the newest stored }
+        position: { type: integer }
+    KnowledgePreview:
+      type: object
+      required: [documents, warnings, bytes]
+      properties:
+        documents: { type: array, items: { $ref: "#/components/schemas/PreviewDocument" } }
+        warnings: { type: array, items: { type: string } }
+        bytes: { type: integer, description: size of the technical part of the prompt }
+    PreviewDocument:
+      type: object
+      required: [title, scope, body]
+      properties:
+        title: { type: string }
+        scope: { type: string }
+        body: { type: string }
     ProductEntry:
       type: object
       required: [id, kind, title, content, version, status, createdAt]

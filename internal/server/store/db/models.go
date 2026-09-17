@@ -118,6 +118,29 @@ type JobEvent struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type KnowledgeEntry struct {
+	ID        pgtype.UUID        `json:"id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Scope     string             `json:"scope"`
+	Title     string             `json:"title"`
+	Content   string             `json:"content"`
+	Position  int32              `json:"position"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type KnowledgePack struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
+	Version   string             `json:"version"`
+	Source    string             `json:"source"`
+	Url       string             `json:"url"`
+	Checksum  string             `json:"checksum"`
+	Manifest  []byte             `json:"manifest"`
+	Files     []byte             `json:"files"`
+	FetchedAt pgtype.Timestamptz `json:"fetched_at"`
+}
+
 type Membership struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	UserID    pgtype.UUID `json:"user_id"`
@@ -191,6 +214,12 @@ type Project struct {
 	ProcessConfig []byte             `json:"process_config"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProjectPack struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	PackID    pgtype.UUID `json:"pack_id"`
+	Position  int32       `json:"position"`
 }
 
 type ProjectPlugin struct {

@@ -145,7 +145,7 @@ func TestAutopilotRunsEachRunnerPhase(t *testing.T) {
 	h.waitJob(job.Id.String(), "done")
 
 	got := exec.last(t)
-	if !strings.Contains(got.Guide, "# Role: researcher") || got.TaskDescription != "Users want a dark mode toggle in settings." || got.TaskTitle != "Dark mode" || len(got.Context) != 0 {
+	if !strings.Contains(got.Guide, "# Role: researcher") || got.TaskDescription != "Users want a dark mode toggle in settings." || got.TaskTitle != "Dark mode" || len(taskDocs(got.Context)) != 0 {
 		t.Fatalf("researcher lease: guide=%v desc=%q ctx=%d", strings.Contains(got.Guide, "researcher"), got.TaskDescription, len(got.Context))
 	}
 	arts := h.artifacts(task)
@@ -165,8 +165,8 @@ func TestAutopilotRunsEachRunnerPhase(t *testing.T) {
 		t.Fatalf("planning job role %s", job.Role)
 	}
 	h.waitJob(job.Id.String(), "done")
-	if got := exec.last(t); len(got.Context) != 2 || got.Context[0].Kind != "working_state" || got.Context[1].Kind != "brief" || !strings.Contains(got.Context[1].Title, "approved") {
-		t.Fatalf("planner context should be the working state, then the approved brief: %+v", got.Context)
+	if docs := taskDocs(exec.last(t).Context); len(docs) != 2 || docs[0].Kind != "working_state" || docs[1].Kind != "brief" || !strings.Contains(docs[1].Title, "approved") {
+		t.Fatalf("planner context should be the working state, then the approved brief: %+v", docs)
 	}
 
 	task = h.approveAdvance(task)
@@ -250,4 +250,16 @@ func TestAutopilotReactsToTaskEvents(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("the event did not queue a job")
+}
+
+// taskDocs drops the documents that belong to the workspace rather than to this task, so a
+// test can count what it is about.
+func taskDocs(docs []proto.ContextDoc) []proto.ContextDoc {
+	var out []proto.ContextDoc
+	for _, d := range docs {
+		if d.Kind != "knowledge" && d.Kind != "product" {
+			out = append(out, d)
+		}
+	}
+	return out
 }

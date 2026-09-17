@@ -151,6 +151,15 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 		}
 	}
 
+	// How this workspace builds software; the same for every project that enables it.
+	know, _, err := s.Knowledge(ctx, t.ProjectID, role, t.Phase)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range know {
+		add(d)
+	}
+
 	// The working state comes first: it is the shortest route to where the task stands.
 	if ws, ok := latest["task/working_state"]; ok && ws.Content != nil {
 		add(ContextDoc{Kind: "working_state", Phase: "task", Title: fmt.Sprintf("Working state (v%d)", ws.Version), Body: *ws.Content})

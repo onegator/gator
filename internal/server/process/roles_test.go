@@ -96,6 +96,14 @@ func TestJobContextHasLatestArtifactsAndRollbackReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Workspace knowledge belongs to the workspace, not to this case; count the task's own.
+	var own []ContextDoc
+	for _, d := range docs {
+		if d.Kind != "knowledge" && d.Kind != "product" {
+			own = append(own, d)
+		}
+	}
+	docs = own
 	if len(docs) != 3 || docs[0].Kind != "rollback" || docs[0].Body != "the plan missed the migration" {
 		t.Fatalf("docs: %+v", docs)
 	}

@@ -1,0 +1,5 @@
+{
+  "packs": [
+    {"name": "go-service", "version": "1.0.0", "path": "packs/go-service", "checksum": "sha256:bba65c825fab85ae310145bbd8e3eaac93f6c4e9925134afefa9f063abc6ad85"}
+  ]
+}

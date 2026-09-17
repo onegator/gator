@@ -22,6 +22,7 @@ import (
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
+	"github.com/onegator/gator/internal/server/knowledge"
 	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -65,6 +66,8 @@ func run(args []string) error {
 		return store.MigrateDown(ctx, cfg.DatabaseURL)
 	case "serve":
 		return serve(ctx)
+	case "knowledge":
+		return knowledgeCmd(args[1:])
 	case "secrets":
 		return secretsCmd(args[1:])
 	case "admin":
@@ -301,4 +304,19 @@ func adminCmd(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown admin command %q", args[0])
 	}
+}
+
+// knowledgeCmd works with knowledge packs on disk.
+//
+//	knowledge checksum <pack dir>  print the checksum for a registry index
+func knowledgeCmd(args []string) error {
+	if len(args) < 2 || args[0] != "checksum" {
+		return errors.New("usage: gator-server knowledge checksum <pack dir>")
+	}
+	pack, err := knowledge.ReadDir(args[1])
+	if err != nil {
+		return err
+	}
+	fmt.Println(pack.Checksum())
+	return nil
 }

@@ -60,6 +60,15 @@ const (
 	Stopped JobStatus = "stopped"
 )
 
+// Defines values for KnowledgeEntryScope.
+const (
+	KnowledgeEntryScopeArchitecture KnowledgeEntryScope = "architecture"
+	KnowledgeEntryScopeLanguage     KnowledgeEntryScope = "language"
+	KnowledgeEntryScopeRequirements KnowledgeEntryScope = "requirements"
+	KnowledgeEntryScopeSecurity     KnowledgeEntryScope = "security"
+	KnowledgeEntryScopeTesting      KnowledgeEntryScope = "testing"
+)
+
 // Defines values for MemberRole.
 const (
 	MemberRoleAdmin  MemberRole = "admin"
@@ -71,6 +80,15 @@ const (
 const (
 	Ios   NewDevicePlatform = "ios"
 	Macos NewDevicePlatform = "macos"
+)
+
+// Defines values for NewKnowledgeEntryScope.
+const (
+	NewKnowledgeEntryScopeArchitecture NewKnowledgeEntryScope = "architecture"
+	NewKnowledgeEntryScopeLanguage     NewKnowledgeEntryScope = "language"
+	NewKnowledgeEntryScopeRequirements NewKnowledgeEntryScope = "requirements"
+	NewKnowledgeEntryScopeSecurity     NewKnowledgeEntryScope = "security"
+	NewKnowledgeEntryScopeTesting      NewKnowledgeEntryScope = "testing"
 )
 
 // Defines values for NewProductEntryKind.
@@ -197,6 +215,12 @@ type Error struct {
 	Error string  `json:"error"`
 }
 
+// FetchPacks defines model for FetchPacks.
+type FetchPacks struct {
+	// Url git url of the registry
+	Url string `json:"url"`
+}
+
 // Gate defines model for Gate.
 type Gate struct {
 	BlockedBy     *string  `json:"blockedBy,omitempty"`
@@ -298,6 +322,48 @@ type KindMetrics struct {
 	Tokens         Tokens  `json:"tokens"`
 }
 
+// KnowledgeEntry defines model for KnowledgeEntry.
+type KnowledgeEntry struct {
+	Content   string             `json:"content"`
+	CreatedAt time.Time          `json:"createdAt"`
+	Id        openapi_types.UUID `json:"id"`
+	Position  int                `json:"position"`
+
+	// ProjectId absent for a workspace-wide entry
+	ProjectId *openapi_types.UUID `json:"projectId,omitempty"`
+	Scope     KnowledgeEntryScope `json:"scope"`
+	Title     string              `json:"title"`
+}
+
+// KnowledgeEntryScope defines model for KnowledgeEntry.Scope.
+type KnowledgeEntryScope string
+
+// KnowledgePack defines model for KnowledgePack.
+type KnowledgePack struct {
+	AppliesTo *[]string `json:"appliesTo,omitempty"`
+	Checksum  string    `json:"checksum"`
+
+	// Enabled present when listed for a project
+	Enabled   *bool              `json:"enabled,omitempty"`
+	FetchedAt *time.Time         `json:"fetchedAt,omitempty"`
+	Files     []string           `json:"files"`
+	Id        openapi_types.UUID `json:"id"`
+	Name      string             `json:"name"`
+	Phases    *[]string          `json:"phases,omitempty"`
+	Roles     *[]string          `json:"roles,omitempty"`
+	Scope     string             `json:"scope"`
+	Url       *string            `json:"url,omitempty"`
+	Version   string             `json:"version"`
+}
+
+// KnowledgePreview defines model for KnowledgePreview.
+type KnowledgePreview struct {
+	// Bytes size of the technical part of the prompt
+	Bytes     int               `json:"bytes"`
+	Documents []PreviewDocument `json:"documents"`
+	Warnings  []string          `json:"warnings"`
+}
+
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
 	Backend string `json:"backend"`
@@ -349,6 +415,17 @@ type NewJob struct {
 	Role           *string `json:"role,omitempty"`
 	TimeoutSeconds *int    `json:"timeoutSeconds,omitempty"`
 }
+
+// NewKnowledgeEntry defines model for NewKnowledgeEntry.
+type NewKnowledgeEntry struct {
+	Content  string                 `json:"content"`
+	Position *int                   `json:"position,omitempty"`
+	Scope    NewKnowledgeEntryScope `json:"scope"`
+	Title    string                 `json:"title"`
+}
+
+// NewKnowledgeEntryScope defines model for NewKnowledgeEntry.Scope.
+type NewKnowledgeEntryScope string
 
 // NewProductEntry defines model for NewProductEntry.
 type NewProductEntry struct {
@@ -456,6 +533,13 @@ type PluginUI struct {
 	Tabs  []PluginTab  `json:"tabs"`
 }
 
+// PreviewDocument defines model for PreviewDocument.
+type PreviewDocument struct {
+	Body  string `json:"body"`
+	Scope string `json:"scope"`
+	Title string `json:"title"`
+}
+
 // ProductEntry defines model for ProductEntry.
 type ProductEntry struct {
 	ApprovedAt   *time.Time          `json:"approvedAt,omitempty"`
@@ -498,6 +582,15 @@ type ProjectMetrics struct {
 	ProjectId openapi_types.UUID `json:"projectId"`
 	Since     time.Time          `json:"since"`
 	Totals    KindMetrics        `json:"totals"`
+}
+
+// ProjectPack defines model for ProjectPack.
+type ProjectPack struct {
+	Name     string `json:"name"`
+	Position *int   `json:"position,omitempty"`
+
+	// Version defaults to the newest stored
+	Version *string `json:"version,omitempty"`
 }
 
 // ProjectPlugin defines model for ProjectPlugin.
@@ -786,6 +879,12 @@ type ListJobEventsParams struct {
 	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// PreviewKnowledgeParams defines parameters for PreviewKnowledge.
+type PreviewKnowledgeParams struct {
+	Role  string  `form:"role" json:"role"`
+	Phase *string `form:"phase,omitempty" json:"phase,omitempty"`
+}
+
 // GetProjectMetricsParams defines parameters for GetProjectMetrics.
 type GetProjectMetricsParams struct {
 	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
@@ -805,6 +904,12 @@ type SteerJobJSONRequestBody = SteerJob
 // StopJobJSONRequestBody defines body for StopJob for application/json ContentType.
 type StopJobJSONRequestBody = StopJob
 
+// AddWorkspaceKnowledgeJSONRequestBody defines body for AddWorkspaceKnowledge for application/json ContentType.
+type AddWorkspaceKnowledgeJSONRequestBody = NewKnowledgeEntry
+
+// FetchKnowledgePacksJSONRequestBody defines body for FetchKnowledgePacks for application/json ContentType.
+type FetchKnowledgePacksJSONRequestBody = FetchPacks
+
 // InstallPluginJSONRequestBody defines body for InstallPlugin for application/json ContentType.
 type InstallPluginJSONRequestBody = InstallPlugin
 
@@ -814,8 +919,14 @@ type SetProductEntryStatusJSONRequestBody = ProductStatusChange
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody = NewProject
 
+// AddProjectKnowledgeJSONRequestBody defines body for AddProjectKnowledge for application/json ContentType.
+type AddProjectKnowledgeJSONRequestBody = NewKnowledgeEntry
+
 // SetMemberJSONRequestBody defines body for SetMember for application/json ContentType.
 type SetMemberJSONRequestBody = Member
+
+// SetProjectPackJSONRequestBody defines body for SetProjectPack for application/json ContentType.
+type SetProjectPackJSONRequestBody = ProjectPack
 
 // ConfigureProjectPluginJSONRequestBody defines body for ConfigureProjectPlugin for application/json ContentType.
 type ConfigureProjectPluginJSONRequestBody = ProjectPluginSettings
@@ -886,6 +997,21 @@ type ServerInterface interface {
 	// (POST /jobs/{jobId}/stop)
 	StopJob(w http.ResponseWriter, r *http.Request, jobId JobId)
 
+	// (GET /knowledge)
+	ListWorkspaceKnowledge(w http.ResponseWriter, r *http.Request)
+
+	// (POST /knowledge)
+	AddWorkspaceKnowledge(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /knowledge/{entryId})
+	DeleteKnowledgeEntry(w http.ResponseWriter, r *http.Request, entryId openapi_types.UUID)
+
+	// (GET /packs)
+	ListKnowledgePacks(w http.ResponseWriter, r *http.Request)
+
+	// (POST /packs)
+	FetchKnowledgePacks(w http.ResponseWriter, r *http.Request)
+
 	// (GET /plugins)
 	ListPlugins(w http.ResponseWriter, r *http.Request)
 
@@ -904,11 +1030,29 @@ type ServerInterface interface {
 	// (GET /projects/{projectId})
 	GetProject(w http.ResponseWriter, r *http.Request, projectId ProjectId)
 
+	// (GET /projects/{projectId}/knowledge)
+	ListProjectKnowledge(w http.ResponseWriter, r *http.Request, projectId ProjectId)
+
+	// (POST /projects/{projectId}/knowledge)
+	AddProjectKnowledge(w http.ResponseWriter, r *http.Request, projectId ProjectId)
+
+	// (GET /projects/{projectId}/knowledge/preview)
+	PreviewKnowledge(w http.ResponseWriter, r *http.Request, projectId ProjectId, params PreviewKnowledgeParams)
+
 	// (PUT /projects/{projectId}/members)
 	SetMember(w http.ResponseWriter, r *http.Request, projectId ProjectId)
 
 	// (GET /projects/{projectId}/metrics)
 	GetProjectMetrics(w http.ResponseWriter, r *http.Request, projectId ProjectId, params GetProjectMetricsParams)
+
+	// (GET /projects/{projectId}/packs)
+	ListProjectPacks(w http.ResponseWriter, r *http.Request, projectId ProjectId)
+
+	// (PUT /projects/{projectId}/packs)
+	SetProjectPack(w http.ResponseWriter, r *http.Request, projectId ProjectId)
+
+	// (DELETE /projects/{projectId}/packs/{packName})
+	RemoveProjectPack(w http.ResponseWriter, r *http.Request, projectId ProjectId, packName string)
 
 	// (GET /projects/{projectId}/plugins)
 	ListProjectPlugins(w http.ResponseWriter, r *http.Request, projectId ProjectId)
@@ -1055,6 +1199,31 @@ func (_ Unimplemented) StopJob(w http.ResponseWriter, r *http.Request, jobId Job
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// (GET /knowledge)
+func (_ Unimplemented) ListWorkspaceKnowledge(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /knowledge)
+func (_ Unimplemented) AddWorkspaceKnowledge(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (DELETE /knowledge/{entryId})
+func (_ Unimplemented) DeleteKnowledgeEntry(w http.ResponseWriter, r *http.Request, entryId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /packs)
+func (_ Unimplemented) ListKnowledgePacks(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /packs)
+func (_ Unimplemented) FetchKnowledgePacks(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // (GET /plugins)
 func (_ Unimplemented) ListPlugins(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -1085,6 +1254,21 @@ func (_ Unimplemented) GetProject(w http.ResponseWriter, r *http.Request, projec
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// (GET /projects/{projectId}/knowledge)
+func (_ Unimplemented) ListProjectKnowledge(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (POST /projects/{projectId}/knowledge)
+func (_ Unimplemented) AddProjectKnowledge(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /projects/{projectId}/knowledge/preview)
+func (_ Unimplemented) PreviewKnowledge(w http.ResponseWriter, r *http.Request, projectId ProjectId, params PreviewKnowledgeParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // (PUT /projects/{projectId}/members)
 func (_ Unimplemented) SetMember(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -1092,6 +1276,21 @@ func (_ Unimplemented) SetMember(w http.ResponseWriter, r *http.Request, project
 
 // (GET /projects/{projectId}/metrics)
 func (_ Unimplemented) GetProjectMetrics(w http.ResponseWriter, r *http.Request, projectId ProjectId, params GetProjectMetricsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /projects/{projectId}/packs)
+func (_ Unimplemented) ListProjectPacks(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (PUT /projects/{projectId}/packs)
+func (_ Unimplemented) SetProjectPack(w http.ResponseWriter, r *http.Request, projectId ProjectId) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (DELETE /projects/{projectId}/packs/{packName})
+func (_ Unimplemented) RemoveProjectPack(w http.ResponseWriter, r *http.Request, projectId ProjectId, packName string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1489,6 +1688,87 @@ func (siw *ServerInterfaceWrapper) StopJob(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// ListWorkspaceKnowledge operation middleware
+func (siw *ServerInterfaceWrapper) ListWorkspaceKnowledge(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListWorkspaceKnowledge(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AddWorkspaceKnowledge operation middleware
+func (siw *ServerInterfaceWrapper) AddWorkspaceKnowledge(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AddWorkspaceKnowledge(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteKnowledgeEntry operation middleware
+func (siw *ServerInterfaceWrapper) DeleteKnowledgeEntry(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "entryId" -------------
+	var entryId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "entryId", chi.URLParam(r, "entryId"), &entryId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "entryId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteKnowledgeEntry(w, r, entryId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListKnowledgePacks operation middleware
+func (siw *ServerInterfaceWrapper) ListKnowledgePacks(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListKnowledgePacks(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FetchKnowledgePacks operation middleware
+func (siw *ServerInterfaceWrapper) FetchKnowledgePacks(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FetchKnowledgePacks(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListPlugins operation middleware
 func (siw *ServerInterfaceWrapper) ListPlugins(w http.ResponseWriter, r *http.Request) {
 
@@ -1606,6 +1886,107 @@ func (siw *ServerInterfaceWrapper) GetProject(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// ListProjectKnowledge operation middleware
+func (siw *ServerInterfaceWrapper) ListProjectKnowledge(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListProjectKnowledge(w, r, projectId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AddProjectKnowledge operation middleware
+func (siw *ServerInterfaceWrapper) AddProjectKnowledge(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AddProjectKnowledge(w, r, projectId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PreviewKnowledge operation middleware
+func (siw *ServerInterfaceWrapper) PreviewKnowledge(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PreviewKnowledgeParams
+
+	// ------------- Required query parameter "role" -------------
+
+	if paramValue := r.URL.Query().Get("role"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "role"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "role", r.URL.Query(), &params.Role)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "role", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "phase" -------------
+
+	err = runtime.BindQueryParameter("form", true, false, "phase", r.URL.Query(), &params.Phase)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "phase", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PreviewKnowledge(w, r, projectId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetMember operation middleware
 func (siw *ServerInterfaceWrapper) SetMember(w http.ResponseWriter, r *http.Request) {
 
@@ -1658,6 +2039,90 @@ func (siw *ServerInterfaceWrapper) GetProjectMetrics(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetProjectMetrics(w, r, projectId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListProjectPacks operation middleware
+func (siw *ServerInterfaceWrapper) ListProjectPacks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListProjectPacks(w, r, projectId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetProjectPack operation middleware
+func (siw *ServerInterfaceWrapper) SetProjectPack(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetProjectPack(w, r, projectId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveProjectPack operation middleware
+func (siw *ServerInterfaceWrapper) RemoveProjectPack(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "projectId" -------------
+	var projectId ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "projectId", chi.URLParam(r, "projectId"), &projectId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "projectId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "packName" -------------
+	var packName string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "packName", chi.URLParam(r, "packName"), &packName, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "packName", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveProjectPack(w, r, projectId, packName)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2535,6 +3000,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/jobs/{jobId}/stop", wrapper.StopJob)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/knowledge", wrapper.ListWorkspaceKnowledge)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/knowledge", wrapper.AddWorkspaceKnowledge)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/knowledge/{entryId}", wrapper.DeleteKnowledgeEntry)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/packs", wrapper.ListKnowledgePacks)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/packs", wrapper.FetchKnowledgePacks)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/plugins", wrapper.ListPlugins)
 	})
 	r.Group(func(r chi.Router) {
@@ -2553,10 +3033,28 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/projects/{projectId}", wrapper.GetProject)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/projects/{projectId}/knowledge", wrapper.ListProjectKnowledge)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/projects/{projectId}/knowledge", wrapper.AddProjectKnowledge)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/projects/{projectId}/knowledge/preview", wrapper.PreviewKnowledge)
+	})
+	r.Group(func(r chi.Router) {
 		r.Put(options.BaseURL+"/projects/{projectId}/members", wrapper.SetMember)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/projects/{projectId}/metrics", wrapper.GetProjectMetrics)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/projects/{projectId}/packs", wrapper.ListProjectPacks)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/projects/{projectId}/packs", wrapper.SetProjectPack)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/projects/{projectId}/packs/{packName}", wrapper.RemoveProjectPack)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/projects/{projectId}/plugins", wrapper.ListProjectPlugins)
@@ -2655,106 +3153,118 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

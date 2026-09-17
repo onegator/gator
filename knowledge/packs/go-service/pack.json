@@ -1,0 +1,8 @@
+{
+  "name": "go-service",
+  "version": "1.0.0",
+  "scope": "language",
+  "applies_to": ["go"],
+  "roles": ["worker", "reviewer"],
+  "files": ["style.md", "testing.md"]
+}

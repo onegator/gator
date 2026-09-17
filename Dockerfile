@@ -23,7 +23,8 @@ FROM alpine:3 AS server
 # pg_dump/pg_restore/psql power `backup` and `restore`; the client must be at least as new
 # as the server, so the major version is a build argument.
 ARG PG_CLIENT=postgresql17-client
-RUN apk add --no-cache ca-certificates tzdata "${PG_CLIENT}" \
+# git is here for the knowledge registry: packs are fetched with a shallow clone.
+RUN apk add --no-cache ca-certificates tzdata git "${PG_CLIENT}" \
  && adduser -D -H -u 10001 gator
 COPY --from=build /out/gator-server /usr/local/bin/gator-server
 USER gator
