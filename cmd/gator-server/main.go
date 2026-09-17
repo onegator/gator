@@ -25,6 +25,7 @@ import (
 	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/product"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -139,6 +140,8 @@ func serve(ctx context.Context) error {
 		sender = apns
 	}
 	go notify.New(db.Pool, svc, sender, hub, log, 0).Run(ctx)
+	// Finished work proposes what the product learned; a person approves it.
+	go product.NewCurator(db.Pool, hub, log, 0).Run(ctx)
 
 	bc := backup.LoadConfig()
 	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL, Log: log})

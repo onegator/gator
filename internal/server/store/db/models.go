@@ -167,6 +167,22 @@ type PluginKv struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ProductContext struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Kind          string             `json:"kind"`
+	Title         string             `json:"title"`
+	Content       string             `json:"content"`
+	Version       int32              `json:"version"`
+	Status        string             `json:"status"`
+	SourceTaskID  pgtype.UUID        `json:"source_task_id"`
+	CreatedByKind string             `json:"created_by_kind"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	ApprovedBy    pgtype.UUID        `json:"approved_by"`
+	ApprovedAt    pgtype.Timestamptz `json:"approved_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type Project struct {
 	ID            pgtype.UUID        `json:"id"`
 	Slug          string             `json:"slug"`

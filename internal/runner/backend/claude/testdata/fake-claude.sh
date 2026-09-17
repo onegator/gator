@@ -19,7 +19,7 @@ for a in "$@"; do
 done
 if [ -n "$FAKE_CLAUDE_COMMIT" ]; then
 	echo "change $$" >> gator.txt
-	git add gator.txt && git -c user.name=fake -c user.email=fake@t commit -q -m "fake: change"
+	git add gator.txt && git -c user.name=fake -c user.email=fake@t -c commit.gpgsign=false commit -q -m "fake: change"
 fi
 if [ -n "$FAKE_CLAUDE_CHILD" ]; then
 	sleep 300 &

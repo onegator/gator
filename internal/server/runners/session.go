@@ -319,7 +319,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
 				pj.Guide = g
 			}
-			if docs, err := s.m.process.JobContext(ctx, j.TaskID); err == nil {
+			if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
 				for _, d := range docs {
 					pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
 				}

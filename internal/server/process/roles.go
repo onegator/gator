@@ -101,7 +101,7 @@ const (
 // JobContext collects what a new job in the task's current phase should know: the latest
 // version of every artifact produced so far, and why the task was last sent back to this
 // phase. Documents are truncated so the prompt stays bounded.
-func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID) ([]ContextDoc, error) {
+func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role string) ([]ContextDoc, error) {
 	q := db.New(s.pool)
 	t, err := q.GetTask(ctx, taskID)
 	if err != nil {
@@ -140,6 +140,17 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID) ([]Context
 	if reason, err := q.LastRollbackReason(ctx, db.LastRollbackReasonParams{TaskID: taskID, ToPhase: t.Phase}); err == nil && reason != nil && *reason != "" {
 		add(ContextDoc{Kind: "rollback", Phase: t.Phase, Title: "Why this phase was sent back", Body: *reason})
 	}
+	// What the product decided about itself, for the roles that reason about direction.
+	if readsProduct(role) {
+		entries, err := q.ListApprovedProductContext(ctx, t.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			add(ContextDoc{Kind: "product", Phase: e.Kind, Title: productTitle(e), Body: e.Content})
+		}
+	}
+
 	// The working state comes first: it is the shortest route to where the task stands.
 	if ws, ok := latest["task/working_state"]; ok && ws.Content != nil {
 		add(ContextDoc{Kind: "working_state", Phase: "task", Title: fmt.Sprintf("Working state (v%d)", ws.Version), Body: *ws.Content})
@@ -177,4 +188,18 @@ func ArtifactTypeFor(role string) string {
 	default:
 		return "report"
 	}
+}
+
+// readsProduct says which roles are given the product's vision, principles and decisions.
+// A worker follows a plan; a researcher, a planner and a reviewer weigh direction.
+func readsProduct(role string) bool {
+	switch role {
+	case "researcher", "planner", "reviewer", "curator":
+		return true
+	}
+	return false
+}
+
+func productTitle(e db.ProductContext) string {
+	return fmt.Sprintf("%s: %s (v%d)", e.Kind, e.Title, e.Version)
 }

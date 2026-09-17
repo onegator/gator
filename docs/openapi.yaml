@@ -155,6 +155,34 @@ paths:
       responses:
         "200": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/InstalledPlugin" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/product:
+    get:
+      operationId: listProductContext
+      description: What this project knows about its product. Never shared with other projects.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProductEntry" } } } } }
+    post:
+      operationId: addProductEntry
+      description: Write an entry. A person's entry is approved as it is written; agents propose instead.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewProductEntry" } } }
+      responses:
+        "201": { description: written, content: { application/json: { schema: { $ref: "#/components/schemas/ProductEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /product/{entryId}:
+    post:
+      operationId: setProductEntryStatus
+      description: Approve a proposal, or archive an entry that no longer holds.
+      parameters: [ { name: entryId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProductStatusChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProductEntry" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/templates:
     get:
       operationId: listProjectTemplates
@@ -664,6 +692,31 @@ components:
         platform: { type: string }
         appVersion: { type: string }
         createdAt: { type: string, format: date-time }
+    ProductEntry:
+      type: object
+      required: [id, kind, title, content, version, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [vision, principles, persona, glossary, decision, lesson, roadmap] }
+        title: { type: string }
+        content: { type: string }
+        version: { type: integer }
+        status: { type: string, enum: [proposed, approved, archived] }
+        sourceTaskId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        approvedAt: { type: string, format: date-time }
+    NewProductEntry:
+      type: object
+      required: [kind, title, content]
+      properties:
+        kind: { type: string, enum: [vision, principles, persona, glossary, decision, lesson, roadmap] }
+        title: { type: string }
+        content: { type: string }
+    ProductStatusChange:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [approved, archived] }
     ProjectTemplate:
       type: object
       required: [kind, maxRollbacks, phases]

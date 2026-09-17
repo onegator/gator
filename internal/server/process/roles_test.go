@@ -92,7 +92,7 @@ func TestJobContextHasLatestArtifactsAndRollbackReason(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	docs, err := svc.JobContext(ctx, task.ID)
+	docs, err := svc.JobContext(ctx, task.ID, "planner")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -111,6 +111,11 @@ func (m *Manager) Prepare(ctx context.Context, job proto.Job) (*Workspace, error
 	if _, err := m.run(ctx, bare, "worktree", "add", "--quiet", "-b", br, dir, "refs/remotes/origin/"+def); err != nil {
 		return nil, fmt.Errorf("worktree: %w", err)
 	}
+	// An agent commits here. A machine that signs commits by default would make it wait on a
+	// signing agent that no runner has, so this worktree never signs.
+	if _, err := m.run(ctx, dir, "config", "commit.gpgsign", "false"); err != nil {
+		return nil, fmt.Errorf("worktree config: %w", err)
+	}
 	base, err := m.run(ctx, dir, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, err
