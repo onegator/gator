@@ -82,6 +82,44 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, e
 	return i, err
 }
 
+const listProjectMembersWithUsers = `-- name: ListProjectMembersWithUsers :many
+SELECT m.role, u.id, u.name, u.email FROM memberships m
+JOIN users u ON u.id = m.user_id
+WHERE m.project_id = $1 ORDER BY u.name
+`
+
+type ListProjectMembersWithUsersRow struct {
+	Role  string      `json:"role"`
+	ID    pgtype.UUID `json:"id"`
+	Name  string      `json:"name"`
+	Email string      `json:"email"`
+}
+
+func (q *Queries) ListProjectMembersWithUsers(ctx context.Context, projectID pgtype.UUID) ([]ListProjectMembersWithUsersRow, error) {
+	rows, err := q.db.Query(ctx, listProjectMembersWithUsers, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectMembersWithUsersRow
+	for rows.Next() {
+		var i ListProjectMembersWithUsersRow
+		if err := rows.Scan(
+			&i.Role,
+			&i.ID,
+			&i.Name,
+			&i.Email,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
 SELECT id, slug, name, tags, process_config, created_at, updated_at FROM projects ORDER BY name
 `
@@ -112,4 +150,66 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const listUsers = `-- name: ListUsers :many
+SELECT id, name, email, workspace_role, created_at FROM users ORDER BY name
+`
+
+type ListUsersRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	Name          string             `json:"name"`
+	Email         string             `json:"email"`
+	WorkspaceRole string             `json:"workspace_role"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsersRow
+	for rows.Next() {
+		var i ListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Email,
+			&i.WorkspaceRole,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateProjectConfig = `-- name: UpdateProjectConfig :one
+UPDATE projects SET process_config = $2, updated_at = now() WHERE id = $1 RETURNING id, slug, name, tags, process_config, created_at, updated_at
+`
+
+type UpdateProjectConfigParams struct {
+	ID            pgtype.UUID `json:"id"`
+	ProcessConfig []byte      `json:"process_config"`
+}
+
+func (q *Queries) UpdateProjectConfig(ctx context.Context, arg UpdateProjectConfigParams) (Project, error) {
+	row := q.db.QueryRow(ctx, updateProjectConfig, arg.ID, arg.ProcessConfig)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Tags,
+		&i.ProcessConfig,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

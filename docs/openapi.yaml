@@ -76,6 +76,12 @@ paths:
         "204": { description: forgotten }
         "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/members:
+    get:
+      operationId: listProjectMembers
+      description: Who works on this project and in which role.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectMember" } } } } }
     put:
       operationId: setMember
       description: Set a user's role in a project. Requires project admin.
@@ -242,6 +248,30 @@ paths:
         - { name: phase, in: query, required: false, schema: { type: string } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/KnowledgePreview" } } } }
+  /users:
+    get:
+      operationId: listUsers
+      description: Everyone in the workspace. Workspace admins only.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/User" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/config:
+    get:
+      operationId: getProjectConfig
+      description: "The project's process configuration: templates per kind of task, role prompts, the autopilot switch and the backend and budget policy."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectConfig" } } } }
+    put:
+      operationId: setProjectConfig
+      description: Replace the process configuration. Refused when a template or the policy would not hold. Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectConfig" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectConfig" } } } }
+        "400": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/product:
     get:
       operationId: listProductContext
@@ -840,6 +870,28 @@ components:
         title: { type: string }
         scope: { type: string }
         body: { type: string }
+    User:
+      type: object
+      required: [id, name, email, workspaceRole, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string }
+        workspaceRole: { type: string, enum: [admin, member] }
+        createdAt: { type: string, format: date-time }
+    ProjectMember:
+      type: object
+      required: [userId, name, email, role]
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [admin, member, viewer] }
+    ProjectConfig:
+      type: object
+      required: [config]
+      properties:
+        config: { type: object, additionalProperties: true, description: "process_config as stored: templates, roles, autopilot, policy" }
     ProductEntry:
       type: object
       required: [id, kind, title, content, version, status, createdAt]
