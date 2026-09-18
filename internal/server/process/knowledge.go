@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -59,6 +61,8 @@ func (s *Service) Knowledge(ctx context.Context, projectID pgtype.UUID, role, ph
 			continue
 		}
 		if !m.Applies(role, phase, project.Tags) {
+			// Silence here looks like a broken screen, so say what the pack is waiting for.
+			warnings = append(warnings, fmt.Sprintf("pack %s is on for this project but %s", row.Name, why(m, role, phase, project.Tags)))
 			continue
 		}
 		key := m.Scope + "/" + m.Name
@@ -77,4 +81,46 @@ func (s *Service) Knowledge(ctx context.Context, projectID pgtype.UUID, role, ph
 			Title: fmt.Sprintf("%s: %s (pack %s)", m.Scope, m.Name, m.Version), Body: pack.Text()})
 	}
 	return docs, warnings, nil
+}
+
+// why says which of a pack's conditions this job did not meet.
+func why(m knowledge.Manifest, role, phase string, tags []string) string {
+	var unmet []string
+	if len(m.Roles) > 0 && !slices.Contains(m.Roles, role) {
+		unmet = append(unmet, fmt.Sprintf("it is for %s, not %s", strings.Join(m.Roles, " and "), role))
+	}
+	if len(m.Phases) > 0 && !slices.Contains(m.Phases, phase) {
+		unmet = append(unmet, fmt.Sprintf("it is for %s, not %s", strings.Join(m.Phases, " and "), phaseOrAny(phase)))
+	}
+	if len(m.AppliesTo) > 0 && !overlaps(m.AppliesTo, tags) {
+		unmet = append(unmet, fmt.Sprintf("it applies to projects tagged %s, and this one is tagged %s",
+			strings.Join(m.AppliesTo, " or "), tagsOrNone(tags)))
+	}
+	if len(unmet) == 0 {
+		return "it does not apply here"
+	}
+	return strings.Join(unmet, "; ")
+}
+
+func phaseOrAny(phase string) string {
+	if phase == "" {
+		return "any phase"
+	}
+	return phase
+}
+
+func tagsOrNone(tags []string) string {
+	if len(tags) == 0 {
+		return "nothing"
+	}
+	return strings.Join(tags, ", ")
+}
+
+func overlaps(a, b []string) bool {
+	for _, x := range a {
+		if slices.Contains(b, x) {
+			return true
+		}
+	}
+	return false
 }

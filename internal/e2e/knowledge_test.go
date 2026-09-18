@@ -80,6 +80,12 @@ func TestKnowledgePacksEntriesAndOverrides(t *testing.T) {
 	if planner := strings.Join(h.jobContext(here.Id.String(), "planner"), "\n"); strings.Contains(planner, "go-service") {
 		t.Fatalf("the pack names worker and reviewer, not planner:\n%s", planner)
 	}
+	// A pack that is on but does not apply says so, rather than leaving an empty screen.
+	var plannerView gen.KnowledgePreview
+	h.do("GET", "/projects/"+here.ProjectId.String()+"/knowledge/preview?role=planner&phase=planning", nil, &plannerView)
+	if !strings.Contains(strings.Join(plannerView.Warnings, "\n"), "it is for worker and reviewer, not planner") {
+		t.Fatalf("the preview should explain the silence: %+v", plannerView.Warnings)
+	}
 	if other := strings.Join(h.jobContext(elsewhere.Id.String(), "worker"), "\n"); strings.Contains(other, "go-service") {
 		t.Fatalf("another project did not switch it on:\n%s", other)
 	}
