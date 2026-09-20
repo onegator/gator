@@ -308,3 +308,26 @@ func TestPluginTimeoutCrashAndBreaker(t *testing.T) {
 	h.configureEcho(p.id, map[string]any{"greeting": "hi"})
 	h.waitEcho(p.id, func(v gen.ProjectPlugin) bool { return v.Enabled && v.Running && v.DisabledReason == nil })
 }
+
+// The breaker must not depend on landing exactly on its threshold. Hooks run concurrently, so
+// two failures can arrive at once and step over it; a plugin failing every call would then
+// keep failing forever with nobody told.
+func TestTheBreakerFiresEvenWhenFailuresArriveTogether(t *testing.T) {
+	h := newHarness(t)
+	p := h.echoProject(map[string]any{"greeting": "hi"})
+
+	var wg sync.WaitGroup
+	for n := range 6 {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			h.hook(p.slug, fmt.Sprintf("burst%d", n), jsonBody(map[string]any{"fail": true}), nil)
+		}(n)
+	}
+	wg.Wait()
+
+	v := h.waitEcho(p.id, func(v gen.ProjectPlugin) bool { return !v.Enabled })
+	if v.DisabledReason == nil || !strings.Contains(*v.DisabledReason, "failed calls in a row") {
+		t.Fatalf("a burst of failures should disable the plugin with a reason: %+v", v)
+	}
+}

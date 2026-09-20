@@ -296,10 +296,12 @@ type instance struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	mu         sync.Mutex
-	conn       *plugin.Conn
-	ready      chan struct{} // closed while conn is set
-	failures   int
+	mu       sync.Mutex
+	conn     *plugin.Conn
+	ready    chan struct{} // closed while conn is set
+	failures int
+	// breaking stops a burst of concurrent failures from disabling the plugin repeatedly.
+	breaking   bool
 	secretVals []string
 }
 
@@ -551,12 +553,19 @@ func (i *instance) outcome(err error) {
 	switch {
 	case err == nil:
 		i.failures = 0
+		i.breaking = false
 	case counts:
 		i.failures++
 	}
 	n := i.failures
+	// Hooks run concurrently, so two failures can land at once and step over an exact
+	// threshold. Fire at or past it, and only once per run of failures.
+	trip := counts && n >= i.h.cfg.BreakerThreshold && !i.breaking
+	if trip {
+		i.breaking = true
+	}
 	i.mu.Unlock()
-	if counts && n == i.h.cfg.BreakerThreshold {
+	if trip {
 		go i.h.disable(i, fmt.Sprintf("disabled after %d failed calls in a row; last: %v", n, err))
 	}
 }
