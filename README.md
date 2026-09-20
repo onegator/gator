@@ -10,21 +10,13 @@ and the Go SDK are in gator's `docs/plugins.md` and `plugin/` package.
 
 ## Develop
 
-The SDK lives in the private `onegator/gator` module, so tell Go and git about it once:
-
-```sh
-go env -w GOPRIVATE=github.com/onegator/*
-```
-
-Then:
+The SDK is the `plugin/` package of [onegator/gator](https://github.com/onegator/gator), a
+public module, so `go mod download` needs nothing special.
 
 ```sh
 make test   # unit and scenario tests, with a fake GitHub API
 make dev    # play each plugin's scenarios/*.json against an in-memory core
 ```
-
-CI needs a `GATOR_READ_TOKEN` repository secret: a fine-grained token with Contents: read
-on `onegator/gator`.
 
 ## Install on a server
 
