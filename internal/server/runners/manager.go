@@ -43,6 +43,10 @@ type Config struct {
 	StallAfter      time.Duration // running job with no events for this long becomes stalled
 	SweepEvery      time.Duration
 	RegisterTimeout time.Duration
+	// UnassignableAfter is how long a queued job may wait with no runner able to take it
+	// before it is called out. Long enough to ride out a runner restart, short enough that
+	// nobody watches a dead queue for an afternoon.
+	UnassignableAfter time.Duration
 	// Autopilot queues a job whenever a task enters a runner-owned phase. Off in the zero
 	// value so tests opt in; gator-server turns it on unless GATOR_AUTOPILOT=0.
 	Autopilot      bool
@@ -71,6 +75,9 @@ func (c *Config) defaults() {
 	}
 	if c.RegisterTimeout == 0 {
 		c.RegisterTimeout = 10 * time.Second
+	}
+	if c.UnassignableAfter == 0 {
+		c.UnassignableAfter = 2 * time.Minute
 	}
 	if c.DefaultBackend == "" {
 		c.DefaultBackend = "claude"
@@ -415,7 +422,7 @@ func (m *Manager) Offer() {
 
 // SweepResult counts what one sweep changed.
 type SweepResult struct {
-	Offline, Requeued, Failed, Stalled int
+	Offline, Requeued, Failed, Stalled, Unassignable int
 }
 
 // Sweep marks silent runners offline, returns expired leases to the queue (or fails them
@@ -466,6 +473,23 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepResult, error)
 				return err
 			}
 			return emit(ctx, q, "task.job_stalled", "task", j.TaskID, map[string]any{"job_id": uuidString(j.ID)})
+		})
+	}
+	// A job no runner can take used to wait in silence: the inbox hides tasks whose job is
+	// queued, on the grounds that an agent is on it. Nobody is.
+	orphans, err := q.MarkUnassignableJobs(ctx, ts(now.Add(-m.cfg.UnassignableAfter)))
+	if err != nil {
+		return res, err
+	}
+	for _, j := range orphans {
+		res.Unassignable++
+		_ = m.tx(ctx, func(q *db.Queries) error {
+			if err := emit(ctx, q, "job.no_runner", "job", j.ID, map[string]any{
+				"task_id": uuidString(j.TaskID), "backend": j.Backend}); err != nil {
+				return err
+			}
+			return emit(ctx, q, "task.job_no_runner", "task", j.TaskID, map[string]any{
+				"job_id": uuidString(j.ID), "backend": j.Backend})
 		})
 	}
 	if res.Requeued > 0 {

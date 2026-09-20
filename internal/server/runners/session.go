@@ -126,7 +126,7 @@ func (m *Manager) serve(parent context.Context, c *websocket.Conn, p auth.Princi
 	runnersOnline(context.Background(), -1)
 	if m.dropSession(s) {
 		bg := context.Background()
-		_ = db.New(m.pool).SetRunnerStatus(bg, db.SetRunnerStatusParams{ID: row.ID, Status: "offline"})
+		_ = db.New(m.pool).SetRunnerStatus(bg, db.SetRunnerStatusParams{ID: row.ID, Status: "offline", Reason: "disconnected"})
 		_ = m.tx(bg, func(q *db.Queries) error {
 			return emit(bg, q, "runner.offline", "runner", row.ID, map[string]any{"name": reg.Name, "reason": "disconnected"})
 		})

@@ -25,7 +25,7 @@ func (q *Queries) CountActiveJobsForRunner(ctx context.Context, runnerID pgtype.
 const createJob = `-- name: CreateJob :one
 INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since
 `
 
 type CreateJobParams struct {
@@ -81,6 +81,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.FinishedAt,
 		&i.UpdatedAt,
 		&i.Model,
+		&i.UnassignableSince,
 	)
 	return i, err
 }
@@ -129,7 +130,7 @@ func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) error {
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model FROM jobs WHERE id = $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since FROM jobs WHERE id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -159,12 +160,13 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 		&i.FinishedAt,
 		&i.UpdatedAt,
 		&i.Model,
+		&i.UnassignableSince,
 	)
 	return i, err
 }
 
 const getJobForUpdate = `-- name: GetJobForUpdate :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model FROM jobs WHERE id = $1 FOR UPDATE
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since FROM jobs WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -194,12 +196,13 @@ func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, err
 		&i.FinishedAt,
 		&i.UpdatedAt,
 		&i.Model,
+		&i.UnassignableSince,
 	)
 	return i, err
 }
 
 const getRunner = `-- name: GetRunner :one
-SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at FROM runners WHERE id = $1
+SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since FROM runners WHERE id = $1
 `
 
 func (q *Queries) GetRunner(ctx context.Context, id pgtype.UUID) (Runner, error) {
@@ -219,6 +222,8 @@ func (q *Queries) GetRunner(ctx context.Context, id pgtype.UUID) (Runner, error)
 		&i.LastHeartbeatAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OfflineReason,
+		&i.OfflineSince,
 	)
 	return i, err
 }
@@ -277,7 +282,7 @@ func (q *Queries) InsertReceipt(ctx context.Context, arg InsertReceiptParams) er
 const leaseJobs = `-- name: LeaseJobs :many
 UPDATE jobs
 SET status = 'leased', runner_id = $1, lease_expires_at = $2,
-    attempts = attempts + 1, updated_at = now()
+    attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
 WHERE id IN (
     SELECT j.id FROM jobs j
     WHERE j.status = 'queued'
@@ -287,7 +292,7 @@ WHERE id IN (
     LIMIT $5
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since
 `
 
 type LeaseJobsParams struct {
@@ -339,6 +344,7 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 			&i.FinishedAt,
 			&i.UpdatedAt,
 			&i.Model,
+			&i.UnassignableSince,
 		); err != nil {
 			return nil, err
 		}
@@ -388,7 +394,7 @@ func (q *Queries) ListJobEvents(ctx context.Context, arg ListJobEventsParams) ([
 }
 
 const listJobsByTask = `-- name: ListJobsByTask :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model FROM jobs WHERE task_id = $1 ORDER BY created_at
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since FROM jobs WHERE task_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
@@ -424,6 +430,7 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 			&i.FinishedAt,
 			&i.UpdatedAt,
 			&i.Model,
+			&i.UnassignableSince,
 		); err != nil {
 			return nil, err
 		}
@@ -436,7 +443,7 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 }
 
 const listRunners = `-- name: ListRunners :many
-SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at FROM runners ORDER BY name
+SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since FROM runners ORDER BY name
 `
 
 func (q *Queries) ListRunners(ctx context.Context) ([]Runner, error) {
@@ -462,10 +469,39 @@ func (q *Queries) ListRunners(ctx context.Context) ([]Runner, error) {
 			&i.LastHeartbeatAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OfflineReason,
+			&i.OfflineSince,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnassignableTaskIDs = `-- name: ListUnassignableTaskIDs :many
+SELECT DISTINCT j.task_id FROM jobs j
+JOIN tasks t ON t.id = j.task_id AND t.phase = j.phase
+WHERE j.status = 'queued' AND j.unassignable_since IS NOT NULL AND t.closed_at IS NULL
+`
+
+// Tasks whose current phase has a job nobody can take, for the inbox.
+func (q *Queries) ListUnassignableTaskIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listUnassignableTaskIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var task_id pgtype.UUID
+		if err := rows.Scan(&task_id); err != nil {
+			return nil, err
+		}
+		items = append(items, task_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -487,7 +523,7 @@ const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
 SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
 WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since
 `
 
 type MarkJobActiveParams struct {
@@ -523,12 +559,14 @@ func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (J
 		&i.FinishedAt,
 		&i.UpdatedAt,
 		&i.Model,
+		&i.UnassignableSince,
 	)
 	return i, err
 }
 
 const markSilentRunnersOffline = `-- name: MarkSilentRunnersOffline :many
-UPDATE runners SET status = 'offline', updated_at = now()
+UPDATE runners SET status = 'offline', updated_at = now(),
+    offline_reason = 'no heartbeat', offline_since = now()
 WHERE status <> 'offline' AND last_heartbeat_at < $1
 RETURNING id, name
 `
@@ -579,6 +617,60 @@ func (q *Queries) MarkStalledJobs(ctx context.Context, before pgtype.Timestamptz
 	for rows.Next() {
 		var i MarkStalledJobsRow
 		if err := rows.Scan(&i.ID, &i.TaskID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markUnassignableJobs = `-- name: MarkUnassignableJobs :many
+UPDATE jobs SET unassignable_since = now(), updated_at = now()
+WHERE id IN (
+    SELECT j.id FROM jobs j
+    WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < $1
+      AND NOT EXISTS (
+          SELECT 1 FROM runners r
+          WHERE r.status <> 'offline'
+            AND r.capabilities->'backends' @> to_jsonb(j.backend)
+            AND (COALESCE(jsonb_array_length(r.capabilities->'projects'), 0) = 0
+                 OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
+            AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+      )
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, task_id, project_id, backend
+`
+
+type MarkUnassignableJobsRow struct {
+	ID        pgtype.UUID `json:"id"`
+	TaskID    pgtype.UUID `json:"task_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+	Backend   string      `json:"backend"`
+}
+
+// A queued job no connected runner can take. Matching mirrors LeaseJobs and the session's own
+// filter: the backend must be offered, the project allowed, and the backend's login must work,
+// because a runner with an expired login is online and still takes nothing. Jobs already marked
+// are skipped, so the event fires once per episode rather than on every sweep.
+func (q *Queries) MarkUnassignableJobs(ctx context.Context, before pgtype.Timestamptz) ([]MarkUnassignableJobsRow, error) {
+	rows, err := q.db.Query(ctx, markUnassignableJobs, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MarkUnassignableJobsRow
+	for rows.Next() {
+		var i MarkUnassignableJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.ProjectID,
+			&i.Backend,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -643,16 +735,20 @@ func (q *Queries) RunnerHeartbeat(ctx context.Context, arg RunnerHeartbeatParams
 }
 
 const setRunnerStatus = `-- name: SetRunnerStatus :exec
-UPDATE runners SET status = $2, updated_at = now() WHERE id = $1
+UPDATE runners SET status = $1, updated_at = now(),
+    offline_reason = CASE WHEN $1::text = 'offline' THEN $2::text ELSE '' END,
+    offline_since = CASE WHEN $1::text = 'offline' THEN now() ELSE NULL END
+WHERE id = $3
 `
 
 type SetRunnerStatusParams struct {
-	ID     pgtype.UUID `json:"id"`
 	Status string      `json:"status"`
+	Reason string      `json:"reason"`
+	ID     pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) SetRunnerStatus(ctx context.Context, arg SetRunnerStatusParams) error {
-	_, err := q.db.Exec(ctx, setRunnerStatus, arg.ID, arg.Status)
+	_, err := q.db.Exec(ctx, setRunnerStatus, arg.Status, arg.Reason, arg.ID)
 	return err
 }
 
@@ -680,8 +776,9 @@ VALUES ($1, $2, $3, 'online', $4, $5, $6, now(), now())
 ON CONFLICT (token_id) DO UPDATE
 SET name = EXCLUDED.name, location = EXCLUDED.location, status = 'online',
     capabilities = EXCLUDED.capabilities, protocol_version = EXCLUDED.protocol_version,
-    binary_version = EXCLUDED.binary_version, connected_at = now(), last_heartbeat_at = now(), updated_at = now()
-RETURNING id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at
+    binary_version = EXCLUDED.binary_version, connected_at = now(), last_heartbeat_at = now(), updated_at = now(),
+    offline_reason = '', offline_since = NULL
+RETURNING id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since
 `
 
 type UpsertRunnerParams struct {
@@ -717,6 +814,8 @@ func (q *Queries) UpsertRunner(ctx context.Context, arg UpsertRunnerParams) (Run
 		&i.LastHeartbeatAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OfflineReason,
+		&i.OfflineSince,
 	)
 	return i, err
 }

@@ -20,6 +20,7 @@ const (
 	ReasonRequirementsChanged DecisionReason = "requirements_changed"
 	ReasonIdea                DecisionReason = "idea"
 	ReasonJobFailed           DecisionReason = "job_failed"
+	ReasonNoRunner            DecisionReason = "no_runner"
 )
 
 // Decision is one inbox row: a task that needs a human now.
@@ -66,6 +67,14 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 	for _, j := range jobRows {
 		jobStatus[j.TaskID.Bytes] = j.Status
 	}
+	orphanRows, err := q.ListUnassignableTaskIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	orphaned := map[[16]byte]bool{}
+	for _, id := range orphanRows {
+		orphaned[id.Bytes] = true
+	}
 	machines := map[string]*Machine{}
 	var out []Decision
 	for _, r := range rows {
@@ -85,7 +94,7 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 		if err != nil {
 			continue // phase deactivated by config change; surfaced elsewhere
 		}
-		reason, ok := decisionReason(r.Task, r.Gate, p, jobStatus[r.Task.ID.Bytes])
+		reason, ok := decisionReason(r.Task, r.Gate, p, jobStatus[r.Task.ID.Bytes], orphaned[r.Task.ID.Bytes])
 		if !ok {
 			continue
 		}
@@ -100,12 +109,16 @@ func ownedBy(t db.Task, userID pgtype.UUID) bool {
 	return t.OwnerKind != nil && *t.OwnerKind == string(ActorUser) && t.OwnerID == userID
 }
 
-func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string) (DecisionReason, bool) {
+func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignable bool) (DecisionReason, bool) {
 	switch {
 	case t.BlockedReason != nil:
 		return ReasonBlocked, true
 	case t.RequirementsChanged:
 		return ReasonRequirementsChanged, true
+	case unassignable:
+		// The job is queued, so the case below would call this premature — but no runner can
+		// take it, and waiting for an agent that cannot come is how a task waits forever.
+		return ReasonNoRunner, true
 	case jobStatus == "queued" || jobStatus == "leased" || jobStatus == "running" || jobStatus == "stalled":
 		return "", false // an agent is on it; asking a person now would be premature
 	case jobStatus == "failed" || jobStatus == "stopped":

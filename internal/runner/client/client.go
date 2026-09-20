@@ -180,6 +180,11 @@ func (c *Client) persistLocked() {
 // ErrFatal is returned when the server refuses the runner for good (bad token, protocol).
 var ErrFatal = errors.New("server refused the runner")
 
+// errWrongAddress marks a server URL that answers but has no runner endpoint — the wrong port,
+// or a proxy that forwards only some paths. Worth saying out loud: the reconnect loop otherwise
+// looks exactly like a flaky network, and the jobs queue up in silence.
+var errWrongAddress = errors.New("wrong server address")
+
 // Run keeps a connection alive until ctx is done. It returns ErrFatal-wrapped errors when
 // retrying cannot help.
 func (c *Client) Run(ctx context.Context) error {
@@ -196,7 +201,12 @@ func (c *Client) Run(ctx context.Context) error {
 		if registered {
 			backoff = c.cfg.MinBackoff
 		}
-		c.log.Warn("runner connection lost; reconnecting", "err", err, "in", backoff)
+		if errors.Is(err, errWrongAddress) {
+			c.log.Error("the server URL has no runner endpoint; check GATOR_RUNNER_SERVER_URL names the port that serves the API",
+				"url", c.cfg.ServerURL, "err", err, "retry_in", backoff)
+		} else {
+			c.log.Warn("runner connection lost; reconnecting", "err", err, "in", backoff)
+		}
 		sleep := backoff + time.Duration(rand.Int64N(int64(backoff/2)+1))
 		select {
 		case <-ctx.Done():
@@ -243,6 +253,12 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 	if err != nil {
 		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 			return false, fmt.Errorf("%w: %s", ErrFatal, resp.Status)
+		}
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			// Retrying will not fix an address that serves something else, and a runner that
+			// only ever says "connection lost" hides it. Not fatal: a server mid-deploy, or
+			// behind a proxy being reconfigured, answers 404 for a moment too.
+			return false, fmt.Errorf("%w: %s answers 404", errWrongAddress, wsURL)
 		}
 		return false, err
 	}

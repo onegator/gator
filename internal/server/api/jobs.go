@@ -232,6 +232,13 @@ func toRunner(r db.Runner, connected bool) gen.RunnerInfo {
 		v := r.LastHeartbeatAt.Time
 		out.LastHeartbeatAt = &v
 	}
+	if r.OfflineSince.Valid {
+		v := r.OfflineSince.Time
+		out.OfflineSince = &v
+	}
+	if r.OfflineReason != "" {
+		out.OfflineReason = &r.OfflineReason
+	}
 	return out
 }
 

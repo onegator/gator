@@ -71,7 +71,8 @@ func New(pool *pgxpool.Pool, proc *process.Service, sender Sender, hub *events.H
 }
 
 // watched are the events worth a notification.
-var watched = []string{"task.phase_changed", "gate.blocked", "task.requirements_changed", "job.finished"}
+var watched = []string{"task.phase_changed", "gate.blocked", "task.requirements_changed", "job.finished",
+	"job.no_runner", "runner.offline"}
 
 // Run delivers notifications until ctx ends.
 func (n *Notifier) Run(ctx context.Context) {
@@ -120,6 +121,9 @@ func (n *Notifier) drain(ctx context.Context) {
 
 func (n *Notifier) handle(ctx context.Context, row db.EventsAfterRow) error {
 	q := db.New(n.pool)
+	if row.Aggregate == "runner" {
+		return n.handleRunner(ctx, row)
+	}
 	taskID := row.AggregateID
 	if row.Aggregate == "job" {
 		job, err := q.GetJob(ctx, row.AggregateID)
@@ -146,9 +150,15 @@ func (n *Notifier) handle(ctx context.Context, row db.EventsAfterRow) error {
 	if err != nil {
 		return err
 	}
+	return n.deliver(ctx, users, message)
+}
+
+// deliver pushes one message to every device of these people.
+func (n *Notifier) deliver(ctx context.Context, users []pgtype.UUID, message Message) error {
 	if len(users) == 0 {
 		return nil
 	}
+	q := db.New(n.pool)
 	devices, err := q.ListDevicesForUsers(ctx, users)
 	if err != nil {
 		return err
@@ -167,12 +177,37 @@ func (n *Notifier) handle(ctx context.Context, row db.EventsAfterRow) error {
 	return nil
 }
 
+// handleRunner tells the workspace admins that a runner stopped answering. Only the sweeper's
+// silence counts: a disconnect is normal — a deploy, a lid closing — and the runner reconnects
+// within seconds, whereas no heartbeat for OfflineAfter means nothing is picking work up.
+func (n *Notifier) handleRunner(ctx context.Context, row db.EventsAfterRow) error {
+	var payload struct {
+		Name   string `json:"name"`
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(row.Payload, &payload)
+	if payload.Reason != "no heartbeat" {
+		return nil
+	}
+	q := db.New(n.pool)
+	admins, err := q.ListWorkspaceAdminIDs(ctx)
+	if err != nil || len(admins) == 0 {
+		return err
+	}
+	return n.deliver(ctx, admins, Message{
+		Title: "Runner " + payload.Name + " went quiet",
+		Body:  "It stopped answering, so queued jobs wait until it is back.",
+		Link:  "gator://runners",
+	})
+}
+
 // message says what happened, or reports that this event needs no person.
 func (n *Notifier) message(ctx context.Context, row db.EventsAfterRow, task db.Task) (Message, bool, error) {
 	var payload struct {
 		To       string `json:"to"`
 		Rollback bool   `json:"rollback"`
 		Reason   string `json:"reason"`
+		Backend  string `json:"backend"`
 	}
 	_ = json.Unmarshal(row.Payload, &payload)
 	m := Message{Title: task.Title, Link: "gator://tasks/" + uuidString(task.ID)}
@@ -183,6 +218,8 @@ func (n *Notifier) message(ctx context.Context, row db.EventsAfterRow, task db.T
 		m.Body = "Requirements changed; the phase needs approving again"
 	case "job.finished":
 		m.Body = "A job stopped without finishing"
+	case "job.no_runner":
+		m.Body = "No runner can take this job: none is online with " + payload.Backend + " ready"
 	case "task.phase_changed":
 		detail, err := n.process.Detail(ctx, task.ID)
 		if err != nil {

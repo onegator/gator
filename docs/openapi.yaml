@@ -645,6 +645,8 @@ components:
         protocolVersion: { type: integer }
         binaryVersion: { type: string }
         lastHeartbeatAt: { type: string, format: date-time }
+        offlineSince: { type: string, format: date-time, description: "when it stopped answering; absent while it is connected" }
+        offlineReason: { type: string, description: "disconnected, or no heartbeat" }
     UsageInput:
       type: object
       required: [durationMs]
@@ -1075,7 +1077,7 @@ components:
       properties:
         task: { $ref: "#/components/schemas/Task" }
         waitingSince: { type: string, format: date-time }
-        reason: { type: string, enum: [approval, blocked, requirements_changed, idea, job_failed] }
+        reason: { type: string, enum: [approval, blocked, requirements_changed, idea, job_failed, no_runner] }
         rollbacks: { type: integer, description: times this task was sent back into its current phase }
     Reason:
       type: object

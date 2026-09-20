@@ -84,29 +84,30 @@ type Gate struct {
 }
 
 type Job struct {
-	ID             pgtype.UUID        `json:"id"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	ProjectID      pgtype.UUID        `json:"project_id"`
-	Phase          string             `json:"phase"`
-	Role           string             `json:"role"`
-	Backend        string             `json:"backend"`
-	Instruction    string             `json:"instruction"`
-	Status         string             `json:"status"`
-	RunnerID       pgtype.UUID        `json:"runner_id"`
-	Attempts       int32              `json:"attempts"`
-	MaxAttempts    int32              `json:"max_attempts"`
-	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
-	LastEventAt    pgtype.Timestamptz `json:"last_event_at"`
-	Bounds         []byte             `json:"bounds"`
-	Receipt        []byte             `json:"receipt"`
-	StopReason     *string            `json:"stop_reason"`
-	CreatedByKind  string             `json:"created_by_kind"`
-	CreatedBy      pgtype.UUID        `json:"created_by"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	Model          string             `json:"model"`
+	ID                pgtype.UUID        `json:"id"`
+	TaskID            pgtype.UUID        `json:"task_id"`
+	ProjectID         pgtype.UUID        `json:"project_id"`
+	Phase             string             `json:"phase"`
+	Role              string             `json:"role"`
+	Backend           string             `json:"backend"`
+	Instruction       string             `json:"instruction"`
+	Status            string             `json:"status"`
+	RunnerID          pgtype.UUID        `json:"runner_id"`
+	Attempts          int32              `json:"attempts"`
+	MaxAttempts       int32              `json:"max_attempts"`
+	LeaseExpiresAt    pgtype.Timestamptz `json:"lease_expires_at"`
+	LastEventAt       pgtype.Timestamptz `json:"last_event_at"`
+	Bounds            []byte             `json:"bounds"`
+	Receipt           []byte             `json:"receipt"`
+	StopReason        *string            `json:"stop_reason"`
+	CreatedByKind     string             `json:"created_by_kind"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	Model             string             `json:"model"`
+	UnassignableSince pgtype.Timestamptz `json:"unassignable_since"`
 }
 
 type JobEvent struct {
@@ -268,6 +269,8 @@ type Runner struct {
 	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	OfflineReason   string             `json:"offline_reason"`
+	OfflineSince    pgtype.Timestamptz `json:"offline_since"`
 }
 
 type Task struct {

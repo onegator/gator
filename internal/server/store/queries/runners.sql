@@ -4,17 +4,22 @@ VALUES ($1, $2, $3, 'online', $4, $5, $6, now(), now())
 ON CONFLICT (token_id) DO UPDATE
 SET name = EXCLUDED.name, location = EXCLUDED.location, status = 'online',
     capabilities = EXCLUDED.capabilities, protocol_version = EXCLUDED.protocol_version,
-    binary_version = EXCLUDED.binary_version, connected_at = now(), last_heartbeat_at = now(), updated_at = now()
+    binary_version = EXCLUDED.binary_version, connected_at = now(), last_heartbeat_at = now(), updated_at = now(),
+    offline_reason = '', offline_since = NULL
 RETURNING *;
 
 -- name: RunnerHeartbeat :exec
 UPDATE runners SET last_heartbeat_at = now(), auth_state = $2, status = $3, updated_at = now() WHERE id = $1;
 
 -- name: SetRunnerStatus :exec
-UPDATE runners SET status = $2, updated_at = now() WHERE id = $1;
+UPDATE runners SET status = sqlc.arg(status), updated_at = now(),
+    offline_reason = CASE WHEN sqlc.arg(status)::text = 'offline' THEN sqlc.arg(reason)::text ELSE '' END,
+    offline_since = CASE WHEN sqlc.arg(status)::text = 'offline' THEN now() ELSE NULL END
+WHERE id = sqlc.arg(id);
 
 -- name: MarkSilentRunnersOffline :many
-UPDATE runners SET status = 'offline', updated_at = now()
+UPDATE runners SET status = 'offline', updated_at = now(),
+    offline_reason = 'no heartbeat', offline_since = now()
 WHERE status <> 'offline' AND last_heartbeat_at < sqlc.arg(before)
 RETURNING id, name;
 
@@ -43,7 +48,7 @@ SELECT * FROM jobs WHERE task_id = $1 ORDER BY created_at;
 -- disjoint jobs without waiting on each other.
 UPDATE jobs
 SET status = 'leased', runner_id = sqlc.arg(runner_id), lease_expires_at = sqlc.arg(lease_until),
-    attempts = attempts + 1, updated_at = now()
+    attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
 WHERE id IN (
     SELECT j.id FROM jobs j
     WHERE j.status = 'queued'
@@ -89,6 +94,33 @@ SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
     lease_expires_at = NULL, updated_at = now()
 WHERE status IN ('leased', 'running', 'stalled') AND lease_expires_at < sqlc.arg(now)
 RETURNING id, task_id, status;
+
+-- name: MarkUnassignableJobs :many
+-- A queued job no connected runner can take. Matching mirrors LeaseJobs and the session's own
+-- filter: the backend must be offered, the project allowed, and the backend's login must work,
+-- because a runner with an expired login is online and still takes nothing. Jobs already marked
+-- are skipped, so the event fires once per episode rather than on every sweep.
+UPDATE jobs SET unassignable_since = now(), updated_at = now()
+WHERE id IN (
+    SELECT j.id FROM jobs j
+    WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < sqlc.arg(before)
+      AND NOT EXISTS (
+          SELECT 1 FROM runners r
+          WHERE r.status <> 'offline'
+            AND r.capabilities->'backends' @> to_jsonb(j.backend)
+            AND (COALESCE(jsonb_array_length(r.capabilities->'projects'), 0) = 0
+                 OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
+            AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+      )
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, task_id, project_id, backend;
+
+-- name: ListUnassignableTaskIDs :many
+-- Tasks whose current phase has a job nobody can take, for the inbox.
+SELECT DISTINCT j.task_id FROM jobs j
+JOIN tasks t ON t.id = j.task_id AND t.phase = j.phase
+WHERE j.status = 'queued' AND j.unassignable_since IS NOT NULL AND t.closed_at IS NULL;
 
 -- name: MarkStalledJobs :many
 UPDATE jobs SET status = 'stalled', updated_at = now()
