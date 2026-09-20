@@ -151,6 +151,22 @@ phase. A job that ends `done` leaves the document its role produces (brief, plan
 review) as a new artifact version; approving the phase approves its artifacts. While a job is
 queued or running, the task does not ask anyone for a decision.
 
+## The component catalogue
+
+A project lists what it is made of: components with a key, a kind (`app`, `api`, `lib`,
+`infra`), the repository and path they live in, an owner, a line about what they do, and what
+they depend on. `PUT /api/v1/projects/{id}/components` writes one; `PUT /api/v1/tasks/{id}/component`
+says which part of the product a task is about.
+
+A job whose task names a component gets that component, what it depends on, **what depends on
+it** — the neighbours a change reaches — and the decisions linked to it from the project's
+product context. The slice, not the catalogue: a worker fixing login gains nothing from the
+shape of billing, and every extra document is budget spent on noise. A task with no component
+gets nothing, so the catalogue costs a project nothing until it uses it.
+
+Jobs record `context_bytes` and `context_docs` as they are leased, so whether the pack saves
+tokens is a measurement rather than a claim.
+
 ## Digest and working state
 
 Every job prompt asks the agent to end with a fenced `gator-digest` block of JSON: what it
