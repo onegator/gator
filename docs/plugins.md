@@ -238,5 +238,5 @@ A scenario seeds a project and calls hooks in order:
 Go plugins can use the same machinery in their own tests: `plugintest.NewCore`,
 `plugintest.Start` and `plugintest.Run` in `github.com/onegator/gator/plugin/plugintest`.
 
-While `onegator/gator` is private, a separate plugin repository needs `GOPRIVATE=github.com/onegator/*`
-and a token that can read it, both locally and in CI.
+`onegator/gator` is a public module, so a plugin in its own repository fetches the SDK with
+nothing special: no GOPRIVATE, no token, locally or in CI.
