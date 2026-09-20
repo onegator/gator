@@ -293,6 +293,22 @@ paths:
       responses:
         "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectConfig" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /workspace/process:
+    get:
+      operationId: getWorkspaceProcess
+      description: "The process this workspace has decided for every project in it. A project's own process_config still wins; without one, this is what applies."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectConfig" } } } }
+    put:
+      operationId: setWorkspaceProcess
+      description: Replace the workspace process. Refused when a template would not hold. Workspace admins only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectConfig" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectConfig" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/product:
     get:
       operationId: listProductContext
@@ -1245,6 +1261,7 @@ components:
         kind: { type: string }
         maxRollbacks: { type: integer }
         phases: { type: array, items: { $ref: "#/components/schemas/TemplatePhase" } }
+        source: { type: string, enum: [project, workspace, default], description: "where the process in force comes from" }
     TemplatePhase:
       type: object
       required: [name, owner, gate, active]

@@ -24,11 +24,23 @@ type TemplateView struct {
 	Kind         string
 	MaxRollbacks int
 	Phases       []PhaseView
+	// Source says whether this process comes from the project, the workspace or the defaults.
+	// Without it nobody can tell what a project override would be replacing.
+	Source string
+}
+
+// sourcedResolver is a TemplateResolver that can also say where each template came from.
+type sourcedResolver interface {
+	CatalogWithSources(ctx context.Context, projectID pgtype.UUID) (Catalog, map[string]TemplateSource, error)
 }
 
 // Templates returns the project's process per kind of task, in phase order.
 func (s *Service) Templates(ctx context.Context, projectID pgtype.UUID) ([]TemplateView, error) {
+	var sources map[string]TemplateSource
 	catalog, err := s.templates.Catalog(ctx, projectID)
+	if sr, ok := s.templates.(sourcedResolver); ok {
+		catalog, sources, err = sr.CatalogWithSources(ctx, projectID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +60,11 @@ func (s *Service) Templates(ctx context.Context, projectID pgtype.UUID) ([]Templ
 	out := make([]TemplateView, 0, len(kinds))
 	for _, kind := range kinds {
 		t := catalog[kind]
-		view := TemplateView{Kind: kind, MaxRollbacks: t.MaxRollbacks}
+		source := sources[kind]
+		if source == "" {
+			source = SourceDefault
+		}
+		view := TemplateView{Kind: kind, MaxRollbacks: t.MaxRollbacks, Source: string(source)}
 		for _, p := range t.Phases {
 			view.Phases = append(view.Phases, PhaseView{
 				Name: p.Name, Owner: string(p.Owner), Role: p.Role, Gate: string(p.Gate),

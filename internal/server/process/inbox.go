@@ -191,8 +191,10 @@ func (s *Service) Tasks(ctx context.Context, projectID pgtype.UUID) ([]db.Task, 
 	return db.New(s.pool).ListOpenTasksByProject(ctx, projectID)
 }
 
-// DBTemplates resolves templates from defaults plus the project's process_config.
-// process_config shape: {"templates": {"<kind>": <Template>}}.
+// DBTemplates resolves templates in the order a person would expect: the project's own
+// overrides, then the workspace's, then the defaults in the binary. The middle step is what
+// lets a team have one way of working without pasting it into every project.
+// process_config shape, in both places: {"templates": {"<kind>": <Template>}}.
 type DBTemplates struct {
 	Pool     *pgxpool.Pool
 	Defaults Catalog
@@ -200,23 +202,72 @@ type DBTemplates struct {
 
 // Catalog implements TemplateResolver.
 func (d DBTemplates) Catalog(ctx context.Context, projectID pgtype.UUID) (Catalog, error) {
-	p, err := db.New(d.Pool).GetProject(ctx, projectID)
+	catalog, _, err := d.catalogWithSources(ctx, projectID)
+	return catalog, err
+}
+
+// TemplateSource says where the template in force for a kind came from, so the screen that
+// shows a process can say what it is that a project would be overriding.
+type TemplateSource string
+
+const (
+	SourceProject   TemplateSource = "project"
+	SourceWorkspace TemplateSource = "workspace"
+	SourceDefault   TemplateSource = "default"
+)
+
+// CatalogWithSources is Catalog plus where each kind's template came from.
+func (d DBTemplates) CatalogWithSources(ctx context.Context, projectID pgtype.UUID) (Catalog, map[string]TemplateSource, error) {
+	return d.catalogWithSources(ctx, projectID)
+}
+
+func (d DBTemplates) catalogWithSources(ctx context.Context, projectID pgtype.UUID) (Catalog, map[string]TemplateSource, error) {
+	q := db.New(d.Pool)
+	p, err := q.GetProject(ctx, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("project: %w", err)
+		return nil, nil, fmt.Errorf("project: %w", err)
 	}
-	cfg, err := ParseProjectConfig(p.ProcessConfig)
+	ws, err := q.GetWorkspaceSettings(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("workspace settings: %w", err)
+	}
+	sources := map[string]TemplateSource{}
+	for kind := range d.Defaults {
+		sources[kind] = SourceDefault
+	}
+	workspaceOverrides, err := templateOverrides(ws.ProcessConfig, "workspace process")
+	if err != nil {
+		return nil, nil, err
+	}
+	for kind := range workspaceOverrides {
+		sources[kind] = SourceWorkspace
+	}
+	projectOverrides, err := templateOverrides(p.ProcessConfig, "process_config")
+	if err != nil {
+		return nil, nil, err
+	}
+	for kind := range projectOverrides {
+		sources[kind] = SourceProject
+	}
+	return d.Defaults.Override(workspaceOverrides).Override(projectOverrides), sources, nil
+}
+
+// templateOverrides reads the templates out of one process_config document. An invalid template
+// is refused here rather than at the moment a task tries to use it.
+func templateOverrides(raw []byte, where string) (Catalog, error) {
+	cfg, err := ParseProjectConfig(raw)
 	if err != nil {
 		return nil, err
 	}
-	overrides := Catalog{}
+	out := Catalog{}
 	for k, t := range cfg.Templates {
 		if t.Kind == "" {
 			t.Kind = k
 		}
 		if err := t.Validate(); err != nil {
-			return nil, fmt.Errorf("process_config template %q: %w", k, err)
+			return nil, fmt.Errorf("%s template %q: %w", where, k, err)
 		}
-		overrides[k] = t
+		out[k] = t
 	}
-	return d.Defaults.Override(overrides), nil
+	return out, nil
 }

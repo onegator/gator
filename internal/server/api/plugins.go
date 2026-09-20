@@ -218,7 +218,8 @@ func (s *Server) ListProjectTemplates(w http.ResponseWriter, r *http.Request, pr
 	}
 	out := make([]gen.ProjectTemplate, 0, len(views))
 	for _, v := range views {
-		t := gen.ProjectTemplate{Kind: v.Kind, MaxRollbacks: v.MaxRollbacks, Phases: []gen.TemplatePhase{}}
+		source := gen.ProjectTemplateSource(v.Source)
+		t := gen.ProjectTemplate{Kind: v.Kind, MaxRollbacks: v.MaxRollbacks, Phases: []gen.TemplatePhase{}, Source: &source}
 		for _, p := range v.Phases {
 			phase := gen.TemplatePhase{Name: p.Name, Owner: p.Owner, Gate: p.Gate, Active: p.Active}
 			if p.Role != "" {

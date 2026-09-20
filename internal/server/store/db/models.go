@@ -434,3 +434,9 @@ type WebhookDelivery struct {
 	DeliveryID      string             `json:"delivery_id"`
 	ReceivedAt      pgtype.Timestamptz `json:"received_at"`
 }
+
+type WorkspaceSetting struct {
+	ID            bool               `json:"id"`
+	ProcessConfig []byte             `json:"process_config"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
