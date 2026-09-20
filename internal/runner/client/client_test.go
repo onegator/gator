@@ -37,10 +37,10 @@ func TestWrongAddressIsToldApartFromANetworkBlip(t *testing.T) {
 
 func TestWebSocketURL(t *testing.T) {
 	cases := map[string]string{
-		"https://gator.tail0b562b.ts.net":  "wss://gator.tail0b562b.ts.net/api/v1/runner",
-		"https://gator.tail0b562b.ts.net/": "wss://gator.tail0b562b.ts.net/api/v1/runner",
-		"http://localhost:8080":            "ws://localhost:8080/api/v1/runner",
-		"wss://example.com/custom/runner":  "wss://example.com/custom/runner",
+		"https://gator.tailnet-example.ts.net":  "wss://gator.tailnet-example.ts.net/api/v1/runner",
+		"https://gator.tailnet-example.ts.net/": "wss://gator.tailnet-example.ts.net/api/v1/runner",
+		"http://localhost:8080":                 "ws://localhost:8080/api/v1/runner",
+		"wss://example.com/custom/runner":       "wss://example.com/custom/runner",
 	}
 	for in, want := range cases {
 		got, err := WebSocketURL(in)

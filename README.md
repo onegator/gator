@@ -191,3 +191,8 @@ per project and plugin, started only by gator-server. Install with `PUT /api/v1/
 and enable per project with `PUT /api/v1/projects/{id}/plugins/{name}`; webhooks arrive at
 `POST /hooks/<project-slug>/<plugin>`. The contract and a Go SDK live in the public package
 `plugin/`; the protocol is in [docs/plugins.md](docs/plugins.md).
+
+## License
+
+[AGPL-3.0](LICENSE). Run it, change it, build plugins on it. Offer it to others as a hosted
+service and your changes have to be published too.
