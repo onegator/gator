@@ -21,6 +21,12 @@ type Handlers struct {
 	RenderUI         func(ctx context.Context, core *Core, p RenderUIParams) (RenderUIResult, error)
 	JobPrepare       func(ctx context.Context, core *Core, p JobPrepareParams) (JobPrepareResult, error)
 	JobFinish        func(ctx context.Context, core *Core, p JobFinishParams) error
+	// Release is the ask a deploy plugin answers: ship this task's work, then call
+	// core.RecordRelease with the version once you know it.
+	Release func(ctx context.Context, core *Core, p ReleaseParams) error
+	// IncidentClosed says the fix landed, so the plugin can resolve the alert in whatever
+	// tool raised it.
+	IncidentClosed func(ctx context.Context, core *Core, p IncidentClosedParams) error
 }
 
 func (h *Handlers) hooks() []string {
@@ -38,6 +44,8 @@ func (h *Handlers) hooks() []string {
 	add(h.RenderUI != nil, MethodRenderUI)
 	add(h.JobPrepare != nil, MethodJobPrepare)
 	add(h.JobFinish != nil, MethodJobFinish)
+	add(h.Release != nil, MethodRelease)
+	add(h.IncidentClosed != nil, MethodIncidentClosed)
 	return out
 }
 
@@ -164,6 +172,24 @@ func dispatch(ctx context.Context, h *Handlers, core *Core, method string, raw j
 			return nil, err
 		}
 		return nil, h.JobFinish(ctx, core, p)
+	case MethodRelease:
+		if h.Release == nil {
+			return nil, notFound
+		}
+		p, err := decodeParams[ReleaseParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return nil, h.Release(ctx, core, p)
+	case MethodIncidentClosed:
+		if h.IncidentClosed == nil {
+			return nil, notFound
+		}
+		p, err := decodeParams[IncidentClosedParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return nil, h.IncidentClosed(ctx, core, p)
 	}
 	return nil, Errorf(CodeMethodNotFound, "method %q not found", method)
 }
@@ -270,6 +296,12 @@ func (c *Core) ReportIncident(ctx context.Context, p IncidentUpsertParams) (Inci
 	var out IncidentUpsertResult
 	err := c.conn.Call(ctx, CoreIncidentUpsert, p, &out)
 	return out, err
+}
+
+// CloseIncident says a fault has stopped: production is all right again. Closing one that is
+// already closed changes nothing, because a monitoring tool may say so more than once.
+func (c *Core) CloseIncident(ctx context.Context, p IncidentCloseParams) error {
+	return c.conn.Call(ctx, CoreIncidentClose, p, nil)
 }
 
 func (c *Core) Log(ctx context.Context, level, message string, fields map[string]any) error {

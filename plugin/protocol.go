@@ -42,6 +42,7 @@ const (
 	CoreGateSetCheck   = "gate.setCheck"
 	CoreArtifactPut    = "artifact.put"
 	CoreIncidentUpsert = "incident.upsert" // M6
+	CoreIncidentClose  = "incident.close"  // M6
 	CoreReleaseRecord  = "release.record"  // M6
 	CoreKVGet          = "kv.get"
 	CoreKVPut          = "kv.put"

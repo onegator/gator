@@ -2,10 +2,12 @@ package plugins
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/process"
@@ -216,4 +218,23 @@ func (h *Host) SettleReleases(ctx context.Context, now time.Time, max int32) (se
 		}
 	}
 	return settled, nil
+}
+
+// closeIncident records that a fault has stopped. The task it opened is left alone: whether
+// the fix is finished is a person's call, and a monitoring tool going quiet is not that. But
+// the release it was blaming can be settled again, which is the part nobody could do by hand.
+func (i *instance) closeIncident(ctx context.Context, q *db.Queries, p plugin.IncidentCloseParams) error {
+	fingerprint := strings.TrimSpace(p.Fingerprint)
+	if fingerprint == "" {
+		return plugin.Errorf(plugin.CodeInvalidParams, "closing an incident needs its fingerprint")
+	}
+	row, err := q.CloseIncident(ctx, db.CloseIncidentParams{ProjectID: i.b.projectID, Fingerprint: fingerprint})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // already closed, or never ours: saying so twice is not an error
+	}
+	if err != nil {
+		return err
+	}
+	return emit(ctx, q, "incident.closed", "incident", row.ID, map[string]any{
+		"project": uuidString(i.b.projectID), "fingerprint": fingerprint, "title": row.Title})
 }

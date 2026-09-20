@@ -205,3 +205,49 @@ func TestReleasesAndIncidentsAreReadable(t *testing.T) {
 		t.Fatalf("incidents = %+v", incidents)
 	}
 }
+
+// The two directions a monitoring plugin has to work in: the core asks it to deploy, and it
+// tells the core the fault has stopped — after which the release can be called good again.
+func TestTheCoreAsksTheDeployPluginAndHearsWhenTheFaultStops(t *testing.T) {
+	h := newHarness(t)
+	p := h.echoProject(map[string]any{"greeting": "hi"})
+	task := h.walkTo(p.id, gen.NewTaskKindChore, "Ship and wobble", "release")
+
+	// Entering Release is the ask, and the plugin records which task it was asked about.
+	h.until("the deploy plugin to be asked", func() bool {
+		return h.pluginKV(p.id, "asked_to_release") == task.Id.String()
+	})
+
+	h.hook(p.slug, "rel5", jsonBody(map[string]any{
+		"release": map[string]any{"version": "5.0.0", "task_id": task.Id.String(), "observe_minutes": 5}}), nil)
+	h.hook(p.slug, "inc5", jsonBody(map[string]any{
+		"incident": map[string]any{"fingerprint": "boom-5", "title": "Latency", "severity": "high", "version": "5.0.0"}}), nil)
+	if _, err := h.plugins.SettleReleases(context.Background(), time.Now().Add(10*time.Minute), 50); err != nil {
+		t.Fatal(err)
+	}
+	if h.count("SELECT count(*) FROM releases WHERE project_id = $1 AND settled_at IS NOT NULL", p.id) != 0 {
+		t.Fatal("a release with an open incident should not settle")
+	}
+
+	// The monitoring tool says it has stopped.
+	h.hook(p.slug, "res5", jsonBody(map[string]any{"resolve": "boom-5"}), nil)
+	if h.count("SELECT count(*) FROM incidents WHERE project_id = $1 AND closed_at IS NOT NULL", p.id) != 1 {
+		t.Fatal("resolving should close the incident")
+	}
+	if _, err := h.plugins.SettleReleases(context.Background(), time.Now().Add(10*time.Minute), 50); err != nil {
+		t.Fatal(err)
+	}
+	if h.count("SELECT count(*) FROM releases WHERE project_id = $1 AND settled_at IS NOT NULL", p.id) != 1 {
+		t.Fatal("with nothing open against it, the release should settle")
+	}
+}
+
+// pluginKV reads what the project's plugin remembered under key.
+func (h *harness) pluginKV(projectID, key string) string {
+	h.t.Helper()
+	var s string
+	_ = h.pool.QueryRow(context.Background(),
+		`SELECT kv.value #>> '{}' FROM plugin_kv kv JOIN project_plugins pp ON pp.id = kv.project_plugin_id
+		 WHERE pp.project_id = $1 AND kv.key = $2`, projectID, key).Scan(&s)
+	return s
+}

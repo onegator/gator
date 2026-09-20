@@ -41,6 +41,7 @@ func main() {
 					Severity    string `json:"severity"`
 					Version     string `json:"version"`
 				} `json:"incident"`
+				Resolve string `json:"resolve"` // fingerprint of a fault that has stopped
 			}
 			_ = json.Unmarshal(p.Body, &b)
 			switch {
@@ -59,6 +60,8 @@ func main() {
 				_, err := core.RecordRelease(ctx, plugin.ReleaseRecordParams{
 					Version: b.Release.Version, TaskID: b.Release.TaskID, ObserveMinutes: b.Release.ObserveMinutes})
 				return err
+			case b.Resolve != "":
+				return core.CloseIncident(ctx, plugin.IncidentCloseParams{Fingerprint: b.Resolve})
 			case b.Incident != nil:
 				_, err := core.ReportIncident(ctx, plugin.IncidentUpsertParams{
 					Fingerprint: b.Incident.Fingerprint, Title: b.Incident.Title,
@@ -70,6 +73,12 @@ func main() {
 			}
 			_, err := core.CreateTask(ctx, plugin.TaskCreateParams{Kind: "bug", Title: b.Title, ExternalRefs: map[string]string{"echo_id": b.ID}})
 			return err
+		},
+		Release: func(ctx context.Context, core *plugin.Core, p plugin.ReleaseParams) error {
+			return core.KVPut(ctx, "asked_to_release", p.Task.ID)
+		},
+		IncidentClosed: func(ctx context.Context, core *plugin.Core, p plugin.IncidentClosedParams) error {
+			return core.KVPut(ctx, "resolved_upstream", p.Fingerprint)
 		},
 		PhaseTransition: func(ctx context.Context, core *plugin.Core, p plugin.PhaseTransitionParams) error {
 			return core.KVPut(ctx, "last_transition", p.From+"->"+p.To)

@@ -181,6 +181,12 @@ func (i *instance) core(ctx context.Context, method string, raw json.RawMessage)
 			return nil, err
 		}
 		return i.upsertIncident(ctx, q, p)
+	case plugin.CoreIncidentClose:
+		p, err := decode[plugin.IncidentCloseParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return nil, i.closeIncident(ctx, q, p)
 	}
 	return nil, plugin.Errorf(plugin.CodeMethodNotFound, "method %q not found", method)
 }
