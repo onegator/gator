@@ -206,6 +206,39 @@ func (s *Service) Advance(ctx context.Context, taskID pgtype.UUID, actor Actor, 
 	return out, err
 }
 
+// Close finishes a task wherever it stands, with a reason in the audit trail. This is for work
+// the world has finished for us: a quality rule that has come good again, where waiting for a
+// person to walk the task through its phases would only teach them to ignore such tasks.
+// Everything a person or an agent does still goes through Advance and its gates.
+func (s *Service) Close(ctx context.Context, taskID pgtype.UUID, actor Actor, reason string) (db.Task, error) {
+	if reason == "" {
+		return db.Task{}, errors.New("closing a task requires a reason")
+	}
+	var out db.Task
+	err := s.tx(ctx, func(q *db.Queries) error {
+		task, err := q.GetTaskForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if task.ClosedAt.Valid {
+			out = task
+			return nil // already finished; saying so twice is not an error
+		}
+		if err := q.SetTaskPhase(ctx, db.SetTaskPhaseParams{ID: taskID, Phase: task.Phase, Close: true}); err != nil {
+			return err
+		}
+		if err := s.record(ctx, q, taskID, &task.Phase, task.Phase, "close", actor, reason, nil); err != nil {
+			return err
+		}
+		if err := s.emit(ctx, q, "task.closed", taskID, map[string]any{"phase": task.Phase, "reason": reason}); err != nil {
+			return err
+		}
+		out, err = q.GetTask(ctx, taskID)
+		return err
+	})
+	return out, err
+}
+
 // Rollback moves a task back to an earlier phase. A reason is mandatory. When the
 // ceiling for the target phase is reached the task is blocked instead of moved.
 func (s *Service) Rollback(ctx context.Context, taskID pgtype.UUID, to string, actor Actor, reason string) (db.Task, error) {

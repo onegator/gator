@@ -28,11 +28,13 @@ const (
 	MethodRenderUI         = "renderUI"
 	MethodJobPrepare       = "jobPrepare"
 	MethodJobFinish        = "jobFinish"
+	MethodQualityEvaluate  = "qualityEvaluate" // M8
 )
 
 // Hooks are the core → plugin methods a manifest may declare.
 var Hooks = []string{MethodWebhook, MethodPhaseTransition, MethodGateEvaluate, MethodArtifactApproved,
-	MethodRelease, MethodIncidentClosed, MethodSchedule, MethodRenderUI, MethodJobPrepare, MethodJobFinish}
+	MethodRelease, MethodIncidentClosed, MethodSchedule, MethodRenderUI, MethodJobPrepare, MethodJobFinish,
+	MethodQualityEvaluate}
 
 // Plugin → core methods.
 const (
@@ -292,6 +294,29 @@ type IncidentUpsertResult struct {
 // IncidentClosedResult is empty; closing is idempotent.
 type IncidentCloseParams struct {
 	Fingerprint string `json:"fingerprint"`
+}
+
+// QualityEvaluateParams asks a plugin what it knows about each part of the project. The core
+// asks on a schedule, not per event: a scorecard answers "how are we doing", which is a
+// question with a date on it.
+type QualityEvaluateParams struct {
+	Components []string `json:"components"` // component keys, as the catalogue names them
+}
+
+// QualityEvaluateResult is what the plugin found. A rule it could not check answers "unknown"
+// rather than "fail": an outage in a scanner says nothing about the code, and scoring it as a
+// failure would file a task about someone else's downtime.
+type QualityEvaluateResult struct {
+	Checks []QualityCheck `json:"checks"`
+}
+
+// QualityCheck is one rule's answer about one component.
+type QualityCheck struct {
+	Component string `json:"component,omitempty"` // empty: about the project as a whole
+	Rule      string `json:"rule"`
+	Status    string `json:"status"` // pass | fail | unknown
+	Detail    string `json:"detail,omitempty"`
+	Weight    int    `json:"weight,omitempty"` // default 1
 }
 
 // TaskCreateParams creates a task in the plugin's project, in its template's first phase.

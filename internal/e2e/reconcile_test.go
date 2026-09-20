@@ -23,14 +23,14 @@ func TestAGateStuckOnPendingIsAskedAgain(t *testing.T) {
 
 	// Creating a task evaluates its gate, and that happens off the request. Wait for it, or
 	// the check set below races with it and this test blames the wrong thing.
-	waitForCheck(h, task.Id.String(), "echo-ci", gen.Pass)
+	waitForCheck(h, task.Id.String(), "echo-ci", gen.CheckStatusPass)
 
 	// What a dropped "check finished" webhook leaves behind.
 	if code := h.do("PUT", "/tasks/"+task.Id.String()+"/checks",
-		gen.Check{Name: "echo-ci", Source: "plugin:echo", Status: gen.Pending, Detail: ptr("waiting")}, nil); code != 200 {
+		gen.Check{Name: "echo-ci", Source: "plugin:echo", Status: gen.CheckStatusPending, Detail: ptr("waiting")}, nil); code != 200 {
 		t.Fatalf("set pending check: %d", code)
 	}
-	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.Pending {
+	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.CheckStatusPending {
 		t.Fatalf("check should start pending, got %q", got)
 	}
 
@@ -40,7 +40,7 @@ func TestAGateStuckOnPendingIsAskedAgain(t *testing.T) {
 	if _, err := h.plugins.ReconcileProjectChecks(context.Background(), projectUUID(p.id), time.Now().Add(-time.Hour), 50); err != nil {
 		t.Fatal(err)
 	}
-	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.Pending {
+	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.CheckStatusPending {
 		t.Fatalf("a gate that just moved should be left alone, got %q", got)
 	}
 
@@ -53,7 +53,7 @@ func TestAGateStuckOnPendingIsAskedAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	// echo answers "pass", which is what the lost webhook would have said.
-	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.Pass {
+	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.CheckStatusPass {
 		t.Fatalf("check after reconciling = %q, want pass", got)
 	}
 }
@@ -64,9 +64,9 @@ func TestReconcilingLeavesClosedTasksAlone(t *testing.T) {
 	p := h.echoProject(map[string]any{"greeting": "hi"})
 	var task gen.Task
 	h.do("POST", "/projects/"+p.id+"/tasks", gen.NewTask{Kind: "chore", Title: "Already done"}, &task)
-	waitForCheck(h, task.Id.String(), "echo-ci", gen.Pass)
+	waitForCheck(h, task.Id.String(), "echo-ci", gen.CheckStatusPass)
 	h.do("PUT", "/tasks/"+task.Id.String()+"/checks",
-		gen.Check{Name: "echo-ci", Source: "plugin:echo", Status: gen.Pending}, nil)
+		gen.Check{Name: "echo-ci", Source: "plugin:echo", Status: gen.CheckStatusPending}, nil)
 	for _, sql := range []string{
 		"UPDATE gates SET updated_at = now() - interval '1 hour' WHERE task_id = $1",
 		"UPDATE tasks SET closed_at = now() WHERE id = $1",
@@ -79,7 +79,7 @@ func TestReconcilingLeavesClosedTasksAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Still pending: nobody asked the plugin about a task that is over.
-	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.Pending {
+	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.CheckStatusPending {
 		t.Fatalf("a closed task was re-evaluated: its check became %q", got)
 	}
 }

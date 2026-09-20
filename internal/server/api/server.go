@@ -23,6 +23,7 @@ import (
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
@@ -37,6 +38,7 @@ type Server struct {
 	Process  *process.Service
 	Runners  *runners.Manager
 	Plugins  *plugins.Host // nil: plugin endpoints answer 503
+	Quality  *quality.Service
 	Hub      *events.Hub
 	Tokens   auth.Tokens
 	Authz    auth.Authorizer

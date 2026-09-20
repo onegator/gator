@@ -95,6 +95,38 @@ func (w *SettleReleasesWorker) Work(ctx context.Context, _ *river.Job[SettleRele
 	return err
 }
 
+// ScoreQualityArgs runs every project's scorecard.
+type ScoreQualityArgs struct{}
+
+func (ScoreQualityArgs) Kind() string { return "score_quality" }
+
+// QualityScorer is the quality service; the interface keeps this package off it.
+type QualityScorer interface {
+	SweepAll(ctx context.Context) (int, error)
+}
+
+// ScoreQualityWorker asks each project's rules on a schedule. A scorecard is a question with a
+// date on it: nobody checks whether every component still has an owner by hand.
+type ScoreQualityWorker struct {
+	river.WorkerDefaults[ScoreQualityArgs]
+	Quality QualityScorer
+	Log     *slog.Logger
+}
+
+// Work implements river.Worker.
+func (w *ScoreQualityWorker) Work(ctx context.Context, _ *river.Job[ScoreQualityArgs]) error {
+	n, err := w.Quality.SweepAll(ctx)
+	if n > 0 {
+		w.Log.Info("scored projects", "projects", n)
+	}
+	return err
+}
+
+// Timeout gives a sweep long enough to ask slow plugins about every component.
+func (w *ScoreQualityWorker) Timeout(*river.Job[ScoreQualityArgs]) time.Duration {
+	return 10 * time.Minute
+}
+
 // BackupArgs is the periodic database backup.
 type BackupArgs struct{}
 
@@ -131,6 +163,8 @@ type Options struct {
 	Plugins CheckReconciler
 	// Releases ends observation windows. The plugin host implements both.
 	Releases ReleaseSettler
+	// Quality scores projects against their scorecards. Optional.
+	Quality QualityScorer
 	// Intervals; zero picks the defaults (1m sweep, 1h backup, 5m reconcile of checks that
 	// have not moved for 15m).
 	ExpireEvery    time.Duration
@@ -138,6 +172,7 @@ type Options struct {
 	ReconcileEvery time.Duration
 	StaleAfter     time.Duration
 	SettleEvery    time.Duration
+	QualityEvery   time.Duration
 }
 
 // New builds a River client with workers and periodic jobs registered. Call Start.
@@ -153,6 +188,11 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 	}
 	if o.SettleEvery == 0 {
 		o.SettleEvery = time.Minute
+	}
+	if o.QualityEvery == 0 {
+		// Daily: these rules change over weeks, and asking every plugin about every component
+		// more often would cost more than it tells anyone.
+		o.QualityEvery = 24 * time.Hour
 	}
 	if o.StaleAfter == 0 {
 		// Long enough that a check still running is not asked about on every tick, short
@@ -176,6 +216,12 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 		river.AddWorker(workers, &SettleReleasesWorker{Releases: o.Releases, Log: o.Log})
 		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.SettleEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return SettleReleasesArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
+		}, &river.PeriodicJobOpts{RunOnStart: false}))
+	}
+	if o.Quality != nil {
+		river.AddWorker(workers, &ScoreQualityWorker{Quality: o.Quality, Log: o.Log})
+		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.QualityEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return ScoreQualityArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
 		}, &river.PeriodicJobOpts{RunOnStart: false}))
 	}
 	if o.Backup.Enabled() {

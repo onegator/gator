@@ -27,6 +27,7 @@ import (
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/product"
+	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -147,8 +148,9 @@ func serve(ctx context.Context) error {
 	go product.NewCurator(db.Pool, hub, log, 0).Run(ctx)
 
 	bc := backup.LoadConfig()
+	scorecards := quality.New(db.Pool, svc, pluginHost, log)
 	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL,
-		Plugins: pluginHost, Releases: pluginHost, Log: log})
+		Plugins: pluginHost, Releases: pluginHost, Quality: scorecards, Log: log})
 	if err != nil {
 		return err
 	}
@@ -176,7 +178,8 @@ func serve(ctx context.Context) error {
 
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
-		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
+		Quality: scorecards,
+		Tokens:  auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst,
 	}
 	if oc := auth.LoadOIDCConfig(); oc.Enabled() {

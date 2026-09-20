@@ -51,7 +51,7 @@ func TestDevicesAndNotifications(t *testing.T) {
 
 	task := h.task()
 	if code := h.do("PUT", "/tasks/"+task.Id.String()+"/checks",
-		gen.Check{Name: "ci", Source: "plugin:test", Status: gen.Fail, Detail: ptr("the build is red")}, nil); code != 200 {
+		gen.Check{Name: "ci", Source: "plugin:test", Status: gen.CheckStatusFail, Detail: ptr("the build is red")}, nil); code != 200 {
 		t.Fatalf("set check: %d", code)
 	}
 

@@ -28,6 +28,7 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -40,6 +41,7 @@ type harness struct {
 	mgr     *runners.Manager
 	hub     *events.Hub
 	plugins *plugins.Host
+	quality *quality.Service
 	svc     *process.Service
 	admin   string // user bearer
 	runner  string // runner bearer
@@ -81,7 +83,8 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(func() { stopHost(); <-hostDone })
 	mgr := runners.New(pool, svc, hub, slog.Default(), runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
 		StallAfter: testStallAfter, Preparer: host})
-	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Hub: hub, Log: slog.Default(),
+	scorecards := quality.New(pool, svc, host, slog.Default())
+	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
@@ -97,7 +100,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, admin: admin, runner: runner}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, admin: admin, runner: runner}
 }
 
 func (h *harness) do(method, path string, body, out any) int {

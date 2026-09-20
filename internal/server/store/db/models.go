@@ -298,6 +298,29 @@ type ProjectTemplate struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type QualityCheck struct {
+	ID           pgtype.UUID        `json:"id"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	ComponentID  pgtype.UUID        `json:"component_id"`
+	Rule         string             `json:"rule"`
+	Source       string             `json:"source"`
+	Status       string             `json:"status"`
+	Detail       string             `json:"detail"`
+	Weight       int32              `json:"weight"`
+	FailingSince pgtype.Timestamptz `json:"failing_since"`
+	TaskID       pgtype.UUID        `json:"task_id"`
+	CheckedAt    pgtype.Timestamptz `json:"checked_at"`
+}
+
+type QualityScore struct {
+	ID          pgtype.UUID        `json:"id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	ComponentID pgtype.UUID        `json:"component_id"`
+	Earned      int32              `json:"earned"`
+	Possible    int32              `json:"possible"`
+	CheckedAt   pgtype.Timestamptz `json:"checked_at"`
+}
+
 type Receipt struct {
 	ID          pgtype.UUID        `json:"id"`
 	Source      string             `json:"source"`

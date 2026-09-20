@@ -24,6 +24,9 @@ type Handlers struct {
 	// Release is the ask a deploy plugin answers: ship this task's work, then call
 	// core.RecordRelease with the version once you know it.
 	Release func(ctx context.Context, core *Core, p ReleaseParams) error
+	// QualityEvaluate answers a scorecard's rules about each component, on the core's
+	// schedule. Requires the "quality" capability.
+	QualityEvaluate func(ctx context.Context, core *Core, p QualityEvaluateParams) (QualityEvaluateResult, error)
 	// IncidentClosed says the fix landed, so the plugin can resolve the alert in whatever
 	// tool raised it.
 	IncidentClosed func(ctx context.Context, core *Core, p IncidentClosedParams) error
@@ -46,6 +49,7 @@ func (h *Handlers) hooks() []string {
 	add(h.JobFinish != nil, MethodJobFinish)
 	add(h.Release != nil, MethodRelease)
 	add(h.IncidentClosed != nil, MethodIncidentClosed)
+	add(h.QualityEvaluate != nil, MethodQualityEvaluate)
 	return out
 }
 
@@ -190,6 +194,15 @@ func dispatch(ctx context.Context, h *Handlers, core *Core, method string, raw j
 			return nil, err
 		}
 		return nil, h.IncidentClosed(ctx, core, p)
+	case MethodQualityEvaluate:
+		if h.QualityEvaluate == nil {
+			return nil, notFound
+		}
+		p, err := decodeParams[QualityEvaluateParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return h.QualityEvaluate(ctx, core, p)
 	}
 	return nil, Errorf(CodeMethodNotFound, "method %q not found", method)
 }

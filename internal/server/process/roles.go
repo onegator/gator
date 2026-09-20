@@ -36,6 +36,9 @@ type ProjectConfig struct {
 	Roles     map[string]string   `json:"roles"` // role name → prompt that replaces the default
 	Autopilot *AutopilotConfig    `json:"autopilot"`
 	Policy    *Policy             `json:"policy"`
+	// Quality is the project's scorecard: off unless it is asked for. Read by the quality
+	// package, kept here so one document describes the whole process.
+	Quality json.RawMessage `json:"quality,omitempty"`
 }
 
 // ParseProjectConfig reads process_config; empty input is an empty config.

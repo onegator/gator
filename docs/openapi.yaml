@@ -396,6 +396,20 @@ paths:
       parameters: [ { $ref: "#/components/parameters/projectId" } ]
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Incident" } } } } }
+  /projects/{projectId}/quality:
+    get:
+      operationId: listQuality
+      description: "The project's scorecard: each component's score, how it moved since the last sweep, and the rules behind it."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Scorecard" } } } } }
+    post:
+      operationId: scoreNow
+      description: Runs the scorecard at once instead of waiting for the daily sweep. Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Scorecard" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/templates:
     get:
       operationId: listProjectTemplates
@@ -1040,6 +1054,29 @@ components:
       required: [config]
       properties:
         config: { type: object, additionalProperties: true, description: "process_config as stored: templates, roles, autopilot, policy" }
+    Scorecard:
+      type: object
+      required: [component, earned, possible, checks]
+      properties:
+        component: { type: string, description: "component key; empty means the project as a whole" }
+        componentName: { type: string }
+        earned: { type: integer }
+        possible: { type: integer }
+        previousEarned: { type: integer, description: "the score before this one, for the trend" }
+        previousPossible: { type: integer }
+        checkedAt: { type: string, format: date-time }
+        checks: { type: array, items: { $ref: "#/components/schemas/QualityCheck" } }
+    QualityCheck:
+      type: object
+      required: [rule, source, status, weight]
+      properties:
+        rule: { type: string }
+        source: { type: string, description: "builtin, or the plugin that answered" }
+        status: { type: string, enum: [pass, fail, unknown] }
+        detail: { type: string }
+        weight: { type: integer }
+        failingSince: { type: string, format: date-time }
+        taskId: { type: string, format: uuid, description: "the task opened about this slip" }
     Release:
       type: object
       required: [id, version, environment, deployedAt, watching]
