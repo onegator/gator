@@ -516,6 +516,13 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TaskMetrics" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/budget:
+    get:
+      operationId: getProjectBudget
+      description: "The daily limit and what has been spent against it since the start of the current UTC day — the same numbers the budget gate check uses."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Budget" } } } }
   /projects/{projectId}/metrics:
     get:
       operationId: getProjectMetrics
@@ -812,6 +819,13 @@ components:
         tokens: { $ref: "#/components/schemas/Tokens" }
         costUsd: { type: number, format: double }
         jobs: { type: integer, format: int64 }
+    Budget:
+      type: object
+      required: [dailyLimitUsd, spentTodayUsd, estimated]
+      properties:
+        dailyLimitUsd: { type: number, format: double, description: "0 means no limit is set" }
+        spentTodayUsd: { type: number, format: double }
+        estimated: { type: boolean, description: "true while any of the spend comes from a subscription, where cost is an estimate" }
     ProjectMetrics:
       type: object
       required: [projectId, since, byKind, totals]

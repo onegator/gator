@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -270,4 +272,20 @@ func (s *Server) DeleteProject(w http.ResponseWriter, r *http.Request, projectId
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GetProjectBudget answers with the numbers the budget gate uses, so a person setting a limit
+// sees the same figure that will block the work rather than a different one from a report.
+func (s *Server) GetProjectBudget(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+		return
+	}
+	limit, spent, err := s.Process.Budget(r.Context(), fromUUID(projectId), time.Now())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	// Cost on a subscription is an estimate; saying so keeps a budget from reading as a bill.
+	estimated := spent > 0
+	writeJSON(w, http.StatusOK, gen.Budget{DailyLimitUsd: limit, SpentTodayUsd: spent, Estimated: estimated})
 }

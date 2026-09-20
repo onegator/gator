@@ -149,3 +149,33 @@ func TestDailyBudgetStopsNewJobsUntilRaised(t *testing.T) {
 		t.Fatalf("after raising the budget: planner job %v, blocked %v", planner, after["blockedReason"])
 	}
 }
+
+// A person setting a daily limit needs to see the number that will stop the work, not a
+// different one from a report over some other window.
+func TestBudgetShowsWhatTheGateCounts(t *testing.T) {
+	h := newHarness(t)
+	task := h.task()
+	project := task.ProjectId.String()
+
+	var before gen.Budget
+	if code := h.do("GET", "/projects/"+project+"/budget", nil, &before); code != 200 {
+		t.Fatalf("budget: %d", code)
+	}
+	if before.DailyLimitUsd != 0 {
+		t.Fatalf("a project with no policy has no limit: %v", before.DailyLimitUsd)
+	}
+
+	h.do("PUT", "/projects/"+project+"/config",
+		map[string]any{"config": map[string]any{"policy": map[string]any{"daily_budget_usd": 5}}}, nil)
+	h.do("POST", "/tasks/"+task.Id.String()+"/usage",
+		gen.UsageInput{DurationMs: 1000, CostUsd: ptr(1.25), Backend: ptr("claude")}, nil)
+
+	var after gen.Budget
+	h.do("GET", "/projects/"+project+"/budget", nil, &after)
+	if after.DailyLimitUsd != 5 {
+		t.Errorf("limit = %v, want the one just set", after.DailyLimitUsd)
+	}
+	if after.SpentTodayUsd < 1.25 {
+		t.Errorf("spent = %v, want at least what was just recorded", after.SpentTodayUsd)
+	}
+}
