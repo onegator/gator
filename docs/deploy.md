@@ -53,6 +53,10 @@ Mint a runner token as a workspace admin with `POST /api/v1/tokens` and
 
 `GATOR_RUNNER_SERVER_URL` is the server's base URL, for example
 `https://gator.<tailnet>.ts.net`; the runner switches to `wss` and appends `/api/v1/runner`.
+It has to name the port that serves the API. Where a public `/hooks` split moves the API to
+another port, a runner left on the old one logs a 404 on the WebSocket handshake and retries
+forever, while its jobs sit in `queued` with nothing said about it. A runner beside the server
+can skip the tailnet with `http://127.0.0.1:8080`.
 `GATOR_RUNNER_BACKENDS` lists the agent CLIs this runner can drive (`claude`, `codex`). A runner
 with no backends connects and shows as online but is never handed a job.
 
@@ -84,6 +88,33 @@ example a deploy key with write access or a fine-grained token in its git creden
 
 The runner user is what agents run as. A worktree is isolation, not a sandbox: give that user
 no credentials beyond what its jobs need.
+
+### Push notifications
+
+Apple push needs a key from the Apple Developer Program: **Certificates, Identifiers &
+Profiles → Keys → +**, tick **Apple Push Notifications service**, configure it for Sandbox &
+Production, and download the `.p8` — Apple hands it over exactly once. Each app id it serves
+needs the Push Notifications capability.
+
+```sh
+sudo install -o gator -g gator -m 400 AuthKey_XXXXXXXXXX.p8 /etc/gator/apns.p8
+sudoedit /etc/gator/server.env   # GATOR_APNS_KEY=/etc/gator/apns.p8
+                                 # GATOR_APNS_KEY_ID=XXXXXXXXXX   (in the file name)
+                                 # GATOR_APNS_TEAM_ID=YYYYYYYYYY  (top right in the portal)
+                                 # GATOR_APNS_TOPIC=dev.onegator.gator
+                                 # GATOR_APNS_TOPIC_IOS=dev.onegator.gator.ios
+sudo systemctl restart gator-server
+```
+
+The four `GATOR_APNS_*` settings are read together or not at all; without them the server keeps
+the disabled sender and logs `notifications sender=disabled`. Apple routes by bundle id, so set
+`GATOR_APNS_TOPIC_IOS` whenever the iOS app has its own: one topic for both platforms earns
+`DeviceTokenNotForTopic`, which the server reads as a dead device and forgets the token.
+`GATOR_APNS_SANDBOX=1` switches to Apple's test servers. The key is a secret; the key and team
+ids are not.
+
+macOS only accepts push for an app signed with a Developer ID and notarised, so a locally built
+Gator.app registers no token until it is signed.
 
 ### Upgrades
 

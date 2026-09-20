@@ -18,10 +18,14 @@ import (
 type APNs struct {
 	client *apns2.Client
 	topic  string
+	// Apple routes by bundle id and the iOS app has its own. Sending a macOS topic to an iPhone
+	// gets DeviceTokenNotForTopic, which reads here as a dead device and throws the token away.
+	iosTopic string
 }
 
 // LoadAPNs reads GATOR_APNS_KEY (path to the .p8), GATOR_APNS_KEY_ID, GATOR_APNS_TEAM_ID and
-// GATOR_APNS_TOPIC (the app's bundle id). GATOR_APNS_SANDBOX=1 uses Apple's test servers.
+// GATOR_APNS_TOPIC (the app's bundle id), plus GATOR_APNS_TOPIC_IOS when the iOS app has a
+// bundle id of its own. GATOR_APNS_SANDBOX=1 uses Apple's test servers.
 // Without a key it returns nil, and the caller keeps the disabled sender.
 func LoadAPNs() (*APNs, error) {
 	path, keyID, teamID, topic := os.Getenv("GATOR_APNS_KEY"), os.Getenv("GATOR_APNS_KEY_ID"),
@@ -42,11 +46,24 @@ func LoadAPNs() (*APNs, error) {
 	} else {
 		client = client.Production()
 	}
-	return &APNs{client: client, topic: topic}, nil
+	return &APNs{client: client, topic: topic, iosTopic: os.Getenv("GATOR_APNS_TOPIC_IOS")}, nil
+}
+
+// topicFor picks the bundle id the device was registered under.
+func (a *APNs) topicFor(platform string) string {
+	if platform == "ios" && a.iosTopic != "" {
+		return a.iosTopic
+	}
+	return a.topic
 }
 
 // Name implements Sender.
-func (a *APNs) Name() string { return "apns " + a.topic }
+func (a *APNs) Name() string {
+	if a.iosTopic != "" {
+		return "apns " + a.topic + " and " + a.iosTopic
+	}
+	return "apns " + a.topic
+}
 
 // Send implements Sender. A token Apple rejects is reported as gone so it stops being used.
 func (a *APNs) Send(ctx context.Context, device db.Device, m Message) error {
@@ -55,7 +72,7 @@ func (a *APNs) Send(ctx context.Context, device db.Device, m Message) error {
 	body := payload.NewPayload().AlertTitle(m.Title).AlertBody(m.Body).Sound("default").Custom("link", m.Link)
 	res, err := a.client.PushWithContext(ctx, &apns2.Notification{
 		DeviceToken: device.Token,
-		Topic:       a.topic,
+		Topic:       a.topicFor(device.Platform),
 		Payload:     body,
 		Expiration:  time.Now().Add(6 * time.Hour),
 	})
