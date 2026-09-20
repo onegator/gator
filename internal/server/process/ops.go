@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -203,6 +204,9 @@ func (s *Service) Advance(ctx context.Context, taskID pgtype.UUID, actor Actor, 
 		out, err = q.GetTask(ctx, taskID)
 		return err
 	})
+	if err == nil {
+		s.campaignFollows(ctx, taskID)
+	}
 	return out, err
 }
 
@@ -236,7 +240,27 @@ func (s *Service) Close(ctx context.Context, taskID pgtype.UUID, actor Actor, re
 		out, err = q.GetTask(ctx, taskID)
 		return err
 	})
+	if err == nil {
+		s.campaignFollows(ctx, taskID)
+	}
 	return out, err
+}
+
+// campaignFollows tells a campaign that one of its targets moved. Best effort on purpose: the
+// child's own write has already succeeded, and failing it because a parent gate could not be
+// refreshed would punish the wrong task. The next change, or a read of the progress, corrects it.
+func (s *Service) campaignFollows(ctx context.Context, childID pgtype.UUID) {
+	// A campaign entering Execution needs its own gate filled in straight away, or its first
+	// read would show a gate waiting on a check nobody has written yet.
+	if t, err := db.New(s.pool).GetTask(ctx, childID); err == nil && t.Kind == CampaignKind {
+		if _, err := s.refreshCampaign(ctx, childID); err != nil {
+			slog.Default().Warn("refreshing a campaign's own gate", "task", uuidString(childID), "err", err)
+		}
+		return
+	}
+	if err := s.OnCampaignChildChanged(ctx, childID); err != nil {
+		slog.Default().Warn("refreshing a campaign after its target moved", "task", uuidString(childID), "err", err)
+	}
 }
 
 // Rollback moves a task back to an earlier phase. A reason is mandatory. When the

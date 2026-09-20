@@ -371,6 +371,37 @@ paths:
       responses:
         "204": { description: deleted }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/campaign:
+    get:
+      operationId: getCampaign
+      description: "How far a campaign has got: every target, what became of it, and the totals."
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: addCampaignTargets
+      description: Gives a campaign the places it has to reach, one task per target. Adding a target it already has does nothing.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CampaignTargets" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/campaign/skip:
+    post:
+      operationId: skipCampaignTarget
+      description: Drops one target, with a reason. Its task is closed; approving the campaign needs every target finished or skipped.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SkipTarget" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/component:
     put:
       operationId: setTaskComponent
@@ -1054,6 +1085,48 @@ components:
       required: [config]
       properties:
         config: { type: object, additionalProperties: true, description: "process_config as stored: templates, roles, autopilot, policy" }
+    Campaign:
+      type: object
+      required: [targets, done, blocked, waiting, skipped]
+      properties:
+        targets: { type: array, items: { $ref: "#/components/schemas/CampaignTarget" } }
+        done: { type: integer }
+        blocked: { type: integer }
+        waiting: { type: integer }
+        skipped: { type: integer }
+    CampaignTarget:
+      type: object
+      required: [key, skipped]
+      properties:
+        key: { type: string, description: "a component key, or another project's slug" }
+        projectId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        title: { type: string }
+        phase: { type: string }
+        closed: { type: boolean }
+        blocked: { type: string, description: "why this target cannot move; empty when it can" }
+        skipped: { type: boolean }
+        skipReason: { type: string }
+    CampaignTargets:
+      type: object
+      required: [targets]
+      properties:
+        instruction: { type: string, description: "carried into every target's task, so an agent has the whole decision" }
+        targets: { type: array, items: { $ref: "#/components/schemas/CampaignTargetInput" } }
+    CampaignTargetInput:
+      type: object
+      required: [key]
+      properties:
+        key: { type: string }
+        projectId: { type: string, format: uuid, description: "another project; default: the campaign's own" }
+        title: { type: string }
+        kind: { type: string, enum: [feature, bug, incident, chore], description: "default chore" }
+    SkipTarget:
+      type: object
+      required: [key, reason]
+      properties:
+        key: { type: string }
+        reason: { type: string }
     Scorecard:
       type: object
       required: [component, earned, possible, checks]
@@ -1256,7 +1329,7 @@ components:
       type: object
       required: [kind, title]
       properties:
-        kind: { type: string, enum: [feature, bug, incident, chore] }
+        kind: { type: string, enum: [feature, bug, incident, chore, campaign] }
         title: { type: string }
         description: { type: string, description: "what the person wants, in their words; jobs get it in their prompt" }
         urgency: { type: integer, minimum: 1, maximum: 4 }

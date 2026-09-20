@@ -45,6 +45,17 @@ type AuditLog struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type CampaignTarget struct {
+	ID         pgtype.UUID        `json:"id"`
+	CampaignID pgtype.UUID        `json:"campaign_id"`
+	TargetKey  string             `json:"target_key"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	TaskID     pgtype.UUID        `json:"task_id"`
+	SkippedAt  pgtype.Timestamptz `json:"skipped_at"`
+	SkipReason string             `json:"skip_reason"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type Component struct {
 	ID        pgtype.UUID        `json:"id"`
 	ProjectID pgtype.UUID        `json:"project_id"`

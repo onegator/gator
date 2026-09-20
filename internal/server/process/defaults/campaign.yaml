@@ -1,0 +1,10 @@
+kind: campaign
+max_rollbacks: 1
+phases:
+  # One decision, many repositories. Planning is where the targets and the shared instruction
+  # are written; Execution is one child task per target, each with its own gate; the campaign
+  # cannot leave Execution until every target is finished or explicitly skipped with a reason.
+  - { name: planning,     owner: human, gate: human, timeout: 720h }
+  - { name: execution,    owner: human, gate: both,  timeout: 720h }
+  - { name: verification, owner: human, gate: human, timeout: 168h }
+  - { name: approved,     owner: human, gate: auto,  timeout: 0 }

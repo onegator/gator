@@ -75,6 +75,16 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 	for _, id := range orphanRows {
 		orphaned[id.Bytes] = true
 	}
+	// A campaign is one decision. Its children's approvals belong to that decision, so they
+	// stay out of the inbox — unless one is stuck, which is the case a person must see.
+	childRows, err := q.ListCampaignChildIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	campaignChild := map[[16]byte]bool{}
+	for _, id := range childRows {
+		campaignChild[id.Bytes] = true
+	}
 	machines := map[string]*Machine{}
 	var out []Decision
 	for _, r := range rows {
@@ -98,10 +108,23 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 		if !ok {
 			continue
 		}
+		if campaignChild[r.Task.ID.Bytes] && !stuck(reason) {
+			continue
+		}
 		out = append(out, Decision{Task: r.Task, Gate: r.Gate, Phase: p, Reason: reason,
 			WaitingSince: r.Task.PhaseEnteredAt.Time, Rollbacks: rollbacks[phaseKey{r.Task.ID.Bytes, r.Task.Phase}]})
 	}
 	return out, nil
+}
+
+// stuck says whether a reason means the task cannot move on its own. A campaign hides its
+// children's routine approvals, never their problems.
+func stuck(r DecisionReason) bool {
+	switch r {
+	case ReasonBlocked, ReasonJobFailed, ReasonNoRunner, ReasonRequirementsChanged:
+		return true
+	}
+	return false
 }
 
 // ownedBy reports whether the task was handed to this person.
