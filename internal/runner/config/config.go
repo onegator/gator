@@ -3,6 +3,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -36,11 +37,20 @@ func Load() (Config, error) {
 	if v, err := strconv.Atoi(os.Getenv("GATOR_RUNNER_MAX_PARALLEL")); err == nil && v > 0 {
 		c.MaxParallel = v
 	}
+	// A launchd plist is read by anyone who can list the home directory, and a unit file gets
+	// copied around. Pointing at a file keeps the token in one place with a mode of its own.
+	if path := os.Getenv("GATOR_RUNNER_TOKEN_FILE"); path != "" && c.Token == "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return c, fmt.Errorf("GATOR_RUNNER_TOKEN_FILE: %w", err)
+		}
+		c.Token = strings.TrimSpace(string(b))
+	}
 	if c.ServerURL == "" {
 		return c, errors.New("GATOR_RUNNER_SERVER_URL is required")
 	}
 	if c.Token == "" {
-		return c, errors.New("GATOR_RUNNER_TOKEN is required")
+		return c, errors.New("GATOR_RUNNER_TOKEN or GATOR_RUNNER_TOKEN_FILE is required")
 	}
 	return c, nil
 }
