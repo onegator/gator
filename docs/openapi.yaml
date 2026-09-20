@@ -300,6 +300,30 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProductEntry" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /presets:
+    get:
+      operationId: listProjectPresets
+      description: Starting points for a new project, shared by the whole workspace.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectPreset" } } } } }
+    post:
+      operationId: saveProjectPreset
+      description: Saves a project as a preset. Workspace admins only; saving under an existing name replaces it.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewProjectPreset" } } }
+      responses:
+        "201": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPreset" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /presets/{presetId}:
+    delete:
+      operationId: deleteProjectPreset
+      parameters: [ { name: presetId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "204": { description: deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/components:
     get:
       operationId: listComponents
@@ -824,6 +848,36 @@ components:
         slug: { type: string }
         name: { type: string }
         tags: { type: array, items: { type: string } }
+        preset: { type: string, description: "name of a project preset to start from; its vision, principles, process, packs and repository are copied, never shared" }
+    # A saved starting point for a new project. Named "preset" because "template" already
+    # means the process template per kind of task, and two meanings for one word in an API is
+    # a bug waiting to be written.
+    ProjectPreset:
+      type: object
+      required: [id, name, description, packs, product, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        packs: { type: array, items: { type: string }, description: "knowledge packs a project from this template switches on" }
+        product: { type: array, items: { $ref: "#/components/schemas/PresetEntry" } }
+        repoUrl: { type: string, description: "repository a new project starts with, if any" }
+        hasProcess: { type: boolean, description: "whether the template carries a process configuration" }
+        createdAt: { type: string, format: date-time }
+    PresetEntry:
+      type: object
+      required: [kind, title, content]
+      properties:
+        kind: { type: string }
+        title: { type: string }
+        content: { type: string }
+    NewProjectPreset:
+      type: object
+      required: [name, fromProjectId]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        fromProjectId: { type: string, format: uuid, description: "the project to snapshot" }
     Project:
       type: object
       required: [id, slug, name, tags, createdAt]

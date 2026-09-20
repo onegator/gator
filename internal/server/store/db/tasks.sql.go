@@ -701,18 +701,20 @@ const listTasksWithStalePendingChecks = `-- name: ListTasksWithStalePendingCheck
 SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id FROM tasks t
 JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
 WHERE t.closed_at IS NULL
-  AND g.updated_at < $1
+  AND (NOT $1::uuid IS NOT NULL OR t.project_id = $1)
+  AND g.updated_at < $2
   AND EXISTS (
       SELECT 1 FROM jsonb_array_elements(g.checks) c
       WHERE c->>'status' = 'pending' AND c->>'source' LIKE 'plugin:%'
   )
 ORDER BY g.updated_at
-LIMIT $2
+LIMIT $3
 `
 
 type ListTasksWithStalePendingChecksParams struct {
-	Before  pgtype.Timestamptz `json:"before"`
-	MaxRows int32              `json:"max_rows"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Before    pgtype.Timestamptz `json:"before"`
+	MaxRows   int32              `json:"max_rows"`
 }
 
 type ListTasksWithStalePendingChecksRow struct {
@@ -723,7 +725,7 @@ type ListTasksWithStalePendingChecksRow struct {
 // arrives leaves it there for good — the gate then shows a state that is simply not true.
 // The gate's own updated_at says how long nothing has moved.
 func (q *Queries) ListTasksWithStalePendingChecks(ctx context.Context, arg ListTasksWithStalePendingChecksParams) ([]ListTasksWithStalePendingChecksRow, error) {
-	rows, err := q.db.Query(ctx, listTasksWithStalePendingChecks, arg.Before, arg.MaxRows)
+	rows, err := q.db.Query(ctx, listTasksWithStalePendingChecks, arg.ProjectID, arg.Before, arg.MaxRows)
 	if err != nil {
 		return nil, err
 	}

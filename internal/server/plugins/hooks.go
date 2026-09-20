@@ -91,12 +91,23 @@ func (h *Host) callLogged(ctx context.Context, i *instance, method string, param
 // its proxy dropped, and three in a row were lost here to a 502 that never reached this
 // process. Without this the gate keeps showing the last thing it happened to hear, which may
 // be a check that finished hours ago. Returns how many tasks were re-evaluated.
+// An invalid projectID means every project, which is what the periodic sweep passes.
 func (h *Host) ReconcileChecks(ctx context.Context, before time.Time, max int32) (int, error) {
+	return h.reconcile(ctx, pgtype.UUID{}, before, max)
+}
+
+// ReconcileProjectChecks refreshes one project's gates. Scoped so a sweep can be bounded, and
+// so a test can reconcile its own project without reaching into everyone else's.
+func (h *Host) ReconcileProjectChecks(ctx context.Context, projectID pgtype.UUID, before time.Time, max int32) (int, error) {
+	return h.reconcile(ctx, projectID, before, max)
+}
+
+func (h *Host) reconcile(ctx context.Context, projectID pgtype.UUID, before time.Time, max int32) (int, error) {
 	if max <= 0 {
 		max = 50
 	}
 	rows, err := db.New(h.pool).ListTasksWithStalePendingChecks(ctx, db.ListTasksWithStalePendingChecksParams{
-		Before: pgtype.Timestamptz{Time: before, Valid: true}, MaxRows: max})
+		ProjectID: projectID, Before: pgtype.Timestamptz{Time: before, Valid: true}, MaxRows: max})
 	if err != nil {
 		return 0, err
 	}

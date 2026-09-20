@@ -132,6 +132,7 @@ FROM phase_transitions WHERE kind = 'rollback' GROUP BY task_id, to_phase;
 SELECT sqlc.embed(t) FROM tasks t
 JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
 WHERE t.closed_at IS NULL
+  AND (NOT sqlc.narg(project_id)::uuid IS NOT NULL OR t.project_id = sqlc.narg(project_id))
   AND g.updated_at < sqlc.arg(before)
   AND EXISTS (
       SELECT 1 FROM jsonb_array_elements(g.checks) c

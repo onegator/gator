@@ -270,6 +270,16 @@ type ProjectRepo struct {
 	IsPrimary     bool        `json:"is_primary"`
 }
 
+type ProjectTemplate struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Payload     []byte             `json:"payload"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Receipt struct {
 	ID          pgtype.UUID        `json:"id"`
 	Source      string             `json:"source"`

@@ -180,6 +180,17 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if in.Preset != nil && *in.Preset != "" {
+		// The project exists either way: a preset that cannot be applied leaves an empty
+		// project rather than swallowing one that was already created and named.
+		if err := s.applyPreset(r.Context(), *in.Preset, pr, p.UserID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error(), "invalid")
+			return
+		}
+		if updated, err := db.New(s.Pool).GetProject(r.Context(), pr.ID); err == nil {
+			pr = updated
+		}
+	}
 	writeJSON(w, http.StatusCreated, toProject(pr))
 }
 
