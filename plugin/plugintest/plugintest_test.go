@@ -102,10 +102,26 @@ func TestSignAndCoreRules(t *testing.T) {
 	if _, err := h(ctx, "gate.setCheck", json.RawMessage(`{"task_id":"missing","name":"ci","status":"pass"}`)); err == nil {
 		t.Fatal("a missing task is not found")
 	}
-	if _, err := h(ctx, "release.record", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "-32001") {
-		t.Fatalf("release.record: %v", err)
+	if _, err := h(ctx, "release.record", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("release.record without a version: %v", err)
 	}
-	if len(c.Calls()) != 3 {
-		t.Fatal("calls are recorded")
+	// The same fault twice is one incident with one task, which is the rule a monitoring
+	// plugin is written against.
+	for range 2 {
+		if _, err := h(ctx, "incident.upsert", json.RawMessage(`{"fingerprint":"f1","title":"It broke"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if inc := c.Incidents()["f1"]; inc.Count != 2 || inc.TaskID == "" {
+		t.Fatalf("incident = %+v", inc)
+	}
+	if _, err := h(ctx, "incident.close", json.RawMessage(`{"fingerprint":"f1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Incidents()["f1"].Closed {
+		t.Fatal("closing should be remembered")
+	}
+	if n := len(c.Calls()); n != 6 {
+		t.Fatalf("every call is recorded, got %d", n)
 	}
 }

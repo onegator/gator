@@ -43,6 +43,16 @@ type Call struct {
 	Error  string          `json:"error,omitempty"`
 }
 
+// Incident is what the fake core remembers about a fault: one per fingerprint, however many
+// times a monitoring tool repeats itself, which is the behaviour a plugin must not work around.
+type Incident struct {
+	plugin.IncidentUpsertParams
+	ID     string `json:"id"`
+	Count  int    `json:"count"`
+	TaskID string `json:"task_id,omitempty"`
+	Closed bool   `json:"closed"`
+}
+
 // Core is an in-memory stand-in for the core methods of one project.
 type Core struct {
 	ProjectID string
@@ -52,6 +62,8 @@ type Core struct {
 	checks    map[string][]plugin.Check
 	artifacts []Artifact
 	kv        map[string]json.RawMessage
+	releases  []plugin.ReleaseRecordParams
+	incidents map[string]*Incident
 	logs      []plugin.LogParams
 	calls     []Call
 }
@@ -61,7 +73,8 @@ func NewCore(projectID string) *Core {
 	if projectID == "" {
 		projectID = newID()
 	}
-	return &Core{ProjectID: projectID, checks: map[string][]plugin.Check{}, kv: map[string]json.RawMessage{}}
+	return &Core{ProjectID: projectID, checks: map[string][]plugin.Check{}, kv: map[string]json.RawMessage{},
+		incidents: map[string]*Incident{}}
 }
 
 func newID() string {
@@ -175,6 +188,24 @@ func (c *Core) KV() map[string]json.RawMessage {
 }
 
 // Logs returns what the plugin logged through the core.
+// Releases are what the plugin has said reached an environment, in the order it said so.
+func (c *Core) Releases() []plugin.ReleaseRecordParams {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]plugin.ReleaseRecordParams(nil), c.releases...)
+}
+
+// Incidents are the faults reported, by fingerprint.
+func (c *Core) Incidents() map[string]Incident {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string]Incident{}
+	for k, v := range c.incidents {
+		out[k] = *v
+	}
+	return out
+}
+
 func (c *Core) Logs() []plugin.LogParams {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -321,8 +352,53 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 		}
 		c.logs = append(c.logs, p)
 		return nil, nil
-	case plugin.CoreIncidentUpsert, plugin.CoreReleaseRecord:
-		return nil, plugin.Errorf(plugin.CodeNotAvailable, "%s arrives with release and monitoring support", method)
+	case plugin.CoreReleaseRecord:
+		p, err := decode[plugin.ReleaseRecordParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(p.Version) == "" {
+			return nil, plugin.Errorf(plugin.CodeInvalidParams, "a release needs a version")
+		}
+		if p.Environment == "" {
+			p.Environment = "production"
+		}
+		for i, r := range c.releases {
+			if r.Version == p.Version && r.Environment == p.Environment {
+				c.releases[i] = p // deploying the same version again updates it
+				return plugin.ReleaseRecordResult{ReleaseID: newID()}, nil
+			}
+		}
+		c.releases = append(c.releases, p)
+		return plugin.ReleaseRecordResult{ReleaseID: newID()}, nil
+	case plugin.CoreIncidentUpsert:
+		p, err := decode[plugin.IncidentUpsertParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(p.Fingerprint) == "" || strings.TrimSpace(p.Title) == "" {
+			return nil, plugin.Errorf(plugin.CodeInvalidParams, "an incident needs a fingerprint and a title")
+		}
+		if inc, ok := c.incidents[p.Fingerprint]; ok {
+			inc.Count++
+			inc.IncidentUpsertParams = p
+			return plugin.IncidentUpsertResult{IncidentID: inc.ID, TaskID: inc.TaskID}, nil
+		}
+		task := &Task{TaskRef: plugin.TaskRef{ID: newID(), ProjectID: c.ProjectID, Kind: "incident",
+			Title: p.Title, Phase: firstPhase["incident"], ExternalRefs: map[string]string{}}}
+		c.tasks = append(c.tasks, task)
+		inc := &Incident{IncidentUpsertParams: p, ID: newID(), Count: 1, TaskID: task.ID}
+		c.incidents[p.Fingerprint] = inc
+		return plugin.IncidentUpsertResult{IncidentID: inc.ID, TaskID: inc.TaskID, Created: true}, nil
+	case plugin.CoreIncidentClose:
+		p, err := decode[plugin.IncidentCloseParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		if inc, ok := c.incidents[p.Fingerprint]; ok {
+			inc.Closed = true
+		}
+		return nil, nil
 	}
 	return nil, plugin.Errorf(plugin.CodeMethodNotFound, "method %q not found", method)
 }
