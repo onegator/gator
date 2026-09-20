@@ -25,6 +25,11 @@ func (s *Service) Catalogue(ctx context.Context, t db.Task) (ContextDoc, bool, e
 	if err != nil {
 		return ContextDoc{}, false, nil // deleted between the task and the job; not an error
 	}
+	if c.Status != "approved" {
+		// A component the server worked out for itself is a suggestion, not knowledge. It
+		// reaches a prompt only once a person has said it is right.
+		return ContextDoc{}, false, nil
+	}
 	ids := []pgtype.UUID{c.ID}
 	deps, err := q.ListComponentDeps(ctx, ids)
 	if err != nil {

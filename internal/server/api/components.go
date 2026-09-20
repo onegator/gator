@@ -13,6 +13,33 @@ import (
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
+// ApproveComponent accepts a component the server worked out from where jobs change code. Until
+// somebody does, it is a suggestion on a screen and reaches no prompt. Rejecting one is
+// deleting it, which is the same gesture as removing any other component.
+func (s *Server) ApproveComponent(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, key string) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleAdmin); !ok {
+		return
+	}
+	updated, err := db.New(s.Pool).SetComponentStatus(r.Context(), db.SetComponentStatusParams{
+		ProjectID: fromUUID(projectId), Key: key, Status: "approved"})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out, err := s.components(r, fromUUID(projectId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	for _, c := range out {
+		if c.Key == updated.Key {
+			writeJSON(w, http.StatusOK, c)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "no such component", "not_found")
+}
+
 // ListComponents returns the catalogue with each component's neighbours and decisions, so the
 // screen and the prompt agree on what a component is.
 func (s *Server) ListComponents(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
@@ -70,6 +97,8 @@ func (s *Server) components(r *http.Request, projectID pgtype.UUID) ([]gen.Compo
 			DependsOn: orEmptyKeys(dependsOn[c.ID.Bytes]), UsedBy: orEmptyKeys(usedBy[c.ID.Bytes]),
 			Decisions: linked[c.ID.Bytes],
 		}
+		status := gen.ComponentStatus(c.Status)
+		item.Status, item.ProposedReason = &status, &c.ProposedReason
 		if item.Decisions == nil {
 			item.Decisions = []gen.ProductEntry{}
 		}

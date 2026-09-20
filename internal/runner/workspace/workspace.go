@@ -123,28 +123,35 @@ func (m *Manager) Prepare(ctx context.Context, job proto.Job) (*Workspace, error
 	return &Workspace{Dir: dir, Branch: br, Base: strings.TrimSpace(base), bare: bare, m: m}, nil
 }
 
-// Changes returns the commits made on the branch and the number of files they changed,
-// plus how many files are modified but not committed.
-func (w *Workspace) Changes(ctx context.Context) (commits []string, changed, dirty int, err error) {
+// maxChangedPaths bounds what one job reports. A change that touches more files than this says
+// something about the whole repository, not about one part of it.
+const maxChangedPaths = 500
+
+// Changes returns the commits made on the branch, the files they changed, and how many files
+// are modified but not committed.
+func (w *Workspace) Changes(ctx context.Context) (commits []string, paths []string, dirty int, err error) {
 	if !w.HasRepo() {
-		return nil, 0, 0, nil
+		return nil, nil, 0, nil
 	}
 	out, err := w.m.run(ctx, w.Dir, "log", "--format=%H", w.Base+"..HEAD")
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, nil, 0, err
 	}
 	commits = lines(out)
 	out, err = w.m.run(ctx, w.Dir, "diff", "--name-only", w.Base, "HEAD")
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, nil, 0, err
 	}
-	changed = len(lines(out))
+	paths = lines(out)
+	if len(paths) > maxChangedPaths {
+		paths = paths[:maxChangedPaths]
+	}
 	out, err = w.m.run(ctx, w.Dir, "status", "--porcelain")
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, nil, 0, err
 	}
 	dirty = len(lines(out))
-	return commits, changed, dirty, nil
+	return commits, paths, dirty, nil
 }
 
 // Push publishes the job branch to origin. Only the job branch is pushed.

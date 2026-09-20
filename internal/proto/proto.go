@@ -268,6 +268,9 @@ type Finish struct {
 	Branch       string   `json:"branch,omitempty"`
 	Commits      []string `json:"commits,omitempty"`
 	ChangedFiles int      `json:"changed_files"`
+	// ChangedPaths are the files the job actually committed, bounded. The catalogue is built
+	// from where work really happens, and a count cannot say where that was.
+	ChangedPaths []string `json:"changed_paths,omitempty"`
 	SessionID    string   `json:"session_id,omitempty"`
 	Summary      string   `json:"summary,omitempty"`
 	Digest       *Digest  `json:"digest,omitempty"`

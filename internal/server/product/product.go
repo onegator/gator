@@ -44,7 +44,7 @@ func NewCurator(pool *pgxpool.Pool, hub *events.Hub, log *slog.Logger, poll time
 }
 
 // watched are the events that leave something worth remembering.
-var watched = []string{"gate.approved", "task.closed"}
+var watched = []string{"gate.approved", "task.closed", "job.finished"}
 
 // Run proposes entries until ctx ends.
 func (c *Curator) Run(ctx context.Context) {
@@ -94,6 +94,13 @@ func (c *Curator) handle(ctx context.Context, row db.EventsAfterRow) error {
 		return nil
 	}
 	q := db.New(c.pool)
+	if row.Type == "job.finished" {
+		job, err := q.GetJob(ctx, row.AggregateID)
+		if err != nil {
+			return err
+		}
+		return c.proposeComponents(ctx, job)
+	}
 	task, err := q.GetTask(ctx, row.AggregateID)
 	if err != nil {
 		return err

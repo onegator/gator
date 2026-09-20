@@ -29,7 +29,7 @@ func (q *Queries) DeleteComponent(ctx context.Context, arg DeleteComponentParams
 }
 
 const getComponent = `-- name: GetComponent :one
-SELECT id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at FROM components WHERE id = $1
+SELECT id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at, status, proposed_reason FROM components WHERE id = $1
 `
 
 func (q *Queries) GetComponent(ctx context.Context, id pgtype.UUID) (Component, error) {
@@ -47,12 +47,14 @@ func (q *Queries) GetComponent(ctx context.Context, id pgtype.UUID) (Component, 
 		&i.Notes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Status,
+		&i.ProposedReason,
 	)
 	return i, err
 }
 
 const getComponentByKey = `-- name: GetComponentByKey :one
-SELECT id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at FROM components WHERE project_id = $1 AND key = $2
+SELECT id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at, status, proposed_reason FROM components WHERE project_id = $1 AND key = $2
 `
 
 type GetComponentByKeyParams struct {
@@ -75,6 +77,8 @@ func (q *Queries) GetComponentByKey(ctx context.Context, arg GetComponentByKeyPa
 		&i.Notes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Status,
+		&i.ProposedReason,
 	)
 	return i, err
 }
@@ -91,6 +95,44 @@ type LinkComponentDecisionParams struct {
 func (q *Queries) LinkComponentDecision(ctx context.Context, arg LinkComponentDecisionParams) error {
 	_, err := q.db.Exec(ctx, linkComponentDecision, arg.ComponentID, arg.EntryID)
 	return err
+}
+
+const listApprovedComponents = `-- name: ListApprovedComponents :many
+SELECT id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at, status, proposed_reason FROM components WHERE project_id = $1 AND status = 'approved' ORDER BY kind, key
+`
+
+func (q *Queries) ListApprovedComponents(ctx context.Context, projectID pgtype.UUID) ([]Component, error) {
+	rows, err := q.db.Query(ctx, listApprovedComponents, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Component
+	for rows.Next() {
+		var i Component
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Key,
+			&i.Name,
+			&i.Kind,
+			&i.Repo,
+			&i.Path,
+			&i.OwnerID,
+			&i.Notes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Status,
+			&i.ProposedReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listComponentDecisions = `-- name: ListComponentDecisions :many
@@ -144,7 +186,7 @@ func (q *Queries) ListComponentDecisions(ctx context.Context, componentIds []pgt
 }
 
 const listComponentDependents = `-- name: ListComponentDependents :many
-SELECT c.id, c.project_id, c.key, c.name, c.kind, c.repo, c.path, c.owner_id, c.notes, c.created_at, c.updated_at, d.depends_on_id AS of_id FROM component_deps d
+SELECT c.id, c.project_id, c.key, c.name, c.kind, c.repo, c.path, c.owner_id, c.notes, c.created_at, c.updated_at, c.status, c.proposed_reason, d.depends_on_id AS of_id FROM component_deps d
 JOIN components c ON c.id = d.component_id
 WHERE d.depends_on_id = ANY($1::uuid[])
 ORDER BY c.key
@@ -177,6 +219,8 @@ func (q *Queries) ListComponentDependents(ctx context.Context, componentIds []pg
 			&i.Component.Notes,
 			&i.Component.CreatedAt,
 			&i.Component.UpdatedAt,
+			&i.Component.Status,
+			&i.Component.ProposedReason,
 			&i.OfID,
 		); err != nil {
 			return nil, err
@@ -190,7 +234,7 @@ func (q *Queries) ListComponentDependents(ctx context.Context, componentIds []pg
 }
 
 const listComponentDeps = `-- name: ListComponentDeps :many
-SELECT c.id, c.project_id, c.key, c.name, c.kind, c.repo, c.path, c.owner_id, c.notes, c.created_at, c.updated_at, d.component_id AS of_id FROM component_deps d
+SELECT c.id, c.project_id, c.key, c.name, c.kind, c.repo, c.path, c.owner_id, c.notes, c.created_at, c.updated_at, c.status, c.proposed_reason, d.component_id AS of_id FROM component_deps d
 JOIN components c ON c.id = d.depends_on_id
 WHERE d.component_id = ANY($1::uuid[])
 ORDER BY c.key
@@ -222,6 +266,8 @@ func (q *Queries) ListComponentDeps(ctx context.Context, componentIds []pgtype.U
 			&i.Component.Notes,
 			&i.Component.CreatedAt,
 			&i.Component.UpdatedAt,
+			&i.Component.Status,
+			&i.Component.ProposedReason,
 			&i.OfID,
 		); err != nil {
 			return nil, err
@@ -235,7 +281,7 @@ func (q *Queries) ListComponentDeps(ctx context.Context, componentIds []pgtype.U
 }
 
 const listComponents = `-- name: ListComponents :many
-SELECT id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at FROM components WHERE project_id = $1 ORDER BY kind, key
+SELECT id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at, status, proposed_reason FROM components WHERE project_id = $1 ORDER BY kind, key
 `
 
 func (q *Queries) ListComponents(ctx context.Context, projectID pgtype.UUID) ([]Component, error) {
@@ -259,6 +305,8 @@ func (q *Queries) ListComponents(ctx context.Context, projectID pgtype.UUID) ([]
 			&i.Notes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Status,
+			&i.ProposedReason,
 		); err != nil {
 			return nil, err
 		}
@@ -268,6 +316,102 @@ func (q *Queries) ListComponents(ctx context.Context, projectID pgtype.UUID) ([]
 		return nil, err
 	}
 	return items, nil
+}
+
+const markHintProposed = `-- name: MarkHintProposed :exec
+UPDATE component_hints SET proposed_at = now() WHERE id = $1
+`
+
+func (q *Queries) MarkHintProposed(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markHintProposed, id)
+	return err
+}
+
+const proposeComponent = `-- name: ProposeComponent :one
+INSERT INTO components (project_id, key, name, kind, repo, path, notes, status, proposed_reason)
+VALUES ($1, $2, $3, $4, $5, $6, '', 'proposed', $7)
+ON CONFLICT (project_id, key) DO NOTHING
+RETURNING id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at, status, proposed_reason
+`
+
+type ProposeComponentParams struct {
+	ProjectID      pgtype.UUID `json:"project_id"`
+	Key            string      `json:"key"`
+	Name           string      `json:"name"`
+	Kind           string      `json:"kind"`
+	Repo           string      `json:"repo"`
+	Path           string      `json:"path"`
+	ProposedReason string      `json:"proposed_reason"`
+}
+
+func (q *Queries) ProposeComponent(ctx context.Context, arg ProposeComponentParams) (Component, error) {
+	row := q.db.QueryRow(ctx, proposeComponent,
+		arg.ProjectID,
+		arg.Key,
+		arg.Name,
+		arg.Kind,
+		arg.Repo,
+		arg.Path,
+		arg.ProposedReason,
+	)
+	var i Component
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Key,
+		&i.Name,
+		&i.Kind,
+		&i.Repo,
+		&i.Path,
+		&i.OwnerID,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Status,
+		&i.ProposedReason,
+	)
+	return i, err
+}
+
+const recordComponentHint = `-- name: RecordComponentHint :one
+INSERT INTO component_hints (project_id, path, jobs, files, last_job_id, last_seen_at)
+VALUES ($1, $2, 1, $3, $4, now())
+ON CONFLICT (project_id, path) DO UPDATE
+SET jobs = component_hints.jobs + CASE WHEN component_hints.last_job_id IS DISTINCT FROM EXCLUDED.last_job_id THEN 1 ELSE 0 END,
+    files = component_hints.files + EXCLUDED.files,
+    last_job_id = EXCLUDED.last_job_id,
+    last_seen_at = now()
+RETURNING id, project_id, path, jobs, files, last_job_id, proposed_at, last_seen_at
+`
+
+type RecordComponentHintParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Path      string      `json:"path"`
+	Files     int32       `json:"files"`
+	LastJobID pgtype.UUID `json:"last_job_id"`
+}
+
+// One job's evidence about one directory. jobs counts distinct jobs, which is what tells a real
+// part of the product from a file somebody passed through once.
+func (q *Queries) RecordComponentHint(ctx context.Context, arg RecordComponentHintParams) (ComponentHint, error) {
+	row := q.db.QueryRow(ctx, recordComponentHint,
+		arg.ProjectID,
+		arg.Path,
+		arg.Files,
+		arg.LastJobID,
+	)
+	var i ComponentHint
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Path,
+		&i.Jobs,
+		&i.Files,
+		&i.LastJobID,
+		&i.ProposedAt,
+		&i.LastSeenAt,
+	)
+	return i, err
 }
 
 const removeComponentDep = `-- name: RemoveComponentDep :execrows
@@ -303,6 +447,39 @@ type SetComponentDepParams struct {
 func (q *Queries) SetComponentDep(ctx context.Context, arg SetComponentDepParams) error {
 	_, err := q.db.Exec(ctx, setComponentDep, arg.ComponentID, arg.DependsOnID)
 	return err
+}
+
+const setComponentStatus = `-- name: SetComponentStatus :one
+UPDATE components SET status = $2, proposed_reason = CASE WHEN $2 = 'approved' THEN '' ELSE proposed_reason END,
+    updated_at = now()
+WHERE project_id = $1 AND key = $3 RETURNING id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at, status, proposed_reason
+`
+
+type SetComponentStatusParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Status    string      `json:"status"`
+	Key       string      `json:"key"`
+}
+
+func (q *Queries) SetComponentStatus(ctx context.Context, arg SetComponentStatusParams) (Component, error) {
+	row := q.db.QueryRow(ctx, setComponentStatus, arg.ProjectID, arg.Status, arg.Key)
+	var i Component
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Key,
+		&i.Name,
+		&i.Kind,
+		&i.Repo,
+		&i.Path,
+		&i.OwnerID,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Status,
+		&i.ProposedReason,
+	)
+	return i, err
 }
 
 const setJobContextSize = `-- name: SetJobContextSize :exec
@@ -379,7 +556,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $8, $7)
 ON CONFLICT (project_id, key) DO UPDATE
 SET name = EXCLUDED.name, kind = EXCLUDED.kind, repo = EXCLUDED.repo, path = EXCLUDED.path,
     owner_id = EXCLUDED.owner_id, notes = EXCLUDED.notes, updated_at = now()
-RETURNING id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at
+RETURNING id, project_id, key, name, kind, repo, path, owner_id, notes, created_at, updated_at, status, proposed_reason
 `
 
 type UpsertComponentParams struct {
@@ -417,6 +594,8 @@ func (q *Queries) UpsertComponent(ctx context.Context, arg UpsertComponentParams
 		&i.Notes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Status,
+		&i.ProposedReason,
 	)
 	return i, err
 }

@@ -378,6 +378,16 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Component" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/components/{key}/approve:
+    post:
+      operationId: approveComponent
+      description: Accepts a component the server proposed. Rejecting one is deleting it.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Component" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/components/{key}:
     delete:
       operationId: deleteComponent
@@ -1212,6 +1222,8 @@ components:
         dependsOn: { type: array, items: { type: string }, description: "keys of components this one needs" }
         usedBy: { type: array, items: { type: string }, description: "keys of components a change here reaches" }
         decisions: { type: array, items: { $ref: "#/components/schemas/ProductEntry" }, description: "approved decisions that shaped it" }
+        status: { type: string, enum: [approved, proposed], description: "a proposed component was worked out from where jobs change code; it reaches no prompt until approved" }
+        proposedReason: { type: string, description: "why the server suggested it" }
     ComponentInput:
       type: object
       required: [key, name, kind]

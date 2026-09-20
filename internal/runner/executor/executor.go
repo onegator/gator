@@ -133,11 +133,13 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	// should be able to see what the agent left behind.
 	gctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	commits, changed, dirty, gerr := ws.Changes(gctx)
+	commits, changedPaths, dirty, gerr := ws.Changes(gctx)
+	changed := len(changedPaths)
 	pushed, keep := false, false
 	var pushErr string
 	if gerr == nil && len(commits) > 0 {
 		fin.Branch, fin.Commits, fin.ChangedFiles = ws.Branch, commits, changed
+		fin.ChangedPaths = changedPaths
 		if e.Push {
 			if err := ws.Push(gctx); err != nil {
 				pushErr, keep = err.Error(), true

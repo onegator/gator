@@ -64,8 +64,13 @@ func TestPrepareCommitPushCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	commits, changed, dirty, err := w.Changes(ctx)
-	if err != nil || len(commits) != 1 || changed != 1 || dirty != 1 {
-		t.Fatalf("changes: commits=%v changed=%d dirty=%d err=%v", commits, changed, dirty, err)
+	if err != nil || len(commits) != 1 || len(changed) != 1 || dirty != 1 {
+		t.Fatalf("changes: commits=%v changed=%v dirty=%d err=%v", commits, changed, dirty, err)
+	}
+	// The paths themselves are what the catalogue is worked out from, so they are worth
+	// asserting rather than just counting.
+	if changed[0] != "feature.go" {
+		t.Fatalf("changed = %v", changed)
 	}
 	if err := w.Push(ctx); err != nil {
 		t.Fatal(err)

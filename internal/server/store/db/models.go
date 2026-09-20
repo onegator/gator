@@ -57,17 +57,19 @@ type CampaignTarget struct {
 }
 
 type Component struct {
-	ID        pgtype.UUID        `json:"id"`
-	ProjectID pgtype.UUID        `json:"project_id"`
-	Key       string             `json:"key"`
-	Name      string             `json:"name"`
-	Kind      string             `json:"kind"`
-	Repo      string             `json:"repo"`
-	Path      string             `json:"path"`
-	OwnerID   pgtype.UUID        `json:"owner_id"`
-	Notes     string             `json:"notes"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID             pgtype.UUID        `json:"id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Key            string             `json:"key"`
+	Name           string             `json:"name"`
+	Kind           string             `json:"kind"`
+	Repo           string             `json:"repo"`
+	Path           string             `json:"path"`
+	OwnerID        pgtype.UUID        `json:"owner_id"`
+	Notes          string             `json:"notes"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	Status         string             `json:"status"`
+	ProposedReason string             `json:"proposed_reason"`
 }
 
 type ComponentDecision struct {
@@ -78,6 +80,17 @@ type ComponentDecision struct {
 type ComponentDep struct {
 	ComponentID pgtype.UUID `json:"component_id"`
 	DependsOnID pgtype.UUID `json:"depends_on_id"`
+}
+
+type ComponentHint struct {
+	ID         pgtype.UUID        `json:"id"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	Path       string             `json:"path"`
+	Jobs       int32              `json:"jobs"`
+	Files      int32              `json:"files"`
+	LastJobID  pgtype.UUID        `json:"last_job_id"`
+	ProposedAt pgtype.Timestamptz `json:"proposed_at"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }
 
 type Device struct {
