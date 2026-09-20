@@ -88,7 +88,7 @@ config or secrets, just to read the manifest.
 | `shutdown` | notification before stop | none |
 | `webhook` | `POST /hooks/<project-slug>/<plugin>` | `{delivery_id, headers, body}` → null |
 | `phaseTransition` | after every advance or rollback | `{task, from, to, rollback, reason}` → null |
-| `gateEvaluate` | a task is created or enters a phase | `{task, phase}` → `{checks: [{name, status, detail}]}` |
+| `gateEvaluate` | a task is created, enters a phase, or its gate has sat on a pending check | `{task, phase}` → `{checks: [{name, status, detail}]}` |
 | `artifactApproved` | a person approved a phase's documents | `{task, phase}` → null |
 | `schedule` | every `every` of a manifest schedule | `{name}` → null |
 | `renderUI` | a client opens a task | `{task}` → `{tabs: [{title, markdown}], chips: [{text, color, url}]}` |
@@ -101,6 +101,12 @@ server reads domain events from its outbox with a durable cursor, so a restart c
 batch. Make hooks idempotent, for example by looking up an existing task with `task.find`
 before creating one. Checks from `gateEvaluate` are stored as `plugin:<name>` checks, and a
 `fail` blocks the gate.
+
+A webhook, by contrast, arrives **at most once**: senders like GitHub do not retry a delivery
+their side dropped, and three in a row were lost here to a proxy answering 502. A gate then
+keeps showing the last thing it heard. So every 5 minutes the server re-runs `gateEvaluate` for
+gates whose plugin checks have sat at `pending` for 15 minutes. Answer it from the source of
+truth rather than from what the plugin remembers, and make it cheap: it is called on a timer.
 
 ## Core methods (plugin → core)
 

@@ -690,6 +690,69 @@ func (q *Queries) ListRollbackCounts(ctx context.Context) ([]ListRollbackCountsR
 	return items, nil
 }
 
+const listTasksWithStalePendingChecks = `-- name: ListTasksWithStalePendingChecks :many
+SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description FROM tasks t
+JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+WHERE t.closed_at IS NULL
+  AND g.updated_at < $1
+  AND EXISTS (
+      SELECT 1 FROM jsonb_array_elements(g.checks) c
+      WHERE c->>'status' = 'pending' AND c->>'source' LIKE 'plugin:%'
+  )
+ORDER BY g.updated_at
+LIMIT $2
+`
+
+type ListTasksWithStalePendingChecksParams struct {
+	Before  pgtype.Timestamptz `json:"before"`
+	MaxRows int32              `json:"max_rows"`
+}
+
+type ListTasksWithStalePendingChecksRow struct {
+	Task Task `json:"task"`
+}
+
+// A plugin check sits at "pending" until an event says otherwise, and a webhook that never
+// arrives leaves it there for good — the gate then shows a state that is simply not true.
+// The gate's own updated_at says how long nothing has moved.
+func (q *Queries) ListTasksWithStalePendingChecks(ctx context.Context, arg ListTasksWithStalePendingChecksParams) ([]ListTasksWithStalePendingChecksRow, error) {
+	rows, err := q.db.Query(ctx, listTasksWithStalePendingChecks, arg.Before, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTasksWithStalePendingChecksRow
+	for rows.Next() {
+		var i ListTasksWithStalePendingChecksRow
+		if err := rows.Scan(
+			&i.Task.ID,
+			&i.Task.ProjectID,
+			&i.Task.Kind,
+			&i.Task.Title,
+			&i.Task.Phase,
+			&i.Task.Urgency,
+			&i.Task.OwnerKind,
+			&i.Task.OwnerID,
+			&i.Task.RequirementsChanged,
+			&i.Task.BlockedReason,
+			&i.Task.SourceTaskID,
+			&i.Task.ExternalRefs,
+			&i.Task.PhaseEnteredAt,
+			&i.Task.CreatedAt,
+			&i.Task.UpdatedAt,
+			&i.Task.ClosedAt,
+			&i.Task.Description,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const mergeTaskExternalRefs = `-- name: MergeTaskExternalRefs :one
 UPDATE tasks SET external_refs = external_refs || $1::jsonb, updated_at = now()
 WHERE id = $2 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description

@@ -124,3 +124,18 @@ ORDER BY created_at DESC LIMIT 1;
 -- How often each task was sent back into a phase; the inbox shows it on the row.
 SELECT task_id, to_phase, count(*)::int AS rollbacks
 FROM phase_transitions WHERE kind = 'rollback' GROUP BY task_id, to_phase;
+
+-- name: ListTasksWithStalePendingChecks :many
+-- A plugin check sits at "pending" until an event says otherwise, and a webhook that never
+-- arrives leaves it there for good — the gate then shows a state that is simply not true.
+-- The gate's own updated_at says how long nothing has moved.
+SELECT sqlc.embed(t) FROM tasks t
+JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+WHERE t.closed_at IS NULL
+  AND g.updated_at < sqlc.arg(before)
+  AND EXISTS (
+      SELECT 1 FROM jsonb_array_elements(g.checks) c
+      WHERE c->>'status' = 'pending' AND c->>'source' LIKE 'plugin:%'
+  )
+ORDER BY g.updated_at
+LIMIT sqlc.arg(max_rows);

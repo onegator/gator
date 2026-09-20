@@ -39,6 +39,35 @@ func (w *ExpirePhasesWorker) Work(ctx context.Context, _ *river.Job[ExpirePhases
 	return err
 }
 
+// ReconcileChecksArgs re-asks plugins about gates stuck on a pending check.
+type ReconcileChecksArgs struct{}
+
+func (ReconcileChecksArgs) Kind() string { return "reconcile_checks" }
+
+// CheckReconciler is the plugin host. The interface keeps this package off plugins.
+type CheckReconciler interface {
+	ReconcileChecks(ctx context.Context, before time.Time, max int32) (int, error)
+}
+
+// ReconcileChecksWorker refreshes gates whose plugin checks have stopped moving. A webhook is
+// delivered at most once, so a dropped one leaves the gate showing a check that finished long
+// ago. Asking again is the only way to learn otherwise.
+type ReconcileChecksWorker struct {
+	river.WorkerDefaults[ReconcileChecksArgs]
+	Plugins CheckReconciler
+	Stale   time.Duration
+	Log     *slog.Logger
+}
+
+// Work implements river.Worker.
+func (w *ReconcileChecksWorker) Work(ctx context.Context, _ *river.Job[ReconcileChecksArgs]) error {
+	n, err := w.Plugins.ReconcileChecks(ctx, time.Now().Add(-w.Stale), 50)
+	if n > 0 {
+		w.Log.Info("re-asked plugins about gates that stopped moving", "tasks", n)
+	}
+	return err
+}
+
 // BackupArgs is the periodic database backup.
 type BackupArgs struct{}
 
@@ -70,9 +99,15 @@ type Options struct {
 	Backup      backup.Config
 	DatabaseURL string
 	Log         *slog.Logger
-	// Intervals; zero picks the defaults (1m sweep, 1h backup).
-	ExpireEvery time.Duration
-	BackupEvery time.Duration
+	// Plugins refreshes gates whose checks stopped moving. Optional: without a plugin host
+	// there are no plugin checks to go stale.
+	Plugins CheckReconciler
+	// Intervals; zero picks the defaults (1m sweep, 1h backup, 5m reconcile of checks that
+	// have not moved for 15m).
+	ExpireEvery    time.Duration
+	BackupEvery    time.Duration
+	ReconcileEvery time.Duration
+	StaleAfter     time.Duration
 }
 
 // New builds a River client with workers and periodic jobs registered. Call Start.
@@ -83,12 +118,26 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 	if o.BackupEvery == 0 {
 		o.BackupEvery = time.Hour
 	}
+	if o.ReconcileEvery == 0 {
+		o.ReconcileEvery = 5 * time.Minute
+	}
+	if o.StaleAfter == 0 {
+		// Long enough that a check still running is not asked about on every tick, short
+		// enough that a person waiting on a gate is not waiting on a lie for an afternoon.
+		o.StaleAfter = 15 * time.Minute
+	}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &ExpirePhasesWorker{Process: o.Process, Log: o.Log})
 	periodic := []*river.PeriodicJob{
 		river.NewPeriodicJob(river.PeriodicInterval(o.ExpireEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return ExpirePhasesArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
 		}, &river.PeriodicJobOpts{RunOnStart: true}),
+	}
+	if o.Plugins != nil {
+		river.AddWorker(workers, &ReconcileChecksWorker{Plugins: o.Plugins, Stale: o.StaleAfter, Log: o.Log})
+		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.ReconcileEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return ReconcileChecksArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
+		}, &river.PeriodicJobOpts{RunOnStart: false}))
 	}
 	if o.Backup.Enabled() {
 		river.AddWorker(workers, &BackupWorker{Config: o.Backup, DatabaseURL: o.DatabaseURL, Log: o.Log})

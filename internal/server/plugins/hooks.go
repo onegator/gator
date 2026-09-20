@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
@@ -81,6 +84,31 @@ func (h *Host) callLogged(ctx context.Context, i *instance, method string, param
 	if err := h.call(ctx, i, method, params, nil); err != nil && ctx.Err() == nil {
 		i.log().Warn("plugin hook failed", "hook", method, "err", err)
 	}
+}
+
+// ReconcileChecks re-asks the plugins about gates whose checks have sat at "pending" since
+// before `before`. A sender delivers a webhook at most once: GitHub does not retry a delivery
+// its proxy dropped, and three in a row were lost here to a 502 that never reached this
+// process. Without this the gate keeps showing the last thing it happened to hear, which may
+// be a check that finished hours ago. Returns how many tasks were re-evaluated.
+func (h *Host) ReconcileChecks(ctx context.Context, before time.Time, max int32) (int, error) {
+	if max <= 0 {
+		max = 50
+	}
+	rows, err := db.New(h.pool).ListTasksWithStalePendingChecks(ctx, db.ListTasksWithStalePendingChecksParams{
+		Before: pgtype.Timestamptz{Time: before, Valid: true}, MaxRows: max})
+	if err != nil {
+		return 0, err
+	}
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			break
+		}
+		h.each(h.forProject(row.Task.ProjectID, plugin.MethodGateEvaluate), func(i *instance) {
+			h.evaluate(ctx, i, row.Task.ID.String())
+		})
+	}
+	return len(rows), nil
 }
 
 // evaluate asks a plugin for its checks on the task's current gate and stores them.
