@@ -17,7 +17,7 @@ func TestAQuietObservationWindowFinishesTheTask(t *testing.T) {
 	// Release and Monitoring phases. Walk the task to Monitoring, which is where a release is
 	// watched.
 	// Release is the phase the deploy plugin owns; recording the release is what ends it.
-	task := h.walkTo(p.id, gen.Chore, "Ship the thing", "release")
+	task := h.walkTo(p.id, gen.NewTaskKindChore, "Ship the thing", "release")
 
 	body := map[string]any{"release": map[string]any{"version": "1.4.0", "task_id": task.Id.String(), "observe_minutes": 30}}
 	if code, _ := h.hook(p.slug, "rel1", jsonBody(body), nil); code != 200 {
@@ -108,7 +108,7 @@ func TestAnIncidentBecomesOneTaskHoweverOftenItIsReported(t *testing.T) {
 func TestAReleaseWithAnOpenIncidentIsNotCalledGood(t *testing.T) {
 	h := newHarness(t)
 	p := h.echoProject(map[string]any{"greeting": "hi"})
-	task := h.walkTo(p.id, gen.Chore, "Ship something broken", "release")
+	task := h.walkTo(p.id, gen.NewTaskKindChore, "Ship something broken", "release")
 
 	h.hook(p.slug, "rel2", jsonBody(map[string]any{
 		"release": map[string]any{"version": "2.0.0", "task_id": task.Id.String(), "observe_minutes": 5}}), nil)
@@ -122,5 +122,86 @@ func TestAReleaseWithAnOpenIncidentIsNotCalledGood(t *testing.T) {
 	h.do("GET", "/tasks/"+task.Id.String(), nil, &after)
 	if after.ClosedAt != nil {
 		t.Fatal("a release with an open incident should not close its task")
+	}
+}
+
+// Fixing the incident is what lets the release be called good. The task closing is the whole
+// signal: nobody should also have to remember to tick the incident off somewhere else.
+func TestFixingTheIncidentLetsTheReleaseSettle(t *testing.T) {
+	h := newHarness(t)
+	p := h.echoProject(map[string]any{"greeting": "hi"})
+	task := h.walkTo(p.id, gen.NewTaskKindChore, "Ship something shaky", "release")
+
+	h.hook(p.slug, "rel3", jsonBody(map[string]any{
+		"release": map[string]any{"version": "3.0.0", "task_id": task.Id.String(), "observe_minutes": 5}}), nil)
+	h.hook(p.slug, "inc3", jsonBody(map[string]any{
+		"incident": map[string]any{"fingerprint": "boom-3", "title": "It broke again", "severity": "high", "version": "3.0.0"}}), nil)
+
+	var tasks []gen.Task
+	h.do("GET", "/projects/"+p.id+"/tasks", nil, &tasks)
+	var incident gen.Task
+	for _, item := range tasks {
+		if item.Kind == "incident" {
+			incident = item
+		}
+	}
+	if incident.Id.String() == "" {
+		t.Fatal("the incident should have opened a task")
+	}
+	// Close the incident task the way a person would: approve and advance to the end.
+	for range 10 {
+		var current gen.Task
+		if h.do("GET", "/tasks/"+incident.Id.String(), nil, &current); current.ClosedAt != nil {
+			break
+		}
+		h.do("POST", "/tasks/"+incident.Id.String()+"/approve", nil, nil)
+		if code := h.do("POST", "/tasks/"+incident.Id.String()+"/advance", nil, nil); code != 200 {
+			break
+		}
+	}
+	// The host hears task.closed on its own loop, so give it a moment to close the incident.
+	h.until("the incident to be closed", func() bool {
+		return h.count("SELECT count(*) FROM incidents WHERE project_id = $1 AND closed_at IS NOT NULL", p.id) == 1
+	})
+
+	if _, err := h.plugins.SettleReleases(context.Background(), time.Now().Add(10*time.Minute), 50); err != nil {
+		t.Fatal(err)
+	}
+	var after gen.Task
+	h.do("GET", "/tasks/"+task.Id.String(), nil, &after)
+	if after.ClosedAt == nil && after.Phase == "monitoring" {
+		t.Fatal("with the incident fixed, a quiet window should finish the release's task")
+	}
+}
+
+// The screens read this: what is out there, and what is wrong with it.
+func TestReleasesAndIncidentsAreReadable(t *testing.T) {
+	h := newHarness(t)
+	p := h.echoProject(map[string]any{"greeting": "hi"})
+	h.hook(p.slug, "rel4", jsonBody(map[string]any{
+		"release": map[string]any{"version": "4.1.0", "observe_minutes": 30}}), nil)
+	h.hook(p.slug, "inc4", jsonBody(map[string]any{
+		"incident": map[string]any{"fingerprint": "boom-4", "title": "Timeouts", "severity": "medium", "version": "4.1.0"}}), nil)
+
+	var releases []gen.Release
+	if code := h.do("GET", "/projects/"+p.id+"/releases", nil, &releases); code != 200 {
+		t.Fatalf("releases: %d", code)
+	}
+	if len(releases) != 1 || releases[0].Version != "4.1.0" {
+		t.Fatalf("releases = %+v", releases)
+	}
+	if !releases[0].Watching {
+		t.Error("a release inside its window should read as still watched")
+	}
+	if releases[0].OpenIncidents == nil || *releases[0].OpenIncidents != 1 {
+		t.Errorf("the open incident should be counted against the release: %+v", releases[0].OpenIncidents)
+	}
+
+	var incidents []gen.Incident
+	if code := h.do("GET", "/projects/"+p.id+"/incidents", nil, &incidents); code != 200 {
+		t.Fatalf("incidents: %d", code)
+	}
+	if len(incidents) != 1 || incidents[0].Title != "Timeouts" || incidents[0].ClosedAt != nil {
+		t.Fatalf("incidents = %+v", incidents)
 	}
 }

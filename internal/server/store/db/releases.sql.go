@@ -42,6 +42,32 @@ func (q *Queries) CloseIncident(ctx context.Context, arg CloseIncidentParams) (I
 	return i, err
 }
 
+const closeIncidentByTask = `-- name: CloseIncidentByTask :one
+UPDATE incidents SET closed_at = now() WHERE task_id = $1 AND closed_at IS NULL RETURNING id, project_id, source_plugin_id, external_id, fingerprint, title, severity, url, count, release_id, task_id, first_seen_at, last_seen_at, closed_at
+`
+
+func (q *Queries) CloseIncidentByTask(ctx context.Context, taskID pgtype.UUID) (Incident, error) {
+	row := q.db.QueryRow(ctx, closeIncidentByTask, taskID)
+	var i Incident
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.SourcePluginID,
+		&i.ExternalID,
+		&i.Fingerprint,
+		&i.Title,
+		&i.Severity,
+		&i.Url,
+		&i.Count,
+		&i.ReleaseID,
+		&i.TaskID,
+		&i.FirstSeenAt,
+		&i.LastSeenAt,
+		&i.ClosedAt,
+	)
+	return i, err
+}
+
 const countOpenIncidentsForRelease = `-- name: CountOpenIncidentsForRelease :one
 SELECT count(*) FROM incidents WHERE release_id = $1 AND closed_at IS NULL
 `
@@ -73,6 +99,32 @@ func (q *Queries) GetRelease(ctx context.Context, id pgtype.UUID) (Release, erro
 		&i.ObservationUntil,
 		&i.SettledAt,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const incidentForTask = `-- name: IncidentForTask :one
+SELECT id, project_id, source_plugin_id, external_id, fingerprint, title, severity, url, count, release_id, task_id, first_seen_at, last_seen_at, closed_at FROM incidents WHERE task_id = $1
+`
+
+func (q *Queries) IncidentForTask(ctx context.Context, taskID pgtype.UUID) (Incident, error) {
+	row := q.db.QueryRow(ctx, incidentForTask, taskID)
+	var i Incident
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.SourcePluginID,
+		&i.ExternalID,
+		&i.Fingerprint,
+		&i.Title,
+		&i.Severity,
+		&i.Url,
+		&i.Count,
+		&i.ReleaseID,
+		&i.TaskID,
+		&i.FirstSeenAt,
+		&i.LastSeenAt,
+		&i.ClosedAt,
 	)
 	return i, err
 }

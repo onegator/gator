@@ -7,9 +7,6 @@ SET commit_sha = EXCLUDED.commit_sha, url = EXCLUDED.url, task_id = COALESCE(EXC
     deployed_at = now(), observation_until = EXCLUDED.observation_until, settled_at = NULL
 RETURNING *;
 
--- name: ListReleases :many
-SELECT * FROM releases WHERE project_id = $1 ORDER BY deployed_at DESC LIMIT $2;
-
 -- name: GetRelease :one
 SELECT * FROM releases WHERE id = $1;
 
@@ -50,3 +47,12 @@ UPDATE incidents SET closed_at = now() WHERE project_id = $1 AND fingerprint = $
 
 -- name: ListIncidents :many
 SELECT * FROM incidents WHERE project_id = $1 ORDER BY closed_at NULLS FIRST, last_seen_at DESC LIMIT $2;
+
+-- name: IncidentForTask :one
+SELECT * FROM incidents WHERE task_id = $1;
+
+-- name: CloseIncidentByTask :one
+UPDATE incidents SET closed_at = now() WHERE task_id = $1 AND closed_at IS NULL RETURNING *;
+
+-- name: ListReleases :many
+SELECT * FROM releases WHERE project_id = $1 ORDER BY deployed_at DESC LIMIT $2;

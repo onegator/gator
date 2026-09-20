@@ -382,6 +382,20 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/releases:
+    get:
+      operationId: listReleases
+      description: What reached each environment, newest first, and whether its observation window is still open.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Release" } } } } }
+  /projects/{projectId}/incidents:
+    get:
+      operationId: listIncidents
+      description: What production said went wrong, open ones first.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Incident" } } } } }
   /projects/{projectId}/templates:
     get:
       operationId: listProjectTemplates
@@ -1026,6 +1040,36 @@ components:
       required: [config]
       properties:
         config: { type: object, additionalProperties: true, description: "process_config as stored: templates, roles, autopilot, policy" }
+    Release:
+      type: object
+      required: [id, version, environment, deployedAt, watching]
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        version: { type: string }
+        commitSha: { type: string }
+        url: { type: string }
+        environment: { type: string }
+        deployedAt: { type: string, format: date-time }
+        observationUntil: { type: string, format: date-time, description: "when it stops being watched" }
+        settledAt: { type: string, format: date-time, description: "set once the window passed with nothing reported" }
+        watching: { type: boolean, description: "the window is still open" }
+        openIncidents: { type: integer, description: "faults still open against this release" }
+    Incident:
+      type: object
+      required: [id, fingerprint, title, severity, count, firstSeenAt, lastSeenAt]
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        releaseId: { type: string, format: uuid }
+        fingerprint: { type: string, description: "what makes one fault one incident" }
+        title: { type: string }
+        severity: { type: string, enum: [critical, high, medium, low] }
+        url: { type: string }
+        count: { type: integer, description: "how many times it has been reported" }
+        firstSeenAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time }
     Component:
       type: object
       required: [id, key, name, kind, dependsOn, usedBy, decisions]

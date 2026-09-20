@@ -39,6 +39,12 @@ func (h *Host) onEvent(ctx context.Context, e events.Event) {
 					h.callLogged(ctx, i, plugin.MethodPhaseTransition, plugin.PhaseTransitionParams{Task: taskRef(t), From: p.From, To: p.To, Rollback: p.Rollback, Reason: p.Reason})
 				}
 				h.evaluate(ctx, i, t.ID.String())
+				// Entering Release is the ask: a phase owned by a deploy plugin does not wait
+				// for a person to press anything. The plugin answers when the deploy is under
+				// way and calls release.record once it knows the version.
+				if p.To == releasePhase && i.b.manifest.HasHook(plugin.MethodRelease) {
+					h.callLogged(ctx, i, plugin.MethodRelease, plugin.ReleaseParams{Task: taskRef(t)})
+				}
 			case "task.created":
 				h.evaluate(ctx, i, t.ID.String())
 			case "gate.approved":
@@ -46,6 +52,25 @@ func (h *Host) onEvent(ctx context.Context, e events.Event) {
 					h.callLogged(ctx, i, plugin.MethodArtifactApproved, plugin.ArtifactApprovedParams{Task: taskRef(t), Phase: p.Phase})
 				}
 			}
+		})
+	case "task.closed":
+		id, ok := parseUUID(e.AggregateID)
+		if !ok {
+			return
+		}
+		// An incident task finishing is the fix landing. The tool that raised the fault has no
+		// way of knowing that unless we say so, and an alert nobody closed goes on shouting.
+		inc, err := q.CloseIncidentByTask(ctx, id)
+		if err != nil {
+			return // not an incident task, or already closed
+		}
+		t, err := q.GetTask(ctx, id)
+		if err != nil {
+			return
+		}
+		h.each(h.forProject(t.ProjectID, plugin.MethodIncidentClosed), func(i *instance) {
+			h.callLogged(ctx, i, plugin.MethodIncidentClosed, plugin.IncidentClosedParams{
+				Task: taskRef(t), Fingerprint: inc.Fingerprint})
 		})
 	case "job.finished":
 		id, ok := parseUUID(e.AggregateID)

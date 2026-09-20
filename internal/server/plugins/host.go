@@ -179,7 +179,7 @@ func (h *Host) Run(ctx context.Context) {
 const cursorName = "plugins"
 
 // hookEvents are the domain events plugins hear about.
-var hookEvents = []string{"task.created", "task.phase_changed", "gate.approved", "job.finished"}
+var hookEvents = []string{"task.created", "task.phase_changed", "task.closed", "gate.approved", "job.finished"}
 
 // drain delivers events after the cursor, at least once: a crash between delivery and the
 // cursor update repeats a batch, which hooks must tolerate.
