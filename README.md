@@ -7,6 +7,7 @@ and the Go SDK are in gator's `docs/plugins.md` and `plugin/` package.
 | Plugin | Capabilities | What it does |
 |---|---|---|
 | [github](github/) | tracker, vcs, ci | issues become tasks, finished jobs open pull requests, CI checks gate Implementation, phase labels |
+| [sentry](sentry/) | monitoring | alerts become incidents, deduplicated by Sentry's issue id; resolving travels both ways |
 
 ## Develop
 

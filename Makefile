@@ -1,6 +1,6 @@
 .PHONY: build test dev
 
-PLUGINS := github
+PLUGINS := github sentry
 
 build:
 	@mkdir -p bin
