@@ -26,7 +26,7 @@ const (
 
 const configSchema = `{"type":"object","properties":{
 	"repo":{"type":"string","description":"owner/name of the repository"},
-	"token":{"type":"string","x-secret":true,"description":"fine-grained token for this repository: Issues and Pull requests read and write, Contents and Metadata read, Checks read where offered"},
+	"token":{"type":"string","x-secret":true,"description":"fine-grained token for this repository: Contents, Issues and Pull requests read and write; Checks and Metadata read. Without Checks this plugin cannot read CI results, and a gate waiting on one never learns it finished"},
 	"webhook_secret":{"type":"string","x-secret":true,"description":"the secret set on the repository webhook"},
 	"api_url":{"type":"string","description":"API base; default https://api.github.com"},
 	"base_branch":{"type":"string","description":"branch pull requests target; default: the repository's default branch"},
@@ -72,11 +72,22 @@ func (g *gh) client(core *plugin.Core) *Client {
 		Token: core.Secret("token"), Repo: core.Setting("repo"), HTTP: g.http}
 }
 
-// asPluginErr turns GitHub's refusals (bad token, missing permission, invalid request) into
-// errors that do not count toward disabling the plugin; outages and rate limits still do.
+// asPluginErr turns GitHub's answers into plugin errors. A bad request is this repository's
+// business and does not count toward disabling; outages, rate limits and a refused token do.
 func asPluginErr(err error) error {
 	var ae *APIError
-	if errors.As(err, &ae) && ae.Status < 500 && ae.Status != http.StatusTooManyRequests {
+	if !errors.As(err, &ae) {
+		return err
+	}
+	// A token GitHub will not accept stays broken until a person fixes it. Reporting that as a
+	// bad request buried it: invalid params are not counted, so the plugin failed quietly for
+	// as long as nobody read the server log. Counting it trips the breaker, and the reason
+	// appears where the plugin is configured.
+	if ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden {
+		return plugin.Errorf(plugin.CodeInternal,
+			"GitHub refused the token (%v). It needs Contents, Issues and Pull requests: read and write, and Checks: read — Checks is the one usually missed", ae)
+	}
+	if ae.Status < 500 && ae.Status != http.StatusTooManyRequests {
 		return plugin.Errorf(plugin.CodeInvalidParams, "%v", ae)
 	}
 	return err

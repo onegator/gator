@@ -23,7 +23,7 @@ Deliveries for other repositories are logged and ignored. A bad signature is ref
 | Setting | |
 |---|---|
 | `repo` | `owner/name` |
-| `token` (secret) | fine-grained token for this repository. Permissions: Issues and Pull requests read and write; Contents and Metadata read; Checks read where offered. |
+| `token` (secret) | fine-grained token for this repository. Permissions: **Contents**, **Issues** and **Pull requests** read and write; **Checks** and **Metadata** read. Without Checks the plugin cannot read CI results: GitHub answers 403, the plugin is disabled with that reason, and a gate waiting on a check never learns it finished. |
 | `webhook_secret` (secret) | the secret on the repository webhook |
 | `api_url` | default `https://api.github.com` |
 | `base_branch` | default: the repository's default branch |

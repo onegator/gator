@@ -256,7 +256,11 @@ func TestJobFinishOpensOnePullRequest(t *testing.T) {
 	}
 }
 
-func TestBadTokenIsARefusalNotAnOutage(t *testing.T) {
+// A token GitHub refuses is this plugin's own fault and stays broken until a person fixes it.
+// It used to be reported as a bad request, which is not counted toward the breaker, so the
+// plugin failed on every call while the only trace was a line in the server log. An internal
+// error disables it after five tries with the reason shown where it is configured.
+func TestARefusedTokenDisablesThePlugin(t *testing.T) {
 	gh := newFakeGitHub(t, "the-right-token")
 	s := scenario(t, `{
 		"config": {"repo": "acme/app", "api_url": %q},
@@ -265,8 +269,13 @@ func TestBadTokenIsARefusalNotAnOutage(t *testing.T) {
 		"steps": [{"hook": "jobFinish", "task": "t1", "receipt": {"status": "done", "branch": "gator/t1-j", "commits": ["a"]}, "expect_error": true}]
 	}`, gh.URL)
 	rep := run(t, s)
-	if e := rep.Steps[0].Error; !strings.Contains(e, "-32602") || !strings.Contains(e, "Bad credentials") {
+	e := rep.Steps[0].Error
+	if !strings.Contains(e, "-32603") || !strings.Contains(e, "Bad credentials") {
 		t.Fatalf("error: %s", e)
+	}
+	// The message has to name the permission, because "403" sends a person hunting.
+	if !strings.Contains(e, "Checks") {
+		t.Fatalf("the error should say which permission is missing: %s", e)
 	}
 }
 
