@@ -45,6 +45,30 @@ type AuditLog struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type Component struct {
+	ID        pgtype.UUID        `json:"id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Key       string             `json:"key"`
+	Name      string             `json:"name"`
+	Kind      string             `json:"kind"`
+	Repo      string             `json:"repo"`
+	Path      string             `json:"path"`
+	OwnerID   pgtype.UUID        `json:"owner_id"`
+	Notes     string             `json:"notes"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ComponentDecision struct {
+	ComponentID pgtype.UUID `json:"component_id"`
+	EntryID     pgtype.UUID `json:"entry_id"`
+}
+
+type ComponentDep struct {
+	ComponentID pgtype.UUID `json:"component_id"`
+	DependsOnID pgtype.UUID `json:"depends_on_id"`
+}
+
 type Device struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`
@@ -108,6 +132,8 @@ type Job struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 	Model             string             `json:"model"`
 	UnassignableSince pgtype.Timestamptz `json:"unassignable_since"`
+	ContextBytes      int32              `json:"context_bytes"`
+	ContextDocs       int32              `json:"context_docs"`
 }
 
 type JobEvent struct {
@@ -291,6 +317,7 @@ type Task struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
 	Description         string             `json:"description"`
+	ComponentID         pgtype.UUID        `json:"component_id"`
 }
 
 type UsageRecord struct {

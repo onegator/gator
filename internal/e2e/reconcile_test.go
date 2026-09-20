@@ -29,8 +29,13 @@ func TestAGateStuckOnPendingIsAskedAgain(t *testing.T) {
 	}
 
 	// A gate that moved a moment ago is not stale: a check still running is left alone.
-	if n, err := h.plugins.ReconcileChecks(context.Background(), time.Now().Add(-time.Hour), 50); err != nil || n != 0 {
-		t.Fatalf("fresh gate re-evaluated: %d (%v)", n, err)
+	// The count is not asserted: the development database is shared, so other tests' tasks
+	// are in it too. What matters is this task.
+	if _, err := h.plugins.ReconcileChecks(context.Background(), time.Now().Add(-time.Hour), 50); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.Pending {
+		t.Fatalf("a gate that just moved should be left alone, got %q", got)
 	}
 
 	// Age the gate the way an afternoon of waiting would.
@@ -38,9 +43,8 @@ func TestAGateStuckOnPendingIsAskedAgain(t *testing.T) {
 		"UPDATE gates SET updated_at = now() - interval '1 hour' WHERE task_id = $1", task.Id.String()); err != nil {
 		t.Fatal(err)
 	}
-	n, err := h.plugins.ReconcileChecks(context.Background(), time.Now().Add(-15*time.Minute), 50)
-	if err != nil || n != 1 {
-		t.Fatalf("stale gate should be re-evaluated once: %d (%v)", n, err)
+	if _, err := h.plugins.ReconcileChecks(context.Background(), time.Now().Add(-15*time.Minute), 50); err != nil {
+		t.Fatal(err)
 	}
 	// echo answers "pass", which is what the lost webhook would have said.
 	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.Pass {
@@ -64,8 +68,12 @@ func TestReconcilingLeavesClosedTasksAlone(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n, err := h.plugins.ReconcileChecks(context.Background(), time.Now().Add(-15*time.Minute), 50); err != nil || n != 0 {
-		t.Fatalf("closed task re-evaluated: %d (%v)", n, err)
+	if _, err := h.plugins.ReconcileChecks(context.Background(), time.Now().Add(-15*time.Minute), 50); err != nil {
+		t.Fatal(err)
+	}
+	// Still pending: nobody asked the plugin about a task that is over.
+	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.Pending {
+		t.Fatalf("a closed task was re-evaluated: its check became %q", got)
 	}
 }
 

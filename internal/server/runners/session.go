@@ -332,6 +332,15 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 				pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
 			}
+			// Record what this job was handed. Context is meant to save an agent from
+			// hunting for what it needs; whether it does is a question about tokens spent
+			// against context given, and that comparison needs both numbers.
+			bytes := 0
+			for _, d := range pj.Context {
+				bytes += len(d.Body)
+			}
+			_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
+				ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context))})
 			out = append(out, pj)
 			_ = s.m.tx(ctx, func(q *db.Queries) error {
 				return s.m.emitJob(ctx, q, "job.leased", j, map[string]any{"runner": s.name, "attempt": j.Attempts})

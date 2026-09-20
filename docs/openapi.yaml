@@ -300,6 +300,43 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProductEntry" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/components:
+    get:
+      operationId: listComponents
+      description: The parts this project is made of, with what each depends on.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Component" } } } } }
+    put:
+      operationId: putComponent
+      description: Adds a component or updates it by key. Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ComponentInput" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Component" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/components/{key}:
+    delete:
+      operationId: deleteComponent
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: deleted }
+        "404": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/component:
+    put:
+      operationId: setTaskComponent
+      description: "Says which part of the product a task is about; the job's prompt then carries that part, its neighbours and its decisions. Null clears it."
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TaskComponent" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/templates:
     get:
       operationId: listProjectTemplates
@@ -894,6 +931,39 @@ components:
       required: [config]
       properties:
         config: { type: object, additionalProperties: true, description: "process_config as stored: templates, roles, autopilot, policy" }
+    Component:
+      type: object
+      required: [id, key, name, kind, dependsOn, usedBy, decisions]
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string, description: "short handle, unique in the project" }
+        name: { type: string }
+        kind: { type: string, enum: [app, api, lib, infra] }
+        repo: { type: string }
+        path: { type: string }
+        ownerId: { type: string, format: uuid }
+        ownerName: { type: string }
+        notes: { type: string }
+        dependsOn: { type: array, items: { type: string }, description: "keys of components this one needs" }
+        usedBy: { type: array, items: { type: string }, description: "keys of components a change here reaches" }
+        decisions: { type: array, items: { $ref: "#/components/schemas/ProductEntry" }, description: "approved decisions that shaped it" }
+    ComponentInput:
+      type: object
+      required: [key, name, kind]
+      properties:
+        key: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [app, api, lib, infra] }
+        repo: { type: string }
+        path: { type: string }
+        ownerId: { type: string, format: uuid }
+        notes: { type: string }
+        dependsOn: { type: array, items: { type: string }, description: "replaces the dependencies; keys must exist in this project" }
+        decisions: { type: array, items: { type: string, format: uuid }, description: "replaces the linked decisions" }
+    TaskComponent:
+      type: object
+      properties:
+        key: { type: string, description: "component key, or absent to clear" }
     ProductEntry:
       type: object
       required: [id, kind, title, content, version, status, createdAt]

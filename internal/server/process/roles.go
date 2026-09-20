@@ -140,6 +140,14 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 	if reason, err := q.LastRollbackReason(ctx, db.LastRollbackReasonParams{TaskID: taskID, ToPhase: t.Phase}); err == nil && reason != nil && *reason != "" {
 		add(ContextDoc{Kind: "rollback", Phase: t.Phase, Title: "Why this phase was sent back", Body: *reason})
 	}
+	// Which part of the product this task is about, before anything about how to build it: an
+	// agent told the repository, the owner and what a change here reaches spends no turns
+	// working that out, and reads the neighbours it would otherwise break.
+	if doc, ok, err := s.Catalogue(ctx, t); err != nil {
+		return nil, err
+	} else if ok {
+		add(doc)
+	}
 	// What the product decided about itself, for the roles that reason about direction.
 	if readsProduct(role) {
 		entries, err := q.ListApprovedProductContext(ctx, t.ProjectID)
