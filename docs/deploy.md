@@ -140,9 +140,17 @@ The `migrate` service runs once before `server` starts. Pin `GATOR_IMAGE_TAG` in
 
 ## Mac runner
 
-`deploy/launchd/dev.onegator.gator-runner.plist` runs `gator-runner` as a LaunchAgent. Gator.app
-will install and manage it (PLQ-230). A sleeping Mac shows as offline and its leases return
-to the queue.
+Gator.app carries `gator-runner` inside its own bundle and installs it as a LaunchAgent when
+you turn on **This Mac is a runner** on the Runners screen: it mints the Mac a runner token of
+its own, writes the token to `~/Library/Application Support/Gator/runner-token` (mode 600) and
+the agent to `~/Library/LaunchAgents/dev.onegator.gator.runner.plist`, which names that file in
+`GATOR_RUNNER_TOKEN_FILE` rather than carrying the secret. Turning the switch off boots the
+agent out and deletes both; the token stays valid until revoked on the Runners screen, so a Mac
+that is gone can be cut off from another machine.
+
+`deploy/launchd/dev.onegator.gator-runner.plist` is the same agent by hand, for a Mac without
+the app. Either way a sleeping Mac or a logged-out user shows as offline and its leases return
+to the queue — a state, not a fault.
 
 ## Backups and restore
 
