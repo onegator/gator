@@ -530,6 +530,7 @@ const listOpenTasksWithGates = `-- name: ListOpenTasksWithGates :many
 SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id, g.task_id, g.phase, g.checks, g.human_approved_by, g.human_approved_at, g.blocked_reason, g.blocked_by, g.updated_at
 FROM tasks t
 JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+JOIN projects p ON p.id = t.project_id AND p.archived_at IS NULL
 WHERE t.closed_at IS NULL
   AND ($1::uuid IS NULL OR t.project_id = $1::uuid)
 ORDER BY t.urgency, t.phase_entered_at
@@ -540,6 +541,7 @@ type ListOpenTasksWithGatesRow struct {
 	Gate Gate `json:"gate"`
 }
 
+// An archived project stops asking: that is the point of archiving one.
 func (q *Queries) ListOpenTasksWithGates(ctx context.Context, projectID pgtype.UUID) ([]ListOpenTasksWithGatesRow, error) {
 	rows, err := q.db.Query(ctx, listOpenTasksWithGates, projectID)
 	if err != nil {
@@ -588,9 +590,11 @@ func (q *Queries) ListOpenTasksWithGates(ctx context.Context, projectID pgtype.U
 }
 
 const listOpenUnblockedTasks = `-- name: ListOpenUnblockedTasks :many
-SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id FROM tasks WHERE closed_at IS NULL AND blocked_reason IS NULL ORDER BY phase_entered_at
+SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived_at IS NULL
+WHERE t.closed_at IS NULL AND t.blocked_reason IS NULL ORDER BY t.phase_entered_at
 `
 
+// Archived projects queue nothing: the autopilot leaves them alone.
 func (q *Queries) ListOpenUnblockedTasks(ctx context.Context) ([]Task, error) {
 	rows, err := q.db.Query(ctx, listOpenUnblockedTasks)
 	if err != nil {

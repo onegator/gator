@@ -112,6 +112,27 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
         "404": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteProject
+      description: "Removes a project for good. Refused once it holds a task: archive it instead, so its history survives. Workspace admins only."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "204": { description: deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/archive:
+    post:
+      operationId: archiveProject
+      description: "Hides a project without losing anything: its tasks, receipts and metrics stay readable, its plugins stop. Send archived=false to bring it back."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ArchiveProject" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/repos:
     get:
       operationId: listProjectRepos
@@ -878,6 +899,11 @@ components:
         name: { type: string }
         description: { type: string }
         fromProjectId: { type: string, format: uuid, description: "the project to snapshot" }
+    ArchiveProject:
+      type: object
+      required: [archived]
+      properties:
+        archived: { type: boolean }
     Project:
       type: object
       required: [id, slug, name, tags, createdAt]
@@ -887,6 +913,7 @@ components:
         name: { type: string }
         tags: { type: array, items: { type: string } }
         createdAt: { type: string, format: date-time }
+        archivedAt: { type: string, format: date-time, description: "set while the project is archived" }
     NewDevice:
       type: object
       required: [token, platform]

@@ -253,7 +253,7 @@ const listActiveProjectPlugins = `-- name: ListActiveProjectPlugins :many
 SELECT pp.id, pp.project_id, pp.config, pp.secrets, pp.enabled, pp.disabled_reason,
        p.name AS plugin_name, p.command, p.manifest, p.enabled AS plugin_enabled, pr.slug AS project_slug
 FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id JOIN projects pr ON pr.id = pp.project_id
-WHERE pp.enabled AND p.enabled
+WHERE pp.enabled AND p.enabled AND pr.archived_at IS NULL
 `
 
 type ListActiveProjectPluginsRow struct {
@@ -270,6 +270,7 @@ type ListActiveProjectPluginsRow struct {
 	ProjectSlug    string      `json:"project_slug"`
 }
 
+// An archived project runs nothing: the next sync stops its plugin processes by itself.
 func (q *Queries) ListActiveProjectPlugins(ctx context.Context) ([]ListActiveProjectPluginsRow, error) {
 	rows, err := q.db.Query(ctx, listActiveProjectPlugins)
 	if err != nil {

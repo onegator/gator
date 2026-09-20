@@ -24,7 +24,12 @@ func toUUIDPtr(u pgtype.UUID) *openapi_types.UUID {
 func fromUUID(u openapi_types.UUID) pgtype.UUID { return pgtype.UUID{Bytes: u, Valid: true} }
 
 func toProject(p db.Project) gen.Project {
-	return gen.Project{Id: toUUID(p.ID), Slug: p.Slug, Name: p.Name, Tags: p.Tags, CreatedAt: p.CreatedAt.Time}
+	out := gen.Project{Id: toUUID(p.ID), Slug: p.Slug, Name: p.Name, Tags: p.Tags, CreatedAt: p.CreatedAt.Time}
+	if p.ArchivedAt.Valid {
+		at := p.ArchivedAt.Time
+		out.ArchivedAt = &at
+	}
+	return out
 }
 
 func toTask(t db.Task) gen.Task {

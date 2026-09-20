@@ -241,6 +241,7 @@ type Project struct {
 	ProcessConfig []byte             `json:"process_config"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
 }
 
 type ProjectPack struct {

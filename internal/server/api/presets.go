@@ -208,3 +208,66 @@ func (s *Server) applyPreset(ctx context.Context, name string, project db.Projec
 	}
 	return nil
 }
+
+// ArchiveProject hides a project without losing any of it. Its tasks, receipts and metrics
+// stay readable by id; its plugins stop at the next sync, because an archived project should
+// not be answering webhooks or spending anyone's budget.
+func (s *Server) ArchiveProject(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
+	if !p.IsWorkspaceAdmin() {
+		writeError(w, http.StatusForbidden, "archiving a project requires workspace admin", "forbidden")
+		return
+	}
+	var in gen.ArchiveProject
+	if !decode(w, r, &in) {
+		return
+	}
+	q := db.New(s.Pool)
+	if _, err := q.GetProject(r.Context(), fromUUID(projectId)); err != nil {
+		s.fail(w, err)
+		return
+	}
+	updated, err := q.SetProjectArchived(r.Context(), db.SetProjectArchivedParams{ID: fromUUID(projectId), Archived: in.Archived})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toProject(updated))
+}
+
+// DeleteProject removes an empty one for good. A project that ever held a task is archived
+// instead: its phase transitions and receipts are the record of what happened, and no click
+// should be able to erase that.
+func (s *Server) DeleteProject(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
+	if !p.IsWorkspaceAdmin() {
+		writeError(w, http.StatusForbidden, "deleting a project requires workspace admin", "forbidden")
+		return
+	}
+	q := db.New(s.Pool)
+	if _, err := q.GetProject(r.Context(), fromUUID(projectId)); err != nil {
+		s.fail(w, err)
+		return
+	}
+	tasks, err := q.CountTasksInProject(r.Context(), fromUUID(projectId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if tasks > 0 {
+		writeError(w, http.StatusConflict,
+			fmt.Sprintf("this project holds %d task(s); archive it instead so its history survives", tasks), "conflict")
+		return
+	}
+	if _, err := q.DeleteProject(r.Context(), fromUUID(projectId)); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

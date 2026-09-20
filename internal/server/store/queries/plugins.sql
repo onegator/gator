@@ -38,7 +38,8 @@ WHERE pp.project_id = $1 ORDER BY p.name;
 SELECT pp.id, pp.project_id, pp.config, pp.secrets, pp.enabled, pp.disabled_reason,
        p.name AS plugin_name, p.command, p.manifest, p.enabled AS plugin_enabled, pr.slug AS project_slug
 FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id JOIN projects pr ON pr.id = pp.project_id
-WHERE pp.enabled AND p.enabled;
+-- An archived project runs nothing: the next sync stops its plugin processes by itself.
+WHERE pp.enabled AND p.enabled AND pr.archived_at IS NULL;
 
 -- name: DisableProjectPlugin :exec
 UPDATE project_plugins SET enabled = false, disabled_reason = $2, updated_at = now() WHERE id = $1;

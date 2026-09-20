@@ -81,12 +81,16 @@ SELECT * FROM artifacts WHERE task_id = $1 ORDER BY phase, type, version;
 SELECT sqlc.embed(t), sqlc.embed(g)
 FROM tasks t
 JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
+-- An archived project stops asking: that is the point of archiving one.
+JOIN projects p ON p.id = t.project_id AND p.archived_at IS NULL
 WHERE t.closed_at IS NULL
   AND (sqlc.narg(project_id)::uuid IS NULL OR t.project_id = sqlc.narg(project_id)::uuid)
 ORDER BY t.urgency, t.phase_entered_at;
 
 -- name: ListOpenUnblockedTasks :many
-SELECT * FROM tasks WHERE closed_at IS NULL AND blocked_reason IS NULL ORDER BY phase_entered_at;
+-- Archived projects queue nothing: the autopilot leaves them alone.
+SELECT t.* FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived_at IS NULL
+WHERE t.closed_at IS NULL AND t.blocked_reason IS NULL ORDER BY t.phase_entered_at;
 
 -- name: ApprovePhaseArtifacts :execrows
 UPDATE artifacts SET approved_at = now(), approved_by = $3

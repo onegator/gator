@@ -11,10 +11,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countTasksInProject = `-- name: CountTasksInProject :one
+SELECT count(*) FROM tasks WHERE project_id = $1
+`
+
+func (q *Queries) CountTasksInProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countTasksInProject, projectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (slug, name, tags, process_config)
 VALUES ($1, $2, $3, $4)
-RETURNING id, slug, name, tags, process_config, created_at, updated_at
+RETURNING id, slug, name, tags, process_config, created_at, updated_at, archived_at
 `
 
 type CreateProjectParams struct {
@@ -40,12 +51,28 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.ProcessConfig,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
+const deleteProject = `-- name: DeleteProject :execrows
+DELETE FROM projects p WHERE p.id = $1
+  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = $1)
+`
+
+// Only an empty project: everything else is archived instead, so no history is ever lost to
+// a click.
+func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProject, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getProject = `-- name: GetProject :one
-SELECT id, slug, name, tags, process_config, created_at, updated_at FROM projects WHERE id = $1
+SELECT id, slug, name, tags, process_config, created_at, updated_at, archived_at FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
@@ -59,12 +86,13 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 		&i.ProcessConfig,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
 const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT id, slug, name, tags, process_config, created_at, updated_at FROM projects WHERE slug = $1
+SELECT id, slug, name, tags, process_config, created_at, updated_at, archived_at FROM projects WHERE slug = $1
 `
 
 func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, error) {
@@ -78,8 +106,42 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, e
 		&i.ProcessConfig,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
 	)
 	return i, err
+}
+
+const listAllProjects = `-- name: ListAllProjects :many
+SELECT id, slug, name, tags, process_config, created_at, updated_at, archived_at FROM projects ORDER BY archived_at NULLS FIRST, name
+`
+
+func (q *Queries) ListAllProjects(ctx context.Context) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listAllProjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Project
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Tags,
+			&i.ProcessConfig,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ArchivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listProjectMembersWithUsers = `-- name: ListProjectMembersWithUsers :many
@@ -121,9 +183,10 @@ func (q *Queries) ListProjectMembersWithUsers(ctx context.Context, projectID pgt
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, slug, name, tags, process_config, created_at, updated_at FROM projects ORDER BY name
+SELECT id, slug, name, tags, process_config, created_at, updated_at, archived_at FROM projects WHERE archived_at IS NULL ORDER BY name
 `
 
+// Live projects. An archived one is still readable by id, so its metrics and history survive.
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 	rows, err := q.db.Query(ctx, listProjects)
 	if err != nil {
@@ -141,6 +204,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.ProcessConfig,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -190,8 +254,35 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 	return items, nil
 }
 
+const setProjectArchived = `-- name: SetProjectArchived :one
+UPDATE projects SET archived_at = CASE WHEN $1::boolean THEN now() ELSE NULL END,
+    updated_at = now()
+WHERE id = $2 RETURNING id, slug, name, tags, process_config, created_at, updated_at, archived_at
+`
+
+type SetProjectArchivedParams struct {
+	Archived bool        `json:"archived"`
+	ID       pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetProjectArchived(ctx context.Context, arg SetProjectArchivedParams) (Project, error) {
+	row := q.db.QueryRow(ctx, setProjectArchived, arg.Archived, arg.ID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Tags,
+		&i.ProcessConfig,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
 const updateProjectConfig = `-- name: UpdateProjectConfig :one
-UPDATE projects SET process_config = $2, updated_at = now() WHERE id = $1 RETURNING id, slug, name, tags, process_config, created_at, updated_at
+UPDATE projects SET process_config = $2, updated_at = now() WHERE id = $1 RETURNING id, slug, name, tags, process_config, created_at, updated_at, archived_at
 `
 
 type UpdateProjectConfigParams struct {
@@ -210,6 +301,7 @@ func (q *Queries) UpdateProjectConfig(ctx context.Context, arg UpdateProjectConf
 		&i.ProcessConfig,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ArchivedAt,
 	)
 	return i, err
 }

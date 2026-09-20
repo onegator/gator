@@ -7,7 +7,25 @@ RETURNING *;
 SELECT * FROM projects WHERE slug = $1;
 
 -- name: ListProjects :many
-SELECT * FROM projects ORDER BY name;
+-- Live projects. An archived one is still readable by id, so its metrics and history survive.
+SELECT * FROM projects WHERE archived_at IS NULL ORDER BY name;
+
+-- name: ListAllProjects :many
+SELECT * FROM projects ORDER BY archived_at NULLS FIRST, name;
+
+-- name: SetProjectArchived :one
+UPDATE projects SET archived_at = CASE WHEN sqlc.arg(archived)::boolean THEN now() ELSE NULL END,
+    updated_at = now()
+WHERE id = sqlc.arg(id) RETURNING *;
+
+-- name: CountTasksInProject :one
+SELECT count(*) FROM tasks WHERE project_id = $1;
+
+-- name: DeleteProject :execrows
+-- Only an empty project: everything else is archived instead, so no history is ever lost to
+-- a click.
+DELETE FROM projects p WHERE p.id = sqlc.arg(id)
+  AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = sqlc.arg(id));
 
 -- name: GetProject :one
 SELECT * FROM projects WHERE id = $1;
