@@ -107,6 +107,23 @@ type Gate struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Incident struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	SourcePluginID pgtype.UUID        `json:"source_plugin_id"`
+	ExternalID     string             `json:"external_id"`
+	Fingerprint    string             `json:"fingerprint"`
+	Title          string             `json:"title"`
+	Severity       string             `json:"severity"`
+	Url            string             `json:"url"`
+	Count          int32              `json:"count"`
+	ReleaseID      pgtype.UUID        `json:"release_id"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	FirstSeenAt    pgtype.Timestamptz `json:"first_seen_at"`
+	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
+	ClosedAt       pgtype.Timestamptz `json:"closed_at"`
+}
+
 type Job struct {
 	ID                pgtype.UUID        `json:"id"`
 	TaskID            pgtype.UUID        `json:"task_id"`
@@ -290,6 +307,21 @@ type Receipt struct {
 	Payload     []byte             `json:"payload"`
 	VerifiedAt  pgtype.Timestamptz `json:"verified_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Release struct {
+	ID               pgtype.UUID        `json:"id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	Version          string             `json:"version"`
+	CommitSha        string             `json:"commit_sha"`
+	Url              string             `json:"url"`
+	Environment      string             `json:"environment"`
+	SourcePluginID   pgtype.UUID        `json:"source_plugin_id"`
+	DeployedAt       pgtype.Timestamptz `json:"deployed_at"`
+	ObservationUntil pgtype.Timestamptz `json:"observation_until"`
+	SettledAt        pgtype.Timestamptz `json:"settled_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
 type Runner struct {

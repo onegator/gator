@@ -68,6 +68,33 @@ func (w *ReconcileChecksWorker) Work(ctx context.Context, _ *river.Job[Reconcile
 	return err
 }
 
+// SettleReleasesArgs closes the tasks of releases that were watched and stayed quiet.
+type SettleReleasesArgs struct{}
+
+func (SettleReleasesArgs) Kind() string { return "settle_releases" }
+
+// ReleaseSettler is the plugin host; the interface keeps this package off plugins.
+type ReleaseSettler interface {
+	SettleReleases(ctx context.Context, now time.Time, max int32) (int, error)
+}
+
+// SettleReleasesWorker ends the observation window. Nothing reported during it is the answer
+// the Monitoring phase waits for, and nobody should have to sit and watch a clock for it.
+type SettleReleasesWorker struct {
+	river.WorkerDefaults[SettleReleasesArgs]
+	Releases ReleaseSettler
+	Log      *slog.Logger
+}
+
+// Work implements river.Worker.
+func (w *SettleReleasesWorker) Work(ctx context.Context, _ *river.Job[SettleReleasesArgs]) error {
+	n, err := w.Releases.SettleReleases(ctx, time.Now(), 50)
+	if n > 0 {
+		w.Log.Info("observation windows ended quietly", "releases", n)
+	}
+	return err
+}
+
 // BackupArgs is the periodic database backup.
 type BackupArgs struct{}
 
@@ -102,12 +129,15 @@ type Options struct {
 	// Plugins refreshes gates whose checks stopped moving. Optional: without a plugin host
 	// there are no plugin checks to go stale.
 	Plugins CheckReconciler
+	// Releases ends observation windows. The plugin host implements both.
+	Releases ReleaseSettler
 	// Intervals; zero picks the defaults (1m sweep, 1h backup, 5m reconcile of checks that
 	// have not moved for 15m).
 	ExpireEvery    time.Duration
 	BackupEvery    time.Duration
 	ReconcileEvery time.Duration
 	StaleAfter     time.Duration
+	SettleEvery    time.Duration
 }
 
 // New builds a River client with workers and periodic jobs registered. Call Start.
@@ -120,6 +150,9 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 	}
 	if o.ReconcileEvery == 0 {
 		o.ReconcileEvery = 5 * time.Minute
+	}
+	if o.SettleEvery == 0 {
+		o.SettleEvery = time.Minute
 	}
 	if o.StaleAfter == 0 {
 		// Long enough that a check still running is not asked about on every tick, short
@@ -137,6 +170,12 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 		river.AddWorker(workers, &ReconcileChecksWorker{Plugins: o.Plugins, Stale: o.StaleAfter, Log: o.Log})
 		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.ReconcileEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return ReconcileChecksArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
+		}, &river.PeriodicJobOpts{RunOnStart: false}))
+	}
+	if o.Releases != nil {
+		river.AddWorker(workers, &SettleReleasesWorker{Releases: o.Releases, Log: o.Log})
+		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.SettleEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return SettleReleasesArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
 		}, &river.PeriodicJobOpts{RunOnStart: false}))
 	}
 	if o.Backup.Enabled() {

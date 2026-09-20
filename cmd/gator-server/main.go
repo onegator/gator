@@ -148,7 +148,7 @@ func serve(ctx context.Context) error {
 
 	bc := backup.LoadConfig()
 	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL,
-		Plugins: pluginHost, Log: log})
+		Plugins: pluginHost, Releases: pluginHost, Log: log})
 	if err != nil {
 		return err
 	}

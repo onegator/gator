@@ -16,7 +16,7 @@ import (
 func main() {
 	err := plugin.Serve(plugin.Handlers{
 		Manifest: plugin.Manifest{
-			Name: "echo", Version: "1.0.0", Capabilities: []string{"ci"}, UI: []string{"tab", "chip"},
+			Name: "echo", Version: "1.0.0", Capabilities: []string{"ci", "deploy"}, UI: []string{"tab", "chip"},
 			ConfigSchema: json.RawMessage(`{"type":"object","properties":{
 				"greeting":{"type":"string"},
 				"token":{"type":"string","x-secret":true}},"required":["greeting"]}`),
@@ -30,6 +30,17 @@ func main() {
 				Refuse    bool
 				SleepMS   int    `json:"sleep_ms"`
 				CheckTask string `json:"check_task"`
+				Release   *struct {
+					Version        string `json:"version"`
+					TaskID         string `json:"task_id"`
+					ObserveMinutes int    `json:"observe_minutes"`
+				} `json:"release"`
+				Incident *struct {
+					Fingerprint string `json:"fingerprint"`
+					Title       string `json:"title"`
+					Severity    string `json:"severity"`
+					Version     string `json:"version"`
+				} `json:"incident"`
 			}
 			_ = json.Unmarshal(p.Body, &b)
 			switch {
@@ -44,6 +55,15 @@ func main() {
 				return plugin.Errorf(plugin.CodeForbidden, "bad signature")
 			case b.CheckTask != "":
 				return core.SetCheck(ctx, b.CheckTask, plugin.Check{Name: "echo-hook", Status: "pass"})
+			case b.Release != nil:
+				_, err := core.RecordRelease(ctx, plugin.ReleaseRecordParams{
+					Version: b.Release.Version, TaskID: b.Release.TaskID, ObserveMinutes: b.Release.ObserveMinutes})
+				return err
+			case b.Incident != nil:
+				_, err := core.ReportIncident(ctx, plugin.IncidentUpsertParams{
+					Fingerprint: b.Incident.Fingerprint, Title: b.Incident.Title,
+					Severity: b.Incident.Severity, ReleaseVersion: b.Incident.Version})
+				return err
 			}
 			if t, err := core.FindTask(ctx, "echo_id", b.ID); err != nil || t != nil {
 				return err

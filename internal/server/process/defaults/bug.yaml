@@ -6,3 +6,4 @@ phases:
   - { name: verification,   owner: runner, role: reviewer, gate: human, timeout: 12h }
   - { name: approved,       owner: human,  gate: auto,     timeout: 0 }
   - { name: release,        owner: plugin, gate: auto,     timeout: 24h, requires: deploy }
+  - { name: monitoring,     owner: plugin, gate: auto,     timeout: 168h, requires: deploy }

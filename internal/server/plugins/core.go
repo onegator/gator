@@ -169,8 +169,18 @@ func (i *instance) core(ctx context.Context, method string, raw json.RawMessage)
 		}
 		i.log().Log(ctx, lvl, p.Message, attrs...)
 		return nil, nil
-	case plugin.CoreIncidentUpsert, plugin.CoreReleaseRecord:
-		return nil, plugin.Errorf(plugin.CodeNotAvailable, "%s arrives with release and monitoring support", method)
+	case plugin.CoreReleaseRecord:
+		p, err := decode[plugin.ReleaseRecordParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return i.recordRelease(ctx, q, p)
+	case plugin.CoreIncidentUpsert:
+		p, err := decode[plugin.IncidentUpsertParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return i.upsertIncident(ctx, q, p)
 	}
 	return nil, plugin.Errorf(plugin.CodeMethodNotFound, "method %q not found", method)
 }

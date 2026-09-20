@@ -239,6 +239,60 @@ type JobFinishParams struct {
 	Receipt json.RawMessage `json:"receipt"`
 }
 
+// ReleaseParams asks a deploy plugin to ship a task's work. The plugin answers when the
+// deployment is under way and calls release.record once it knows the version.
+type ReleaseParams struct {
+	Task TaskRef `json:"task"`
+}
+
+// IncidentClosedParams says an incident's task is finished, so the plugin can resolve it in
+// whatever tool raised it.
+type IncidentClosedParams struct {
+	Task        TaskRef `json:"task"`
+	Fingerprint string  `json:"fingerprint"`
+}
+
+// ReleaseRecordParams records what reached an environment. Version and environment identify a
+// release: deploying the same version again updates it rather than making a second one.
+type ReleaseRecordParams struct {
+	Version     string `json:"version"`
+	CommitSHA   string `json:"commit_sha,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Environment string `json:"environment,omitempty"` // default "production"
+	TaskID      string `json:"task_id,omitempty"`     // the task this release carries
+	// ObserveMinutes is how long to watch before the task is called finished. Zero means the
+	// project's default; a release with no window settles at once.
+	ObserveMinutes int `json:"observe_minutes,omitempty"`
+}
+
+// ReleaseRecordResult identifies the stored release.
+type ReleaseRecordResult struct {
+	ReleaseID string `json:"release_id"`
+}
+
+// IncidentUpsertParams reports something wrong in production. The fingerprint is what makes
+// one fault one incident however many times the monitoring tool repeats itself.
+type IncidentUpsertParams struct {
+	Fingerprint    string `json:"fingerprint"`
+	Title          string `json:"title"`
+	Severity       string `json:"severity,omitempty"` // critical | high | medium | low
+	URL            string `json:"url,omitempty"`
+	ExternalID     string `json:"external_id,omitempty"`
+	ReleaseVersion string `json:"release_version,omitempty"` // blames a release by version
+}
+
+// IncidentUpsertResult says what the core did with it.
+type IncidentUpsertResult struct {
+	IncidentID string `json:"incident_id"`
+	TaskID     string `json:"task_id,omitempty"`
+	Created    bool   `json:"created"` // false when this was a repeat of a known fault
+}
+
+// IncidentClosedResult is empty; closing is idempotent.
+type IncidentCloseParams struct {
+	Fingerprint string `json:"fingerprint"`
+}
+
 // TaskCreateParams creates a task in the plugin's project, in its template's first phase.
 type TaskCreateParams struct {
 	Kind         string            `json:"kind"`

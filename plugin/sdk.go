@@ -256,6 +256,22 @@ func (c *Core) KVPut(ctx context.Context, key string, value any) error {
 }
 
 // Log writes to the core's log.
+// RecordRelease tells the core what reached an environment, and how long to watch it before
+// the task is called finished.
+func (c *Core) RecordRelease(ctx context.Context, p ReleaseRecordParams) (ReleaseRecordResult, error) {
+	var out ReleaseRecordResult
+	err := c.conn.Call(ctx, CoreReleaseRecord, p, &out)
+	return out, err
+}
+
+// ReportIncident reports a fault in production. The same fingerprint reported again raises the
+// count rather than opening a second incident.
+func (c *Core) ReportIncident(ctx context.Context, p IncidentUpsertParams) (IncidentUpsertResult, error) {
+	var out IncidentUpsertResult
+	err := c.conn.Call(ctx, CoreIncidentUpsert, p, &out)
+	return out, err
+}
+
 func (c *Core) Log(ctx context.Context, level, message string, fields map[string]any) error {
 	return c.conn.Call(ctx, CoreLog, LogParams{Level: level, Message: message, Fields: fields}, nil)
 }

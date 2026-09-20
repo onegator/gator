@@ -4,3 +4,4 @@ phases:
   - { name: implementation, owner: runner, role: worker, gate: both, timeout: 24h }
   - { name: approved,       owner: human,  gate: auto,   timeout: 0 }
   - { name: release,        owner: plugin, gate: auto,   timeout: 24h, requires: deploy }
+  - { name: monitoring,     owner: plugin, gate: auto,     timeout: 168h, requires: deploy }
