@@ -71,7 +71,8 @@ func toDetail(d process.Detail) gen.TaskDetail {
 		phases = append(phases, p.Name)
 	}
 	return gen.TaskDetail{
-		Id: t.Id, ProjectId: t.ProjectId, Kind: t.Kind, Title: t.Title, Phase: t.Phase, Urgency: t.Urgency,
+		Id: t.Id, ProjectId: t.ProjectId, Kind: t.Kind, Title: t.Title, Description: t.Description,
+		Phase: t.Phase, Urgency: t.Urgency,
 		OwnerKind: t.OwnerKind, OwnerId: t.OwnerId, RequirementsChanged: t.RequirementsChanged,
 		BlockedReason: t.BlockedReason, PhaseEnteredAt: t.PhaseEnteredAt, CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
 		Gate: toGate(d.Gate, d.Phase), Phases: phases,

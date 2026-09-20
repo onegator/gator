@@ -145,12 +145,16 @@ func serve(ctx context.Context) error {
 	}
 	go notify.New(db.Pool, svc, sender, hub, log, 0).Run(ctx)
 	// Finished work proposes what the product learned; a person approves it.
-	go product.NewCurator(db.Pool, hub, log, 0).Run(ctx)
+	curator := product.NewCurator(db.Pool, hub, log, 0)
+	// Once a project has learned more than a prompt can carry, a curator proposes a shorter
+	// version of it; the originals are archived, never deleted.
+	condenser := product.NewCondenser(curator, svc, 0, 0)
+	go curator.Run(ctx)
 
 	bc := backup.LoadConfig()
 	scorecards := quality.New(db.Pool, svc, pluginHost, log)
 	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL,
-		Plugins: pluginHost, Releases: pluginHost, Quality: scorecards, Log: log})
+		Plugins: pluginHost, Releases: pluginHost, Quality: scorecards, Product: condenser, Log: log})
 	if err != nil {
 		return err
 	}

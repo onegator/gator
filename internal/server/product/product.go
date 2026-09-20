@@ -30,6 +30,9 @@ type Curator struct {
 	hub  *events.Hub
 	log  *slog.Logger
 	poll time.Duration
+	// onCurationClosed turns a finished curation task into a condensed proposal. Set by
+	// NewCondenser; nil when nothing condenses, which is how this package stays usable alone.
+	onCurationClosed func(ctx context.Context, task db.Task) error
 }
 
 // NewCurator builds the consumer; poll defaults to five seconds.
@@ -103,6 +106,12 @@ func (c *Curator) handle(ctx context.Context, row db.EventsAfterRow) error {
 		_ = json.Unmarshal(row.Payload, &payload)
 		return c.proposeDecision(ctx, task, payload.Phase)
 	case "task.closed":
+		if task.Kind == curationKind {
+			if c.onCurationClosed == nil {
+				return nil
+			}
+			return c.onCurationClosed(ctx, task)
+		}
 		return c.proposeLesson(ctx, task)
 	}
 	return nil

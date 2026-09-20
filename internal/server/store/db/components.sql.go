@@ -94,7 +94,7 @@ func (q *Queries) LinkComponentDecision(ctx context.Context, arg LinkComponentDe
 }
 
 const listComponentDecisions = `-- name: ListComponentDecisions :many
-SELECT p.id, p.project_id, p.kind, p.title, p.content, p.version, p.status, p.source_task_id, p.created_by_kind, p.created_by, p.approved_by, p.approved_at, p.created_at, l.component_id AS of_id FROM component_decisions l
+SELECT p.id, p.project_id, p.kind, p.title, p.content, p.version, p.status, p.source_task_id, p.created_by_kind, p.created_by, p.approved_by, p.approved_at, p.created_at, p.archived_at, p.condensed_from, l.component_id AS of_id FROM component_decisions l
 JOIN product_context p ON p.id = l.entry_id
 WHERE l.component_id = ANY($1::uuid[]) AND p.status = 'approved'
 ORDER BY p.kind, p.title
@@ -129,6 +129,8 @@ func (q *Queries) ListComponentDecisions(ctx context.Context, componentIds []pgt
 			&i.ProductContext.ApprovedBy,
 			&i.ProductContext.ApprovedAt,
 			&i.ProductContext.CreatedAt,
+			&i.ProductContext.ArchivedAt,
+			&i.ProductContext.CondensedFrom,
 			&i.OfID,
 		); err != nil {
 			return nil, err

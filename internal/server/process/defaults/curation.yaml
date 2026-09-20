@@ -1,0 +1,6 @@
+kind: curation
+max_rollbacks: 1
+phases:
+  # One phase, one agent, one person. A curator reads what the project has learned and proposes
+  # a shorter version of it; nothing is folded together until somebody approves the proposal.
+  - { name: curation, owner: runner, role: curator, gate: human, timeout: 72h }

@@ -127,6 +127,33 @@ func (w *ScoreQualityWorker) Timeout(*river.Job[ScoreQualityArgs]) time.Duration
 	return 10 * time.Minute
 }
 
+// CondenseProductArgs opens curation tasks where a project's context has outgrown its prompt.
+type CondenseProductArgs struct{}
+
+func (CondenseProductArgs) Kind() string { return "condense_product" }
+
+// ProductCondenser is the product curator; the interface keeps this package off it.
+type ProductCondenser interface {
+	Sweep(ctx context.Context) (int, error)
+}
+
+// CondenseProductWorker asks a curator to shorten what a project has learned, once there is
+// more of it than a prompt should carry. Nothing is folded together until a person approves.
+type CondenseProductWorker struct {
+	river.WorkerDefaults[CondenseProductArgs]
+	Product ProductCondenser
+	Log     *slog.Logger
+}
+
+// Work implements river.Worker.
+func (w *CondenseProductWorker) Work(ctx context.Context, _ *river.Job[CondenseProductArgs]) error {
+	n, err := w.Product.Sweep(ctx)
+	if n > 0 {
+		w.Log.Info("asked a curator to condense the product context", "projects", n)
+	}
+	return err
+}
+
 // BackupArgs is the periodic database backup.
 type BackupArgs struct{}
 
@@ -165,6 +192,8 @@ type Options struct {
 	Releases ReleaseSettler
 	// Quality scores projects against their scorecards. Optional.
 	Quality QualityScorer
+	// Product condenses a project's product context once it outgrows a prompt. Optional.
+	Product ProductCondenser
 	// Intervals; zero picks the defaults (1m sweep, 1h backup, 5m reconcile of checks that
 	// have not moved for 15m).
 	ExpireEvery    time.Duration
@@ -173,6 +202,7 @@ type Options struct {
 	StaleAfter     time.Duration
 	SettleEvery    time.Duration
 	QualityEvery   time.Duration
+	CondenseEvery  time.Duration
 }
 
 // New builds a River client with workers and periodic jobs registered. Call Start.
@@ -222,6 +252,17 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 		river.AddWorker(workers, &ScoreQualityWorker{Quality: o.Quality, Log: o.Log})
 		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.QualityEvery), func() (river.JobArgs, *river.InsertOpts) {
 			return ScoreQualityArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
+		}, &river.PeriodicJobOpts{RunOnStart: false}))
+	}
+	if o.Product != nil {
+		if o.CondenseEvery == 0 {
+			// Daily, like the scorecards: a product context that grew this morning can wait
+			// until tonight, and a curator's job costs real money.
+			o.CondenseEvery = 24 * time.Hour
+		}
+		river.AddWorker(workers, &CondenseProductWorker{Product: o.Product, Log: o.Log})
+		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.CondenseEvery), func() (river.JobArgs, *river.InsertOpts) {
+			return CondenseProductArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
 		}, &river.PeriodicJobOpts{RunOnStart: false}))
 	}
 	if o.Backup.Enabled() {

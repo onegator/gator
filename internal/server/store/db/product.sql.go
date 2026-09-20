@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const archiveProductEntries = `-- name: ArchiveProductEntries :execrows
+UPDATE product_context SET archived_at = now()
+WHERE id = ANY($1::uuid[]) AND archived_at IS NULL
+`
+
+func (q *Queries) ArchiveProductEntries(ctx context.Context, ids []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, archiveProductEntries, ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countProposalsForTask = `-- name: CountProposalsForTask :one
 SELECT count(*) FROM product_context WHERE project_id = $1 AND kind = $2 AND source_task_id = $3
 `
@@ -29,6 +42,54 @@ func (q *Queries) CountProposalsForTask(ctx context.Context, arg CountProposalsF
 	return count, err
 }
 
+const createCondensedEntry = `-- name: CreateCondensedEntry :one
+INSERT INTO product_context (project_id, kind, title, content, version, status, source_task_id, created_by_kind, condensed_from)
+VALUES ($1, $2, $3, $4,
+    COALESCE((SELECT max(version) + 1 FROM product_context p
+              WHERE p.project_id = $1 AND p.kind = $2 AND p.title = $3), 1),
+    'proposed', $5, 'system', $6)
+RETURNING id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from
+`
+
+type CreateCondensedEntryParams struct {
+	ProjectID     pgtype.UUID   `json:"project_id"`
+	Kind          string        `json:"kind"`
+	Title         string        `json:"title"`
+	Content       string        `json:"content"`
+	SourceTaskID  pgtype.UUID   `json:"source_task_id"`
+	CondensedFrom []pgtype.UUID `json:"condensed_from"`
+}
+
+func (q *Queries) CreateCondensedEntry(ctx context.Context, arg CreateCondensedEntryParams) (ProductContext, error) {
+	row := q.db.QueryRow(ctx, createCondensedEntry,
+		arg.ProjectID,
+		arg.Kind,
+		arg.Title,
+		arg.Content,
+		arg.SourceTaskID,
+		arg.CondensedFrom,
+	)
+	var i ProductContext
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Content,
+		&i.Version,
+		&i.Status,
+		&i.SourceTaskID,
+		&i.CreatedByKind,
+		&i.CreatedBy,
+		&i.ApprovedBy,
+		&i.ApprovedAt,
+		&i.CreatedAt,
+		&i.ArchivedAt,
+		&i.CondensedFrom,
+	)
+	return i, err
+}
+
 const createProductEntry = `-- name: CreateProductEntry :one
 INSERT INTO product_context (project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at)
 VALUES (
@@ -38,7 +99,7 @@ VALUES (
     $5, $6, $7, $8,
     $9, $10
 )
-RETURNING id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at
+RETURNING id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from
 `
 
 type CreateProductEntryParams struct {
@@ -83,12 +144,14 @@ func (q *Queries) CreateProductEntry(ctx context.Context, arg CreateProductEntry
 		&i.ApprovedBy,
 		&i.ApprovedAt,
 		&i.CreatedAt,
+		&i.ArchivedAt,
+		&i.CondensedFrom,
 	)
 	return i, err
 }
 
 const getProductEntry = `-- name: GetProductEntry :one
-SELECT id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at FROM product_context WHERE id = $1
+SELECT id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from FROM product_context WHERE id = $1
 `
 
 func (q *Queries) GetProductEntry(ctx context.Context, id pgtype.UUID) (ProductContext, error) {
@@ -108,17 +171,21 @@ func (q *Queries) GetProductEntry(ctx context.Context, id pgtype.UUID) (ProductC
 		&i.ApprovedBy,
 		&i.ApprovedAt,
 		&i.CreatedAt,
+		&i.ArchivedAt,
+		&i.CondensedFrom,
 	)
 	return i, err
 }
 
 const listApprovedProductContext = `-- name: ListApprovedProductContext :many
-SELECT DISTINCT ON (kind, title) id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at FROM product_context
-WHERE project_id = $1 AND status = 'approved'
+SELECT DISTINCT ON (kind, title) id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from FROM product_context
+WHERE project_id = $1 AND status = 'approved' AND archived_at IS NULL
 ORDER BY kind, title, version DESC
 `
 
-// The newest approved version of each entry; this is what a job's prompt may carry.
+// The newest approved version of each entry; this is what a job's prompt may carry. An
+// archived entry is still readable, but it has been folded into a condensed one and no longer
+// spends anybody's context budget.
 func (q *Queries) ListApprovedProductContext(ctx context.Context, projectID pgtype.UUID) ([]ProductContext, error) {
 	rows, err := q.db.Query(ctx, listApprovedProductContext, projectID)
 	if err != nil {
@@ -142,6 +209,8 @@ func (q *Queries) ListApprovedProductContext(ctx context.Context, projectID pgty
 			&i.ApprovedBy,
 			&i.ApprovedAt,
 			&i.CreatedAt,
+			&i.ArchivedAt,
+			&i.CondensedFrom,
 		); err != nil {
 			return nil, err
 		}
@@ -154,7 +223,7 @@ func (q *Queries) ListApprovedProductContext(ctx context.Context, projectID pgty
 }
 
 const listProductContext = `-- name: ListProductContext :many
-SELECT id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at FROM product_context WHERE project_id = $1 ORDER BY kind, title, version DESC
+SELECT id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from FROM product_context WHERE project_id = $1 ORDER BY kind, title, version DESC
 `
 
 func (q *Queries) ListProductContext(ctx context.Context, projectID pgtype.UUID) ([]ProductContext, error) {
@@ -180,6 +249,124 @@ func (q *Queries) ListProductContext(ctx context.Context, projectID pgtype.UUID)
 			&i.ApprovedBy,
 			&i.ApprovedAt,
 			&i.CreatedAt,
+			&i.ArchivedAt,
+			&i.CondensedFrom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveProductEntriesOfKind = `-- name: LiveProductEntriesOfKind :many
+SELECT DISTINCT ON (title) id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from FROM product_context
+WHERE project_id = $1 AND kind = $2 AND status = 'approved' AND archived_at IS NULL
+  AND cardinality(condensed_from) = 0
+ORDER BY title, version DESC
+`
+
+type LiveProductEntriesOfKindParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Kind      string      `json:"kind"`
+}
+
+// What a condensation would fold together: approved, not archived, not itself a condensate.
+func (q *Queries) LiveProductEntriesOfKind(ctx context.Context, arg LiveProductEntriesOfKindParams) ([]ProductContext, error) {
+	rows, err := q.db.Query(ctx, liveProductEntriesOfKind, arg.ProjectID, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProductContext
+	for rows.Next() {
+		var i ProductContext
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Kind,
+			&i.Title,
+			&i.Content,
+			&i.Version,
+			&i.Status,
+			&i.SourceTaskID,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.ArchivedAt,
+			&i.CondensedFrom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const openCondensationTask = `-- name: OpenCondensationTask :one
+SELECT count(*)::bigint FROM tasks
+WHERE project_id = $1 AND kind = 'curation' AND closed_at IS NULL AND title = $2
+`
+
+type OpenCondensationTaskParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Title     string      `json:"title"`
+}
+
+// Whether this project already has a curation task open for this kind, so a slow agent does not
+// collect a queue of identical tasks.
+func (q *Queries) OpenCondensationTask(ctx context.Context, arg OpenCondensationTaskParams) (int64, error) {
+	row := q.db.QueryRow(ctx, openCondensationTask, arg.ProjectID, arg.Title)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const productKindsWorthCondensing = `-- name: ProductKindsWorthCondensing :many
+SELECT project_id, kind, count(*)::bigint AS entries, coalesce(sum(length(content)), 0)::bigint AS bytes
+FROM (SELECT DISTINCT ON (project_id, kind, title) project_id, kind, title, content
+      FROM product_context
+      WHERE status = 'approved' AND archived_at IS NULL AND cardinality(condensed_from) = 0
+      ORDER BY project_id, kind, title, version DESC) live
+GROUP BY project_id, kind
+HAVING count(*) >= $1::bigint OR coalesce(sum(length(content)), 0) >= $2::bigint
+`
+
+type ProductKindsWorthCondensingParams struct {
+	MinEntries int64 `json:"min_entries"`
+	MinBytes   int64 `json:"min_bytes"`
+}
+
+type ProductKindsWorthCondensingRow struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Kind      string      `json:"kind"`
+	Entries   int64       `json:"entries"`
+	Bytes     int64       `json:"bytes"`
+}
+
+// Kinds whose live entries have grown past what a prompt should carry, with how much they hold.
+func (q *Queries) ProductKindsWorthCondensing(ctx context.Context, arg ProductKindsWorthCondensingParams) ([]ProductKindsWorthCondensingRow, error) {
+	rows, err := q.db.Query(ctx, productKindsWorthCondensing, arg.MinEntries, arg.MinBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProductKindsWorthCondensingRow
+	for rows.Next() {
+		var i ProductKindsWorthCondensingRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.Kind,
+			&i.Entries,
+			&i.Bytes,
 		); err != nil {
 			return nil, err
 		}
@@ -194,7 +381,7 @@ func (q *Queries) ListProductContext(ctx context.Context, projectID pgtype.UUID)
 const setProductEntryStatus = `-- name: SetProductEntryStatus :one
 UPDATE product_context SET status = $1, approved_by = $2,
     approved_at = CASE WHEN $1::text = 'approved' THEN now() ELSE approved_at END
-WHERE id = $3 RETURNING id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at
+WHERE id = $3 RETURNING id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from
 `
 
 type SetProductEntryStatusParams struct {
@@ -220,6 +407,8 @@ func (q *Queries) SetProductEntryStatus(ctx context.Context, arg SetProductEntry
 		&i.ApprovedBy,
 		&i.ApprovedAt,
 		&i.CreatedAt,
+		&i.ArchivedAt,
+		&i.CondensedFrom,
 	)
 	return i, err
 }

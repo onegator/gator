@@ -10,6 +10,7 @@ import (
 
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/product"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -93,6 +94,15 @@ func (s *Server) SetProductEntryStatus(w http.ResponseWriter, r *http.Request, e
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	// Approving a condensed entry is what folds the originals away. They are archived, not
+	// deleted: still readable for anyone who wants to know what went into this one, and no
+	// longer carried into every prompt.
+	if n, err := product.ArchiveCondensedSources(r.Context(), q, updated); err != nil {
+		s.fail(w, err)
+		return
+	} else if n > 0 {
+		s.Log.Info("archived the entries a condensed one replaces", "entry", updated.ID, "archived", n)
 	}
 	writeJSON(w, http.StatusOK, toProductEntry(updated))
 }

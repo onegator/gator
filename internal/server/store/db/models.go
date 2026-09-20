@@ -259,6 +259,8 @@ type ProductContext struct {
 	ApprovedBy    pgtype.UUID        `json:"approved_by"`
 	ApprovedAt    pgtype.Timestamptz `json:"approved_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
+	CondensedFrom []pgtype.UUID      `json:"condensed_from"`
 }
 
 type Project struct {
