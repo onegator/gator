@@ -1,0 +1,31 @@
+{
+  "project": {"slug": "demo"},
+  "config": {"min_level": "warning"},
+  "secrets": {"client_secret": "dev-secret", "auth_token": "unused-in-this-scenario"},
+  "steps": [
+    {"hook": "webhook",
+     "body": {"action": "created", "data": {"issue": {"id": "9001", "title": "TypeError: undefined is not a function", "level": "error", "web_url": "https://sentry.io/organizations/acme/issues/9001/"}}},
+     "headers": {"Sentry-Hook-Resource": "issue"},
+     "sign": {"header": "Sentry-Hook-Signature", "secret": "client_secret"},
+     "expect_core": ["incident.upsert"]},
+    {"hook": "webhook",
+     "body": {"action": "created", "data": {"issue": {"id": "9001", "title": "TypeError: undefined is not a function", "level": "error"}}},
+     "headers": {"Sentry-Hook-Resource": "issue"},
+     "sign": {"header": "Sentry-Hook-Signature", "secret": "client_secret"},
+     "expect_core": ["incident.upsert"]},
+    {"hook": "webhook",
+     "body": {"action": "created", "data": {"issue": {"id": "9002", "title": "Noisy debug line", "level": "debug"}}},
+     "headers": {"Sentry-Hook-Resource": "issue"},
+     "sign": {"header": "Sentry-Hook-Signature", "secret": "client_secret"},
+     "expect_core": ["log"]},
+    {"hook": "webhook",
+     "body": {"action": "resolved", "data": {"issue": {"id": "9001", "title": "TypeError: undefined is not a function", "level": "error"}}},
+     "headers": {"Sentry-Hook-Resource": "issue"},
+     "sign": {"header": "Sentry-Hook-Signature", "secret": "client_secret"},
+     "expect_core": ["incident.close"]},
+    {"hook": "webhook",
+     "body": {"action": "created", "data": {"issue": {"id": "9003", "title": "Forged", "level": "fatal"}}},
+     "headers": {"Sentry-Hook-Resource": "issue", "Sentry-Hook-Signature": "00"},
+     "expect_error": true}
+  ]
+}

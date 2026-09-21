@@ -1,0 +1,1 @@
+{"action":"opened","issue":{"id":2001,"number":3,"title":"Somebody else's issue","body":"","html_url":"https://github.com/acme/other/issues/3","state":"open","labels":[],"user":{"login":"jdoe"}},"repository":{"id":2,"full_name":"acme/other","default_branch":"main"},"sender":{"login":"jdoe"}}

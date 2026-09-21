@@ -1,0 +1,1 @@
+{"action":"completed","check_run":{"id":4001,"name":"ci","status":"completed","conclusion":"failure","head_sha":"abc123","html_url":"https://github.com/acme/app/runs/4001","pull_requests":[{"number":1,"head":{"ref":"gator/t1-job1","sha":"abc123"}}]},"repository":{"id":1,"full_name":"acme/app","default_branch":"main"},"sender":{"login":"github-actions[bot]"}}

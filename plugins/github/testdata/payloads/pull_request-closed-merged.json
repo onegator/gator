@@ -1,0 +1,1 @@
+{"action":"closed","number":1,"pull_request":{"id":3001,"number":1,"title":"Search","state":"closed","merged":true,"html_url":"https://github.com/acme/app/pull/1","head":{"ref":"gator/t1-job1","sha":"abc123"},"base":{"ref":"main"}},"repository":{"id":1,"full_name":"acme/app","default_branch":"main"},"sender":{"login":"jdoe"}}
