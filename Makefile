@@ -2,11 +2,24 @@ LDFLAGS := -X github.com/onegator/gator/internal/version.Version=$(shell git des
            -X github.com/onegator/gator/internal/version.Commit=$(shell git rev-parse --short HEAD) \
            -X github.com/onegator/gator/internal/version.Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: build test lint sqlc openapi generate migrate db-up db-down run-server run-runner
+.PHONY: build plugins plugins-dev test lint sqlc openapi generate migrate db-up db-down run-server run-runner
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/gator-server ./cmd/gator-server
 	go build -ldflags "$(LDFLAGS)" -o bin/gator-runner ./cmd/gator-runner
+
+# Plugins live next to the SDK they are written against, so a protocol change and the plugins
+# that use it land in one commit. Each directory under plugins/ is one plugin program.
+PLUGINS := $(notdir $(patsubst %/,%,$(dir $(wildcard plugins/*/main.go))))
+
+plugins:
+	@mkdir -p bin/plugins
+	@for p in $(PLUGINS); do go build -o bin/plugins/$$p ./plugins/$$p || exit 1; done
+
+# Play every plugin's scenarios against an in-memory core.
+plugins-dev: plugins
+	@for p in $(PLUGINS); do for s in plugins/$$p/scenarios/*.json; do \
+		echo "== $$s"; go run ./cmd/gator-plugin dev $$s -- ./bin/plugins/$$p || exit 1; done; done
 
 test:
 	go test ./...

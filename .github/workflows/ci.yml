@@ -32,6 +32,8 @@ jobs:
       - run: go run ./cmd/gator-server migrate-down
       - run: go run ./cmd/gator-server migrate
       - run: go test ./...
+      # Every plugin's scenarios, played against an in-memory core, as the plugin repo did.
+      - run: make plugins-dev
       - run: shellcheck deploy/install.sh
       - uses: goreleaser/goreleaser-action@v6
         with:
