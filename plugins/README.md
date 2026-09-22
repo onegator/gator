@@ -9,6 +9,7 @@ release never pairs a plugin with a protocol it was not built against.
 | Plugin | Capabilities | What it does |
 |---|---|---|
 | [github](github/) | tracker, vcs, ci | issues become tasks, finished jobs open pull requests, CI checks gate Implementation, phase labels |
+| [linear](linear/) | tracker | issues become tasks, the phase is mirrored in the issue's state, a Linear tab links back |
 | [sentry](sentry/) | monitoring | alerts become incidents, deduplicated by Sentry's issue id; resolving travels both ways |
 | [honeybadger](honeybadger/) | monitoring | faults become incidents, deduplicated by fault id; resolving travels both ways |
 

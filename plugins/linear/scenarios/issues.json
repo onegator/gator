@@ -1,0 +1,21 @@
+{
+  "project": {"slug": "demo"},
+  "config": {"state_map": "implementation=In Progress, approved=Done"},
+  "secrets": {"webhook_secret": "dev-secret"},
+  "tasks": [{"id": "t1", "kind": "feature", "title": "Search", "phase": "implementation",
+             "external_refs": {"linear_issue": "ENG-7", "linear_issue_id": "uuid-7", "linear_issue_url": "https://linear.app/acme/issue/ENG-7"}}],
+  "steps": [
+    {"hook": "webhook",
+     "body": {"action": "create", "type": "Issue", "data": {"id": "uuid-12", "identifier": "ENG-12", "title": "Login fails after reset", "url": "https://linear.app/acme/issue/ENG-12", "team": {"key": "ENG"}, "labels": [{"name": "Bug"}]}},
+     "sign": {"header": "Linear-Signature", "secret": "webhook_secret"},
+     "expect_core": ["task.find", "task.create"]},
+    {"hook": "webhook",
+     "body": {"action": "create", "type": "Issue", "data": {"id": "uuid-12", "identifier": "ENG-12", "title": "Login fails after reset", "team": {"key": "ENG"}}},
+     "sign": {"header": "Linear-Signature", "secret": "webhook_secret"},
+     "expect_core": ["task.find"]},
+    {"hook": "webhook",
+     "body": {"action": "create", "type": "Issue", "data": {"id": "uuid-13", "identifier": "ENG-13", "title": "Forged"}},
+     "headers": {"Linear-Signature": "00"}, "expect_error": true},
+    {"hook": "renderUI", "task": "t1"}
+  ]
+}
