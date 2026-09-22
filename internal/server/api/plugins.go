@@ -224,7 +224,8 @@ func (s *Server) ListProjectTemplates(w http.ResponseWriter, r *http.Request, pr
 		source := gen.ProjectTemplateSource(v.Source)
 		t := gen.ProjectTemplate{Kind: v.Kind, MaxRollbacks: v.MaxRollbacks, Phases: []gen.TemplatePhase{}, Source: &source}
 		for _, p := range v.Phases {
-			phase := gen.TemplatePhase{Name: p.Name, Owner: p.Owner, Gate: p.Gate, Active: p.Active}
+			timeout := p.Timeout
+			phase := gen.TemplatePhase{Name: p.Name, Owner: p.Owner, Gate: p.Gate, Active: p.Active, Timeout: &timeout}
 			if p.Role != "" {
 				phase.Role = &p.Role
 			}

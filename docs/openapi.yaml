@@ -1283,6 +1283,7 @@ components:
         role: { type: string, description: runner role for this phase }
         gate: { type: string, description: "human | auto | both" }
         requires: { type: string, description: plugin capability that activates the phase }
+        timeout: { type: string, description: "how long the phase may take before the task is blocked, like 24h; 0 means no limit" }
         active: { type: boolean }
     InstallPlugin:
       type: object

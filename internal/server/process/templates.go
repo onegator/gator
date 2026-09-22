@@ -16,6 +16,7 @@ type PhaseView struct {
 	Role     string
 	Gate     string
 	Requires string
+	Timeout  string // "24h", or "0" for none: the form a person writes it in
 	Active   bool
 }
 
@@ -67,11 +68,25 @@ func (s *Service) Templates(ctx context.Context, projectID pgtype.UUID) ([]Templ
 		view := TemplateView{Kind: kind, MaxRollbacks: t.MaxRollbacks, Source: string(source)}
 		for _, p := range t.Phases {
 			view.Phases = append(view.Phases, PhaseView{
-				Name: p.Name, Owner: string(p.Owner), Role: p.Role, Gate: string(p.Gate),
+				Name: p.Name, Owner: string(p.Owner), Role: p.Role, Gate: string(p.Gate), Timeout: timeoutText(p.Timeout),
 				Requires: p.Requires, Active: p.Requires == "" || enabled[p.Requires],
 			})
 		}
 		out = append(out, view)
 	}
 	return out, nil
+}
+
+// timeoutText writes a timeout the way a template is written: "24h", not "24h0m0s".
+func timeoutText(d Duration) string {
+	if d == 0 {
+		return "0"
+	}
+	out := d.Std().String()
+	for _, zero := range []string{"0s", "0m"} {
+		if len(out) > len(zero) && out[len(out)-len(zero):] == zero && out[len(out)-len(zero)-1] >= 'a' {
+			out = out[:len(out)-len(zero)]
+		}
+	}
+	return out
 }

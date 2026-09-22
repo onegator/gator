@@ -4,6 +4,7 @@ package process
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"time"
@@ -31,12 +32,12 @@ const (
 
 // Phase is one step of a template.
 type Phase struct {
-	Name     string   `yaml:"name"`
-	Owner    Owner    `yaml:"owner"`
-	Role     string   `yaml:"role,omitempty"` // runner role when Owner == runner
-	Gate     GateKind `yaml:"gate"`
-	Timeout  Duration `yaml:"timeout"`
-	Requires string   `yaml:"requires,omitempty"` // plugin capability that activates this phase
+	Name     string   `yaml:"name" json:"name"`
+	Owner    Owner    `yaml:"owner" json:"owner"`
+	Role     string   `yaml:"role,omitempty" json:"role,omitempty"` // runner role when Owner == runner
+	Gate     GateKind `yaml:"gate" json:"gate"`
+	Timeout  Duration `yaml:"timeout" json:"timeout"`
+	Requires string   `yaml:"requires,omitempty" json:"requires,omitempty"` // plugin capability that activates this phase
 }
 
 // Duration is a time.Duration that accepts "24h" and a bare 0 in YAML.
@@ -56,14 +57,47 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// UnmarshalJSON accepts what a person writes in a project's process — "24h", "0", or nothing —
+// and a plain number of seconds. The templates are documented in YAML, and a process override
+// written the same way used to be refused because JSON wanted nanoseconds.
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		if s == "" || s == "0" {
+			*d = 0
+			return nil
+		}
+		v, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("timeout %q: %w", s, err)
+		}
+		*d = Duration(v)
+		return nil
+	}
+	var secs float64
+	if err := json.Unmarshal(b, &secs); err != nil {
+		return fmt.Errorf("timeout must be a duration like \"24h\" or a number of seconds")
+	}
+	*d = Duration(time.Duration(secs * float64(time.Second)))
+	return nil
+}
+
+// MarshalJSON writes the same form a person would: "24h0m0s" rather than nanoseconds.
+func (d Duration) MarshalJSON() ([]byte, error) {
+	if d == 0 {
+		return []byte(`"0"`), nil
+	}
+	return json.Marshal(time.Duration(d).String())
+}
+
 // Std converts to time.Duration.
 func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Template is the ordered list of phases for one task kind.
 type Template struct {
-	Kind         string  `yaml:"kind"`
-	MaxRollbacks int     `yaml:"max_rollbacks"`
-	Phases       []Phase `yaml:"phases"`
+	Kind         string  `yaml:"kind" json:"kind"`
+	MaxRollbacks int     `yaml:"max_rollbacks" json:"max_rollbacks"`
+	Phases       []Phase `yaml:"phases" json:"phases"`
 }
 
 // Validate checks structural rules every template must satisfy.
