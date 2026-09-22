@@ -65,6 +65,8 @@ func (h *Host) probe(ctx context.Context, command []string) (plugin.Manifest, er
 type Settings struct {
 	Enabled bool
 	Config  map[string]any
+	// KeepConfig switches the plugin on or off and leaves its stored settings alone.
+	KeepConfig bool
 }
 
 // View is a project's plugin as the API shows it: never secret values.
@@ -103,6 +105,11 @@ func (h *Host) Configure(ctx context.Context, projectID pgtype.UUID, name string
 	if cur, err := q.GetProjectPlugin(ctx, db.GetProjectPluginParams{ProjectID: projectID, Name: name}); err == nil {
 		if existing, err = h.decryptSecrets(cur.Secrets); err != nil {
 			return View{}, err
+		}
+		if s.KeepConfig {
+			// Only the switch changes; the settings are the ones already stored.
+			cfg = map[string]any{}
+			_ = json.Unmarshal(cur.Config, &cfg)
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return View{}, err

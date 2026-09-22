@@ -363,3 +363,24 @@ func TestTheBreakerFiresEvenWhenFailuresArriveTogether(t *testing.T) {
 		t.Fatalf("a burst of failures should disable the plugin with a reason: %+v", v)
 	}
 }
+
+// Switching a plugin off and on again from a client must not cost its settings. Until the
+// server learned that a missing config means "leave it", the app's toggle sent an empty one:
+// it wiped every public setting, or failed outright when one was required.
+func TestTogglingAPluginKeepsItsSettings(t *testing.T) {
+	h := newHarness(t)
+	p := h.echoProject(map[string]any{"greeting": "hello there", "token": "s3cret"})
+
+	for _, on := range []bool{false, true} {
+		if code := h.do("PUT", "/projects/"+p.id+"/plugins/echo", gen.ProjectPluginSettings{Enabled: on}, nil); code != 200 {
+			t.Fatalf("toggle to %v: %d", on, code)
+		}
+	}
+	v := h.echoState(p.id)
+	if v.Config["greeting"] != "hello there" {
+		t.Fatalf("the toggle wiped the settings: %+v", v.Config)
+	}
+	if !slices.Contains(v.SecretsSet, "token") {
+		t.Fatalf("the toggle lost the secret: %+v", v.SecretsSet)
+	}
+}

@@ -136,11 +136,14 @@ func (s *Server) ConfigureProjectPlugin(w http.ResponseWriter, r *http.Request, 
 	if !decode(w, r, &in) {
 		return
 	}
-	cfg := map[string]any{}
+	// No config at all means "only switch it on or off". A client toggling a plugin must not
+	// have to resend every setting, and until now an empty config did exactly that: it wiped
+	// the public settings, or failed validation when one was required.
+	settings := plugins.Settings{Enabled: in.Enabled, KeepConfig: in.Config == nil}
 	if in.Config != nil {
-		cfg = *in.Config
+		settings.Config = *in.Config
 	}
-	v, err := s.Plugins.Configure(r.Context(), fromUUID(projectId), string(pluginName), plugins.Settings{Enabled: in.Enabled, Config: cfg})
+	v, err := s.Plugins.Configure(r.Context(), fromUUID(projectId), string(pluginName), settings)
 	if err != nil {
 		s.pluginErr(w, err)
 		return
