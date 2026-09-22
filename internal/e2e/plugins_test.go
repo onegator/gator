@@ -291,6 +291,14 @@ func TestPluginTimeoutCrashAndBreaker(t *testing.T) {
 	if code, _ := h.hook(p.slug, "ok1", jsonBody(map[string]any{"id": "7", "title": "after the crash"}), nil); code != 200 {
 		t.Fatalf("the process restarts: %d", code)
 	}
+	// That webhook created a task, and the core asks the plugin about the new task's gate in
+	// the background. A success resets the count of failures in a row — rightly: a plugin that
+	// answers is not dead — so wait for it before failing on purpose, or it can land between
+	// the failures and the breaker never reaches its threshold.
+	h.until("the new task's gate to be evaluated", func() bool {
+		return h.count(`SELECT count(*) FROM plugin_calls c JOIN project_plugins pp ON pp.id = c.project_plugin_id
+			WHERE pp.project_id = $1 AND c.method = 'gateEvaluate'`, p.id) > 0
+	})
 
 	for n := range 3 {
 		if code, _ := h.hook(p.slug, fmt.Sprintf("f%d", n), jsonBody(map[string]any{"fail": true}), nil); code != 502 {
