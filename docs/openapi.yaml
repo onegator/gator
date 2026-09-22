@@ -821,6 +821,19 @@ components:
         lastHeartbeatAt: { type: string, format: date-time }
         offlineSince: { type: string, format: date-time, description: "when it stopped answering; absent while it is connected" }
         offlineReason: { type: string, description: "disconnected, or no heartbeat" }
+        jobs: { type: array, items: { $ref: "#/components/schemas/RunnerJob" }, description: "what it is working on now" }
+    RunnerJob:
+      type: object
+      required: [id, taskId, taskTitle, phase, role, backend, status]
+      properties:
+        id: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        taskTitle: { type: string }
+        phase: { type: string }
+        role: { type: string }
+        backend: { type: string }
+        status: { type: string }
+        startedAt: { type: string, format: date-time }
     UsageInput:
       type: object
       required: [durationMs]

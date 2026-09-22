@@ -148,14 +148,32 @@ func (s *Server) ListRunners(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "runner list is for people", "forbidden")
 		return
 	}
-	rows, err := db.New(s.Pool).ListRunners(r.Context())
+	q := db.New(s.Pool)
+	rows, err := q.ListRunners(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
+	active, err := q.ListActiveJobsOnRunners(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	byRunner := map[[16]byte][]gen.RunnerJob{}
+	for _, j := range active {
+		job := gen.RunnerJob{Id: toUUID(j.ID), TaskId: toUUID(j.TaskID), TaskTitle: j.TaskTitle, Phase: j.Phase,
+			Role: j.Role, Backend: j.Backend, Status: j.Status, StartedAt: timePtr(j.StartedAt)}
+		byRunner[j.RunnerID.Bytes] = append(byRunner[j.RunnerID.Bytes], job)
+	}
 	out := make([]gen.RunnerInfo, 0, len(rows))
 	for _, rn := range rows {
-		out = append(out, toRunner(rn, s.Runners.Connected(rn.ID)))
+		info := toRunner(rn, s.Runners.Connected(rn.ID))
+		jobs := byRunner[rn.ID.Bytes]
+		if jobs == nil {
+			jobs = []gen.RunnerJob{}
+		}
+		info.Jobs = &jobs
+		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

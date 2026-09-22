@@ -141,3 +141,11 @@ VALUES ($1, $2, $3, $4, $5, now());
 -- name: LockTask :exec
 -- Serialises job creation per task inside a transaction.
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
+
+-- name: ListActiveJobsOnRunners :many
+-- What each runner is doing now, so a person can stop or steer it from wherever they are —
+-- including a phone, which has no task detail open.
+SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, t.title AS task_title
+FROM jobs j JOIN tasks t ON t.id = j.task_id
+WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
+ORDER BY j.started_at NULLS LAST;

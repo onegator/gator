@@ -364,6 +364,57 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 	return items, nil
 }
 
+const listActiveJobsOnRunners = `-- name: ListActiveJobsOnRunners :many
+SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, t.title AS task_title
+FROM jobs j JOIN tasks t ON t.id = j.task_id
+WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
+ORDER BY j.started_at NULLS LAST
+`
+
+type ListActiveJobsOnRunnersRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	RunnerID  pgtype.UUID        `json:"runner_id"`
+	TaskID    pgtype.UUID        `json:"task_id"`
+	Phase     string             `json:"phase"`
+	Role      string             `json:"role"`
+	Backend   string             `json:"backend"`
+	Status    string             `json:"status"`
+	StartedAt pgtype.Timestamptz `json:"started_at"`
+	TaskTitle string             `json:"task_title"`
+}
+
+// What each runner is doing now, so a person can stop or steer it from wherever they are —
+// including a phone, which has no task detail open.
+func (q *Queries) ListActiveJobsOnRunners(ctx context.Context) ([]ListActiveJobsOnRunnersRow, error) {
+	rows, err := q.db.Query(ctx, listActiveJobsOnRunners)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveJobsOnRunnersRow
+	for rows.Next() {
+		var i ListActiveJobsOnRunnersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunnerID,
+			&i.TaskID,
+			&i.Phase,
+			&i.Role,
+			&i.Backend,
+			&i.Status,
+			&i.StartedAt,
+			&i.TaskTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobEvents = `-- name: ListJobEvents :many
 SELECT job_id, seq, type, payload, at, created_at FROM job_events WHERE job_id = $1 AND seq > $2 ORDER BY seq LIMIT $3
 `

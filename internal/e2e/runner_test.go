@@ -116,6 +116,24 @@ func TestSteerAndStop(t *testing.T) {
 
 	job := h.job(task, backend, "wait", 0)
 	h.waitJob(job.Id.String(), "running")
+	// The runner list says what each runner is working on, which is how a person on a phone —
+	// with no task detail open — finds the job to steer or stop.
+	var runners []gen.RunnerInfo
+	h.do("GET", "/runners", nil, &runners)
+	found := false
+	for _, rn := range runners {
+		if rn.Jobs == nil {
+			continue
+		}
+		for _, j := range *rn.Jobs {
+			if j.Id == job.Id {
+				found = j.TaskTitle == task.Title && j.Status == "running"
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the running job should be listed under its runner: %+v", runners)
+	}
 	if code := h.do("POST", "/jobs/"+job.Id.String()+"/steer", gen.SteerJob{Message: "use the smaller fix"}, nil); code != 202 {
 		t.Fatalf("steer: %d", code)
 	}
