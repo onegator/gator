@@ -803,6 +803,57 @@ func (q *Queries) MergeTaskExternalRefs(ctx context.Context, arg MergeTaskExtern
 	return i, err
 }
 
+const openTasksByTitle = `-- name: OpenTasksByTitle :many
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id FROM tasks WHERE project_id = $1 AND kind = $2 AND title = $3 AND closed_at IS NULL
+`
+
+type OpenTasksByTitleParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Kind      string      `json:"kind"`
+	Title     string      `json:"title"`
+}
+
+// Alerts are deduplicated by what they say: the same plugin switched off twice is one thing to
+// look at, not two.
+func (q *Queries) OpenTasksByTitle(ctx context.Context, arg OpenTasksByTitleParams) ([]Task, error) {
+	rows, err := q.db.Query(ctx, openTasksByTitle, arg.ProjectID, arg.Kind, arg.Title)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Task
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Kind,
+			&i.Title,
+			&i.Phase,
+			&i.Urgency,
+			&i.OwnerKind,
+			&i.OwnerID,
+			&i.RequirementsChanged,
+			&i.BlockedReason,
+			&i.SourceTaskID,
+			&i.ExternalRefs,
+			&i.PhaseEnteredAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ClosedAt,
+			&i.Description,
+			&i.ComponentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setGateBlocked = `-- name: SetGateBlocked :exec
 UPDATE gates SET blocked_reason = $3, blocked_by = $4, updated_at = now() WHERE task_id = $1 AND phase = $2
 `

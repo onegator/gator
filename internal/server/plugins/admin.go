@@ -137,6 +137,9 @@ func (h *Host) Configure(ctx context.Context, projectID pgtype.UUID, name string
 	if _, err := q.UpsertProjectPlugin(ctx, db.UpsertProjectPluginParams{ProjectID: projectID, PluginID: p.ID, Config: pb, Secrets: enc, Enabled: s.Enabled}); err != nil {
 		return View{}, err
 	}
+	if s.Enabled {
+		h.clearDisabledAlert(ctx, projectID, name)
+	}
 	if err := h.Sync(ctx); err != nil {
 		return View{}, err
 	}

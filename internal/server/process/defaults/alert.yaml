@@ -1,0 +1,7 @@
+kind: alert
+max_rollbacks: 0
+phases:
+  # Something a person has to know and nobody can do for them: a plugin switched off, a token
+  # refused. One phase, owned by a person; acknowledging it closes it, and fixing the cause
+  # closes it too.
+  - { name: attention, owner: human, gate: human, timeout: 0 }

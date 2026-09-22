@@ -304,9 +304,41 @@ func TestPluginTimeoutCrashAndBreaker(t *testing.T) {
 	if code, _ := h.hook(p.slug, "after", jsonBody(map[string]any{"id": "8"}), nil); code != 404 {
 		t.Fatalf("a disabled plugin has no hook: %d", code)
 	}
-	// Enabling it again clears the reason and starts the process.
+	// A switched-off plugin is something a person has to know about, so it is in the inbox —
+	// not only on a settings page nobody opens until they wonder why nothing has happened.
+	alert := h.pluginAlert(p.id, "The echo plugin was switched off")
+	if alert == nil {
+		t.Fatal("a plugin switched off by the breaker should raise an alert in the inbox")
+	}
+	// Enabling it again clears the reason, starts the process and closes the alert.
 	h.configureEcho(p.id, map[string]any{"greeting": "hi"})
 	h.waitEcho(p.id, func(v gen.ProjectPlugin) bool { return v.Enabled && v.Running && v.DisabledReason == nil })
+	var after gen.Task
+	h.do("GET", "/tasks/"+alert.Id.String(), nil, &after)
+	if after.ClosedAt == nil {
+		t.Fatal("switching the plugin back on should close its alert")
+	}
+}
+
+// pluginAlert finds the inbox entry about a switched-off plugin, waiting for it to appear.
+func (h *harness) pluginAlert(projectID, title string) *gen.Task {
+	h.t.Helper()
+	var found *gen.Task
+	deadline := time.Now().Add(3 * time.Second)
+	for found == nil && time.Now().Before(deadline) {
+		for _, d := range h.decisions("?projectId=" + projectID) {
+			// Checked as well as filtered: another test tripping the same plugin raises an
+			// alert with the same title in its own project.
+			if d.Task.Title == title && d.Task.ProjectId.String() == projectID {
+				task := d.Task
+				found = &task
+			}
+		}
+		if found == nil {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	return found
 }
 
 // The breaker must not depend on landing exactly on its threshold. Hooks run concurrently, so

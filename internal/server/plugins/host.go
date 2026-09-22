@@ -579,12 +579,54 @@ func (h *Host) disable(i *instance, reason string) {
 	}
 	_ = emit(ctx, q, "plugin.disabled", "project", i.b.projectID, map[string]any{"plugin": i.b.name, "reason": reason})
 	i.log().Error("plugin disabled for project", "reason", reason)
+	h.raiseDisabledAlert(ctx, q, i.b.projectID, i.b.name, reason)
 	h.mu.Lock()
 	if h.inst[i.b.id.Bytes] == i {
 		delete(h.inst, i.b.id.Bytes)
 	}
 	h.mu.Unlock()
 	i.stop()
+}
+
+// alertKind is the task a person sees for something only a person can fix.
+const alertKind = "alert"
+
+func disabledAlertTitle(plugin string) string {
+	return "The " + plugin + " plugin was switched off"
+}
+
+// raiseDisabledAlert puts a switched-off plugin in front of a person. Until now it went quiet:
+// the reason sat on the plugin's settings page, where nobody looks until they wonder why
+// nothing has happened for a week. One alert per plugin, however often it trips.
+func (h *Host) raiseDisabledAlert(ctx context.Context, q *db.Queries, projectID pgtype.UUID, plugin, reason string) {
+	title := disabledAlertTitle(plugin)
+	open, err := q.OpenTasksByTitle(ctx, db.OpenTasksByTitleParams{ProjectID: projectID, Kind: alertKind, Title: title})
+	if err != nil || len(open) > 0 {
+		return
+	}
+	desc := "Gator stopped calling this plugin for the project after it kept failing:\n\n> " + reason +
+		"\n\nNothing it does — webhooks, gate checks, pull requests — happens until it is switched on again. " +
+		"Fix the cause (usually a token or a setting), then enable the plugin in the project's settings; " +
+		"this alert closes by itself when you do."
+	if _, err := h.proc.Create(ctx, process.CreateParams{ProjectID: projectID, Kind: alertKind, Title: title,
+		Description: desc, Urgency: 2}, process.Actor{Kind: process.ActorSystem}); err != nil {
+		h.log.Warn("raising an alert for a switched-off plugin", "plugin", plugin, "err", err)
+	}
+}
+
+// clearDisabledAlert closes the alert once the plugin is on again: the thing it asked for has
+// been done, and leaving it open would teach people that alerts do not mean anything.
+func (h *Host) clearDisabledAlert(ctx context.Context, projectID pgtype.UUID, plugin string) {
+	q := db.New(h.pool)
+	open, err := q.OpenTasksByTitle(ctx, db.OpenTasksByTitleParams{ProjectID: projectID, Kind: alertKind, Title: disabledAlertTitle(plugin)})
+	if err != nil {
+		return
+	}
+	for _, t := range open {
+		if _, err := h.proc.Close(ctx, t.ID, process.Actor{Kind: process.ActorSystem}, "the plugin was switched on again"); err != nil {
+			h.log.Warn("closing a plugin alert", "plugin", plugin, "err", err)
+		}
+	}
 }
 
 const maxAuditBytes = 64 << 10

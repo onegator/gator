@@ -144,3 +144,8 @@ WHERE t.closed_at IS NULL
   )
 ORDER BY g.updated_at
 LIMIT sqlc.arg(max_rows);
+
+-- name: OpenTasksByTitle :many
+-- Alerts are deduplicated by what they say: the same plugin switched off twice is one thing to
+-- look at, not two.
+SELECT * FROM tasks WHERE project_id = $1 AND kind = $2 AND title = $3 AND closed_at IS NULL;
