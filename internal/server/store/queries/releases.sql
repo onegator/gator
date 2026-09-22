@@ -15,10 +15,13 @@ SELECT * FROM releases WHERE project_id = $1 AND environment = $2 ORDER BY deplo
 
 -- name: ListSettledReleases :many
 -- Releases whose observation window has run out without anyone marking them settled. Each is
--- a task waiting to be called finished.
-SELECT * FROM releases
-WHERE settled_at IS NULL AND observation_until IS NOT NULL AND observation_until < sqlc.arg(now)
-ORDER BY observation_until
+-- a task waiting to be called finished. A release with an open incident is left out here, not
+-- skipped after: it may wait for weeks, and fifty of those at the front of the queue used to
+-- fill every batch, so no other release in the workspace could ever settle again.
+SELECT r.* FROM releases r
+WHERE r.settled_at IS NULL AND r.observation_until IS NOT NULL AND r.observation_until < sqlc.arg(now)
+  AND NOT EXISTS (SELECT 1 FROM incidents i WHERE i.release_id = r.id AND i.closed_at IS NULL)
+ORDER BY r.observation_until
 LIMIT sqlc.arg(max_rows);
 
 -- name: SettleRelease :exec

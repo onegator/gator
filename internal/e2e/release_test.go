@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -250,4 +251,27 @@ func (h *harness) pluginKV(projectID, key string) string {
 		`SELECT kv.value #>> '{}' FROM plugin_kv kv JOIN project_plugins pp ON pp.id = kv.project_plugin_id
 		 WHERE pp.project_id = $1 AND kv.key = $2`, projectID, key).Scan(&s)
 	return s
+}
+
+// Releases stuck behind an open incident must not starve the rest. They can wait for weeks,
+// and when a full batch of them sat at the front of the queue no other release in the workspace
+// could settle at all.
+func TestBlockedReleasesDoNotStarveTheRest(t *testing.T) {
+	h := newHarness(t)
+	p := h.echoProject(map[string]any{"greeting": "hi"})
+	for i := range 3 {
+		v := fmt.Sprintf("0.%d.0", i)
+		h.hook(p.slug, "blocked-rel-"+v, jsonBody(map[string]any{"release": map[string]any{"version": v, "observe_minutes": 1}}), nil)
+		h.hook(p.slug, "blocked-inc-"+v, jsonBody(map[string]any{"incident": map[string]any{
+			"fingerprint": "starve-" + v, "title": "Still broken", "version": v}}), nil)
+	}
+	h.hook(p.slug, "good-rel", jsonBody(map[string]any{"release": map[string]any{"version": "1.0.0", "observe_minutes": 1}}), nil)
+
+	// A batch of two could hold only blocked releases if they were not left out of it.
+	if _, err := h.plugins.SettleReleases(context.Background(), time.Now().Add(time.Hour), 2); err != nil {
+		t.Fatal(err)
+	}
+	if h.count(`SELECT count(*) FROM releases WHERE project_id = $1 AND version = '1.0.0' AND settled_at IS NOT NULL`, p.id) != 1 {
+		t.Fatal("a release with nothing against it should settle however many others are blocked")
+	}
 }

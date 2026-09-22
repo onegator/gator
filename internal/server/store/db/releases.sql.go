@@ -216,9 +216,10 @@ func (q *Queries) ListReleases(ctx context.Context, arg ListReleasesParams) ([]R
 }
 
 const listSettledReleases = `-- name: ListSettledReleases :many
-SELECT id, project_id, task_id, version, commit_sha, url, environment, source_plugin_id, deployed_at, observation_until, settled_at, created_at FROM releases
-WHERE settled_at IS NULL AND observation_until IS NOT NULL AND observation_until < $1
-ORDER BY observation_until
+SELECT r.id, r.project_id, r.task_id, r.version, r.commit_sha, r.url, r.environment, r.source_plugin_id, r.deployed_at, r.observation_until, r.settled_at, r.created_at FROM releases r
+WHERE r.settled_at IS NULL AND r.observation_until IS NOT NULL AND r.observation_until < $1
+  AND NOT EXISTS (SELECT 1 FROM incidents i WHERE i.release_id = r.id AND i.closed_at IS NULL)
+ORDER BY r.observation_until
 LIMIT $2
 `
 
@@ -228,7 +229,9 @@ type ListSettledReleasesParams struct {
 }
 
 // Releases whose observation window has run out without anyone marking them settled. Each is
-// a task waiting to be called finished.
+// a task waiting to be called finished. A release with an open incident is left out here, not
+// skipped after: it may wait for weeks, and fifty of those at the front of the queue used to
+// fill every batch, so no other release in the workspace could ever settle again.
 func (q *Queries) ListSettledReleases(ctx context.Context, arg ListSettledReleasesParams) ([]Release, error) {
 	rows, err := q.db.Query(ctx, listSettledReleases, arg.Now, arg.MaxRows)
 	if err != nil {
