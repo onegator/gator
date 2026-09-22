@@ -1,0 +1,18 @@
+{
+  "project": {"slug": "demo"},
+  "secrets": {"webhook_token": "dev-token", "auth_token": "unused-in-this-scenario"},
+  "steps": [
+    {"hook": "webhook", "query": {"token": "dev-token"},
+     "body": {"event": "occurred", "fault": {"id": 9001, "klass": "NoMethodError", "message": "undefined method for nil", "environment": "production", "url": "https://app.honeybadger.io/projects/1/faults/9001"}},
+     "expect_core": ["incident.upsert"]},
+    {"hook": "webhook", "query": {"token": "dev-token"},
+     "body": {"event": "occurred", "fault": {"id": 9001, "klass": "NoMethodError", "message": "undefined method for nil", "environment": "production"}},
+     "expect_core": ["incident.upsert"]},
+    {"hook": "webhook", "query": {"token": "dev-token"},
+     "body": {"event": "resolved", "fault": {"id": 9001, "klass": "NoMethodError", "environment": "production"}},
+     "expect_core": ["incident.close"]},
+    {"hook": "webhook", "query": {"token": "not-the-token"},
+     "body": {"event": "occurred", "fault": {"id": 9002, "klass": "Forged"}},
+     "expect_error": true}
+  ]
+}

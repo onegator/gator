@@ -39,6 +39,13 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags: [-s -w]
+  - id: plugin-honeybadger
+    main: ./plugins/honeybadger
+    binary: honeybadger
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: [-s -w]
 archives:
   - id: server
     ids: [gator-server]
@@ -59,7 +66,7 @@ archives:
       - deploy/launchd/dev.onegator.gator-runner.plist
       - docs/deploy.md
   - id: plugins
-    ids: [plugin-github, plugin-sentry]
+    ids: [plugin-github, plugin-sentry, plugin-honeybadger]
     name_template: "gator-plugins_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - plugins/README.md

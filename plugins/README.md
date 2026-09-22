@@ -10,6 +10,7 @@ release never pairs a plugin with a protocol it was not built against.
 |---|---|---|
 | [github](github/) | tracker, vcs, ci | issues become tasks, finished jobs open pull requests, CI checks gate Implementation, phase labels |
 | [sentry](sentry/) | monitoring | alerts become incidents, deduplicated by Sentry's issue id; resolving travels both ways |
+| [honeybadger](honeybadger/) | monitoring | faults become incidents, deduplicated by fault id; resolving travels both ways |
 
 A plugin written elsewhere, against the published SDK, works the same way; these are simply
 the ones this repository ships.

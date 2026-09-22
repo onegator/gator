@@ -93,7 +93,14 @@ func (h *Host) webhook(w http.ResponseWriter, r *http.Request) {
 			headers[k] = strings.Join(v, ", ")
 		}
 	}
-	err = h.call(ctx, i, plugin.MethodWebhook, plugin.WebhookParams{DeliveryID: delivery, Headers: headers, Body: body}, nil)
+	var query map[string]string
+	if values := r.URL.Query(); len(values) > 0 {
+		query = make(map[string]string, len(values))
+		for k, v := range values {
+			query[k] = v[0]
+		}
+	}
+	err = h.call(ctx, i, plugin.MethodWebhook, plugin.WebhookParams{DeliveryID: delivery, Headers: headers, Body: body, Query: query}, nil)
 	if err != nil {
 		// Let the sender retry: forget the delivery.
 		_ = q.ReleaseWebhookDelivery(ctx, db.ReleaseWebhookDeliveryParams{ProjectPluginID: row.ID, DeliveryID: delivery})

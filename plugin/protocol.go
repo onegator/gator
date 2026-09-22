@@ -160,6 +160,9 @@ type WebhookParams struct {
 	DeliveryID string            `json:"delivery_id"`
 	Headers    map[string]string `json:"headers"` // canonical header names
 	Body       []byte            `json:"body"`
+	// Query is the webhook URL's query string, first value per key. Some senders cannot sign a
+	// delivery, and a token in the URL they are given is the only proof they can offer.
+	Query map[string]string `json:"query,omitempty"`
 }
 
 // PhaseTransitionParams follows every advance or rollback.

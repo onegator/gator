@@ -44,6 +44,7 @@ type Step struct {
 	Receipt     json.RawMessage   `json:"receipt,omitempty"`
 	Delivery    string            `json:"delivery,omitempty"`
 	Headers     map[string]string `json:"headers,omitempty"`
+	Query       map[string]string `json:"query,omitempty"`     // the webhook URL's query string
 	Body        json.RawMessage   `json:"body,omitempty"`      // webhook body, sent as these bytes
 	BodyFile    string            `json:"body_file,omitempty"` // or a file next to the scenario
 	Sign        *Signature        `json:"sign,omitempty"`
@@ -234,7 +235,7 @@ func (p *Process) params(n int, st Step, secrets map[string]string) (any, string
 		if delivery == "" {
 			delivery = fmt.Sprintf("delivery-%d", n+1)
 		}
-		return plugin.WebhookParams{DeliveryID: delivery, Headers: headers, Body: body}, ""
+		return plugin.WebhookParams{DeliveryID: delivery, Headers: headers, Body: body, Query: st.Query}, ""
 	case plugin.MethodPhaseTransition:
 		return plugin.PhaseTransitionParams{Task: task, From: st.From, To: st.To, Rollback: st.Rollback, Reason: st.Reason}, needTask()
 	case plugin.MethodGateEvaluate:
