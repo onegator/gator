@@ -187,6 +187,19 @@ type Job struct {
 	ContextDocs       int32              `json:"context_docs"`
 }
 
+type JobContext struct {
+	JobID     pgtype.UUID `json:"job_id"`
+	Position  int32       `json:"position"`
+	Kind      string      `json:"kind"`
+	Phase     string      `json:"phase"`
+	Title     string      `json:"title"`
+	Origin    string      `json:"origin"`
+	Body      string      `json:"body"`
+	FullBytes int32       `json:"full_bytes"`
+	LeftOut   string      `json:"left_out"`
+	Dropped   bool        `json:"dropped"`
+}
+
 type JobEvent struct {
 	JobID     pgtype.UUID        `json:"job_id"`
 	Seq       int64              `json:"seq"`

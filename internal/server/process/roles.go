@@ -94,7 +94,24 @@ type ContextDoc struct {
 	Phase string
 	Title string
 	Body  string
+	// Origin says where it came from, in the words a person uses: task, catalogue, product,
+	// knowledge, artifact. A person reading a prompt package wants to know which part of the
+	// system they would have to change to change what the agent was told.
+	Origin string
+	// FullBytes is the document's length before any trimming.
+	FullBytes int
+	// Left, when not empty, says why a document was cut short or left out entirely. A package
+	// that silently drops its tail looks the same as one that never had it.
+	Left string
+	// Dropped means it never reached the prompt at all.
+	Dropped bool
 }
+
+// Reasons a document did not arrive whole. They are sentences because they are read by people.
+const (
+	leftTooLong = "too long on its own; the rest was cut"
+	leftNoRoom  = "no room left in the package"
+)
 
 const (
 	maxDocBytes     = 20000
@@ -128,20 +145,27 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 	var docs []ContextDoc
 	total := 0
 	add := func(d ContextDoc) {
+		d.FullBytes = len(d.Body)
 		if total >= maxContextBytes {
+			// Kept in the list, with nothing in it: a person looking at what the agent was
+			// told should see what it was not told, and why.
+			d.Body, d.Dropped, d.Left = "", true, leftNoRoom
+			docs = append(docs, d)
 			return
 		}
 		if len(d.Body) > maxDocBytes {
 			d.Body = d.Body[:maxDocBytes] + "\n… [truncated]"
+			d.Left = leftTooLong
 		}
 		if total+len(d.Body) > maxContextBytes {
 			d.Body = d.Body[:maxContextBytes-total] + "\n… [truncated]"
+			d.Left = leftNoRoom
 		}
 		total += len(d.Body)
 		docs = append(docs, d)
 	}
 	if reason, err := q.LastRollbackReason(ctx, db.LastRollbackReasonParams{TaskID: taskID, ToPhase: t.Phase}); err == nil && reason != nil && *reason != "" {
-		add(ContextDoc{Kind: "rollback", Phase: t.Phase, Title: "Why this phase was sent back", Body: *reason})
+		add(ContextDoc{Kind: "rollback", Phase: t.Phase, Title: "Why this phase was sent back", Body: *reason, Origin: "task"})
 	}
 	// Which part of the product this task is about, before anything about how to build it: an
 	// agent told the repository, the owner and what a change here reaches spends no turns
@@ -149,6 +173,7 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 	if doc, ok, err := s.Catalogue(ctx, t); err != nil {
 		return nil, err
 	} else if ok {
+		doc.Origin = "catalogue"
 		add(doc)
 	}
 	// What the product decided about itself, for the roles that reason about direction.
@@ -158,7 +183,7 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 			return nil, err
 		}
 		for _, e := range entries {
-			add(ContextDoc{Kind: "product", Phase: e.Kind, Title: productTitle(e), Body: e.Content})
+			add(ContextDoc{Kind: "product", Phase: e.Kind, Title: productTitle(e), Body: e.Content, Origin: "product"})
 		}
 	}
 
@@ -168,12 +193,15 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 		return nil, err
 	}
 	for _, d := range know {
+		if d.Origin == "" {
+			d.Origin = "knowledge"
+		}
 		add(d)
 	}
 
 	// The working state comes first: it is the shortest route to where the task stands.
 	if ws, ok := latest["task/working_state"]; ok && ws.Content != nil {
-		add(ContextDoc{Kind: "working_state", Phase: "task", Title: fmt.Sprintf("Working state (v%d)", ws.Version), Body: *ws.Content})
+		add(ContextDoc{Kind: "working_state", Phase: "task", Title: fmt.Sprintf("Working state (v%d)", ws.Version), Body: *ws.Content, Origin: "artifact"})
 	}
 	for _, k := range keys {
 		if k == "task/working_state" {
@@ -191,7 +219,7 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 		if a.ApprovedAt.Valid {
 			status = "approved"
 		}
-		add(ContextDoc{Kind: a.Type, Phase: a.Phase, Title: fmt.Sprintf("%s from %s (v%d, %s)", a.Type, a.Phase, a.Version, status), Body: body})
+		add(ContextDoc{Kind: a.Type, Phase: a.Phase, Title: fmt.Sprintf("%s from %s (v%d, %s)", a.Type, a.Phase, a.Version, status), Body: body, Origin: "artifact"})
 	}
 	return docs, nil
 }

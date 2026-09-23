@@ -451,6 +451,41 @@ func (q *Queries) ListAgentCalls(ctx context.Context, arg ListAgentCallsParams) 
 	return items, nil
 }
 
+const listJobContext = `-- name: ListJobContext :many
+SELECT job_id, position, kind, phase, title, origin, body, full_bytes, left_out, dropped FROM job_context WHERE job_id = $1 ORDER BY position
+`
+
+func (q *Queries) ListJobContext(ctx context.Context, jobID pgtype.UUID) ([]JobContext, error) {
+	rows, err := q.db.Query(ctx, listJobContext, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JobContext
+	for rows.Next() {
+		var i JobContext
+		if err := rows.Scan(
+			&i.JobID,
+			&i.Position,
+			&i.Kind,
+			&i.Phase,
+			&i.Title,
+			&i.Origin,
+			&i.Body,
+			&i.FullBytes,
+			&i.LeftOut,
+			&i.Dropped,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobEvents = `-- name: ListJobEvents :many
 SELECT job_id, seq, type, payload, at, created_at FROM job_events WHERE job_id = $1 AND seq > $2 ORDER BY seq LIMIT $3
 `
@@ -851,6 +886,43 @@ type RunnerHeartbeatParams struct {
 
 func (q *Queries) RunnerHeartbeat(ctx context.Context, arg RunnerHeartbeatParams) error {
 	_, err := q.db.Exec(ctx, runnerHeartbeat, arg.ID, arg.AuthState, arg.Status)
+	return err
+}
+
+const saveJobContextDoc = `-- name: SaveJobContextDoc :exec
+INSERT INTO job_context (job_id, position, kind, phase, title, origin, body, full_bytes, left_out, dropped)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (job_id, position) DO UPDATE
+SET kind = EXCLUDED.kind, phase = EXCLUDED.phase, title = EXCLUDED.title, origin = EXCLUDED.origin,
+    body = EXCLUDED.body, full_bytes = EXCLUDED.full_bytes, left_out = EXCLUDED.left_out, dropped = EXCLUDED.dropped
+`
+
+type SaveJobContextDocParams struct {
+	JobID     pgtype.UUID `json:"job_id"`
+	Position  int32       `json:"position"`
+	Kind      string      `json:"kind"`
+	Phase     string      `json:"phase"`
+	Title     string      `json:"title"`
+	Origin    string      `json:"origin"`
+	Body      string      `json:"body"`
+	FullBytes int32       `json:"full_bytes"`
+	LeftOut   string      `json:"left_out"`
+	Dropped   bool        `json:"dropped"`
+}
+
+func (q *Queries) SaveJobContextDoc(ctx context.Context, arg SaveJobContextDocParams) error {
+	_, err := q.db.Exec(ctx, saveJobContextDoc,
+		arg.JobID,
+		arg.Position,
+		arg.Kind,
+		arg.Phase,
+		arg.Title,
+		arg.Origin,
+		arg.Body,
+		arg.FullBytes,
+		arg.LeftOut,
+		arg.Dropped,
+	)
 	return err
 }
 

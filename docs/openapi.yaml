@@ -437,6 +437,16 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/context:
+    get:
+      operationId: previewTaskContext
+      description: "What a job started now would be handed: the same package, assembled from what the project knows today. For reading before spending anything."
+      parameters:
+        - { $ref: "#/components/parameters/taskId" }
+        - { name: role, in: query, required: false, schema: { type: string, description: "defaults to the current phase's role" } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ContextPackage" } } } }
+        "400": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/component:
     put:
       operationId: setTaskComponent
@@ -738,6 +748,13 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1000 } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/JobEvent" } } } } }
+  /jobs/{jobId}/context:
+    get:
+      operationId: listJobContext
+      description: "The package of documents this job was handed, in the order the prompt carried them, including what was cut short or left out and why."
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ContextPackage" } } } }
   /jobs/{jobId}/agent-calls:
     get:
       operationId: listAgentCalls
@@ -862,6 +879,8 @@ components:
         lastEventAt: { type: string, format: date-time }
         stopReason: { type: string }
         receipt: { type: object, additionalProperties: true }
+        contextBytes: { type: integer, description: "how much of the prompt was documents this job was handed" }
+        contextDocs: { type: integer, description: "how many documents" }
         createdAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
@@ -873,6 +892,26 @@ components:
         type: { type: string }
         at: { type: string, format: date-time }
         payload: { type: object, additionalProperties: true }
+    ContextPackage:
+      type: object
+      required: [documents, bytes, dropped]
+      properties:
+        documents: { type: array, items: { $ref: "#/components/schemas/ContextDocument" } }
+        bytes: { type: integer, description: "what reached the prompt, in bytes" }
+        dropped: { type: integer, description: "documents left out entirely" }
+    ContextDocument:
+      type: object
+      required: [kind, title, bytes, fullBytes, dropped]
+      properties:
+        kind: { type: string }
+        phase: { type: string }
+        title: { type: string }
+        origin: { type: string, description: "task | catalogue | product | knowledge | artifact | plugin" }
+        body: { type: string, description: "as it went into the prompt; empty when the document was left out" }
+        bytes: { type: integer }
+        fullBytes: { type: integer, description: "its length before trimming" }
+        leftOut: { type: string, description: "why it did not arrive whole; empty when it did" }
+        dropped: { type: boolean }
     AgentCall:
       type: object
       required: [command, detail, at]

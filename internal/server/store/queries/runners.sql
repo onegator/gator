@@ -155,3 +155,13 @@ INSERT INTO agent_calls (job_id, task_id, command, detail) VALUES ($1, $2, $3, $
 
 -- name: ListAgentCalls :many
 SELECT * FROM agent_calls WHERE job_id = $1 ORDER BY id LIMIT $2;
+
+-- name: SaveJobContextDoc :exec
+INSERT INTO job_context (job_id, position, kind, phase, title, origin, body, full_bytes, left_out, dropped)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (job_id, position) DO UPDATE
+SET kind = EXCLUDED.kind, phase = EXCLUDED.phase, title = EXCLUDED.title, origin = EXCLUDED.origin,
+    body = EXCLUDED.body, full_bytes = EXCLUDED.full_bytes, left_out = EXCLUDED.left_out, dropped = EXCLUDED.dropped;
+
+-- name: ListJobContext :many
+SELECT * FROM job_context WHERE job_id = $1 ORDER BY position;

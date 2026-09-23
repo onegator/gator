@@ -332,14 +332,34 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
 				pj.Guide = g
 			}
+			// One counter across everything the job is handed, so the record reads in the
+			// order the prompt does.
+			pos := 0
+			record := func(d process.ContextDoc, origin string) {
+				if err := q.SaveJobContextDoc(ctx, db.SaveJobContextDocParams{
+					JobID: j.ID, Position: int32(pos), Kind: d.Kind, Phase: d.Phase, Title: d.Title,
+					Origin: origin, Body: d.Body, FullBytes: int32(d.FullBytes),
+					LeftOut: d.Left, Dropped: d.Dropped}); err != nil {
+					s.m.log.Warn("recording what a job was handed", "job", uuidString(j.ID), "err", err)
+				}
+				pos++
+			}
 			if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
 				for _, d := range docs {
-					pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+					// A document that did not fit is kept in the record but not in the prompt:
+					// the agent never saw it, and the record should say so rather than imply
+					// it was never there.
+					if !d.Dropped {
+						pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+					}
+					record(d, d.Origin)
 				}
 			}
 			if p := s.m.cfg.Preparer; p != nil {
 				for _, d := range p.PrepareJob(ctx, j) {
 					pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+					d.FullBytes = len(d.Body)
+					record(d, "plugin")
 				}
 			}
 			if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
