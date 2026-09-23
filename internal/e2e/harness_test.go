@@ -82,7 +82,7 @@ func newHarness(t *testing.T) *harness {
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
 	mgr := runners.New(pool, svc, hub, slog.Default(), runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, AgentTokens: auth.Tokens{Pool: pool}})
+		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}})
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}

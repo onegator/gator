@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/onegator/gator/plugin"
@@ -19,6 +20,8 @@ func main() {
 			Name: "echo", Version: "1.0.0", Capabilities: []string{"ci", "deploy"}, UI: []string{"tab", "chip"},
 			ConfigSchema: json.RawMessage(`{"type":"object","properties":{
 				"greeting":{"type":"string"},
+				"object":{"type":"string"},
+				"object_turns":{"type":"string"},
 				"token":{"type":"string","x-secret":true}},"required":["greeting"]}`),
 			Webhook: &plugin.WebhookSpec{DeliveryHeader: "X-Echo-Delivery"},
 		},
@@ -94,6 +97,18 @@ func main() {
 		},
 		JobPrepare: func(ctx context.Context, core *plugin.Core, p plugin.JobPrepareParams) (plugin.JobPrepareResult, error) {
 			return plugin.JobPrepareResult{Instructions: "Echo says: " + core.Setting("greeting")}, nil
+		},
+		TurnEnding: func(ctx context.Context, core *plugin.Core, p plugin.TurnEndingParams) (plugin.TurnEndingResult, error) {
+			// Objects for the first "object_turns" endings (default 1), so a test can watch a
+			// turn be sent back to work and can also outlast the core's limit.
+			turns := 1
+			if n, err := strconv.Atoi(core.Setting("object_turns")); err == nil && n > 0 {
+				turns = n
+			}
+			if p.Turn <= turns && core.Setting("object") != "" {
+				return plugin.TurnEndingResult{Objection: core.Setting("object")}, nil
+			}
+			return plugin.TurnEndingResult{}, nil
 		},
 		JobFinish: func(ctx context.Context, core *plugin.Core, p plugin.JobFinishParams) error {
 			_, err := core.PutArtifact(ctx, plugin.ArtifactPutParams{TaskID: p.Task.ID, Type: "echo-note", Content: "job " + p.Job.ID + " " + p.Job.Status})

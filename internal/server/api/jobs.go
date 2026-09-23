@@ -235,6 +235,8 @@ func toJob(j db.Job) gen.Job {
 	// Measured since M5 and, until now, readable by nobody.
 	bytes, docs := int(j.ContextBytes), int(j.ContextDocs)
 	out.ContextBytes, out.ContextDocs = &bytes, &docs
+	objections := int(j.Objections)
+	out.Objections = &objections
 	if j.LeaseExpiresAt.Valid {
 		v := j.LeaseExpiresAt.Time
 		out.LeaseExpiresAt = &v

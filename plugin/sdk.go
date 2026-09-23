@@ -21,6 +21,9 @@ type Handlers struct {
 	RenderUI         func(ctx context.Context, core *Core, p RenderUIParams) (RenderUIResult, error)
 	JobPrepare       func(ctx context.Context, core *Core, p JobPrepareParams) (JobPrepareResult, error)
 	JobFinish        func(ctx context.Context, core *Core, p JobFinishParams) error
+	// TurnEnding is asked before an agent's turn ends. Answer with an objection to send the
+	// agent back to work; answer with nothing to let it finish.
+	TurnEnding func(ctx context.Context, core *Core, p TurnEndingParams) (TurnEndingResult, error)
 	// Release is the ask a deploy plugin answers: ship this task's work, then call
 	// core.RecordRelease with the version once you know it.
 	Release func(ctx context.Context, core *Core, p ReleaseParams) error
@@ -50,6 +53,7 @@ func (h *Handlers) hooks() []string {
 	add(h.Release != nil, MethodRelease)
 	add(h.IncidentClosed != nil, MethodIncidentClosed)
 	add(h.QualityEvaluate != nil, MethodQualityEvaluate)
+	add(h.TurnEnding != nil, MethodTurnEnding)
 	return out
 }
 
@@ -131,6 +135,15 @@ func dispatch(ctx context.Context, h *Handlers, core *Core, method string, raw j
 			return nil, err
 		}
 		return h.GateEvaluate(ctx, core, p)
+	case MethodTurnEnding:
+		if h.TurnEnding == nil {
+			return nil, notFound
+		}
+		p, err := decodeParams[TurnEndingParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		return h.TurnEnding(ctx, core, p)
 	case MethodArtifactApproved:
 		if h.ArtifactApproved == nil {
 			return nil, notFound

@@ -314,6 +314,34 @@ func (q *Queries) GetGate(ctx context.Context, arg GetGateParams) (Gate, error) 
 	return i, err
 }
 
+const getLatestArtifact = `-- name: GetLatestArtifact :one
+SELECT id, task_id, phase, type, version, content, url, approved_at, approved_by, created_at FROM artifacts WHERE task_id = $1 AND phase = $2 AND type = $3 ORDER BY version DESC LIMIT 1
+`
+
+type GetLatestArtifactParams struct {
+	TaskID pgtype.UUID `json:"task_id"`
+	Phase  string      `json:"phase"`
+	Type   string      `json:"type"`
+}
+
+func (q *Queries) GetLatestArtifact(ctx context.Context, arg GetLatestArtifactParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, getLatestArtifact, arg.TaskID, arg.Phase, arg.Type)
+	var i Artifact
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.Phase,
+		&i.Type,
+		&i.Version,
+		&i.Content,
+		&i.Url,
+		&i.ApprovedAt,
+		&i.ApprovedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getTask = `-- name: GetTask :one
 SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by FROM tasks WHERE id = $1
 `

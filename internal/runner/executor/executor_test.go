@@ -3,9 +3,11 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -272,5 +274,67 @@ func TestCostBoundFailsTheJob(t *testing.T) {
 	fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake", Bounds: proto.Bounds{MaxCostUSD: 0.005}}, io)
 	if fin.Status != proto.StatusFailed || !strings.Contains(fin.StopReason, "cost bound") || fin.Usage.CostUSD != 0.01 {
 		t.Fatalf("finish %+v", fin)
+	}
+}
+
+// An objection is the one thing besides a person's steer that can send a finished agent back
+// to work. It must reach the same session, arrive as data, and stop when it stops.
+func TestAnObjectionSendsTheAgentBackToWork(t *testing.T) {
+	be := &scripted{run: func(_ context.Context, n int, _ backend.Spec, _ backend.Emit) backend.Outcome {
+		return backend.Outcome{Status: proto.StatusDone, Summary: fmt.Sprintf("run %d", n) + digestBlock, SessionID: "sess-1", Usage: usage()}
+	}}
+	ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _, evs, mu := jobIO()
+	asked := 0
+	io.TurnEnding = func(te proto.TurnEnding) []proto.Objection {
+		asked++
+		if te.Turn == 1 {
+			return []proto.Objection{{Source: "ci", Reason: "the tests were never run"}}
+		}
+		return nil
+	}
+	fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake"}, io)
+	if fin.Status != proto.StatusDone || len(be.specs) != 2 || asked != 2 {
+		t.Fatalf("finish %+v runs %d asked %d", fin, len(be.specs), asked)
+	}
+	if fin.Objections != 1 {
+		t.Fatalf("the receipt must say the turn was sent back: %+v", fin)
+	}
+	second := be.specs[1]
+	if second.SessionID != "sess-1" {
+		t.Fatalf("the objection must reach the same session: %+v", second)
+	}
+	if !strings.Contains(second.Prompt, "the tests were never run") || !strings.Contains(second.Prompt, "untrusted-objection") {
+		t.Fatalf("the objection must arrive as data: %s", second.Prompt)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(*evs, "objection") {
+		t.Fatalf("the objection must be in the job's events: %v", *evs)
+	}
+}
+
+// A turn that failed has a reason of its own; arguing with it would bury that reason. And a
+// runner with nobody to ask behaves exactly as runners did before the question existed.
+func TestAFailedTurnAndAnUnaskedOneEndAtOnce(t *testing.T) {
+	for _, tc := range []struct{ name, status string }{{"failed", proto.StatusFailed}, {"done", proto.StatusDone}} {
+		t.Run(tc.name, func(t *testing.T) {
+			be := &scripted{run: func(_ context.Context, _ int, _ backend.Spec, _ backend.Emit) backend.Outcome {
+				return backend.Outcome{Status: tc.status, Summary: "over" + digestBlock, SessionID: "s", Usage: usage()}
+			}}
+			ex := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+			io, _, _, _ := jobIO()
+			asked := false
+			if tc.status == proto.StatusFailed {
+				io.TurnEnding = func(proto.TurnEnding) []proto.Objection {
+					asked = true
+					return []proto.Objection{{Source: "ci", Reason: "no"}}
+				}
+			}
+			fin := ex.Run(context.Background(), proto.Job{JobID: "j", Backend: "fake"}, io)
+			if len(be.specs) != 1 || fin.Objections != 0 || asked {
+				t.Fatalf("the turn should have ended at once: runs %d finish %+v asked %v", len(be.specs), fin, asked)
+			}
+		})
 	}
 }

@@ -93,8 +93,23 @@ config or secrets, just to read the manifest.
 | `schedule` | every `every` of a manifest schedule | `{name}` → null |
 | `renderUI` | a client opens a task | `{task}` → `{tabs: [{title, markdown}], chips: [{text, color, url}]}` |
 | `jobPrepare` | before a job is leased to a runner | `{task, job}` → `{instructions}` (runners see it: no secrets) |
+| `turnEnding` | the agent says its turn is over, before the receipt | `{task, job, turn, status, summary, commits, changed_paths, digest}` → `{objection}` |
 | `jobFinish` | after a job's receipt | `{task, job, receipt}` → null |
 | `release`, `incidentClosed` | M6 | none yet |
+
+`turnEnding` is the one hook that can change what an agent does next. A job ends because the
+agent decided it was finished; a plugin that watches CI knows the tests never ran, and saying
+so while the agent still has its worktree in front of it costs one resumed session, where the
+gate refusing the phase afterwards costs a person a whole phase. Answer with an empty
+objection — or do not declare the hook — and nothing changes.
+
+An objection reaches the agent as **data**, inside untrusted markers, because a plugin reads
+outside systems and an outside system can be written to by anyone. A job is sent back at most
+twice (the server counts, not the runner), and the third ending stands whatever the plugin
+thinks: a plugin that is never satisfied would hold an agent in a loop and spend a person's
+money doing it. The count is on the job and in its receipt, and each objection is a row in the
+job's feed with who said it and why. The core makes one objection of its own, on the same
+footing as a plugin's: a task that was planned whose implementation turn committed nothing.
 
 Every call has a time limit (30 s by default). Hooks are delivered **at least once**: the
 server reads domain events from its outbox with a durable cursor, so a restart can repeat a

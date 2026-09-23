@@ -11,7 +11,10 @@ import (
 
 // Version is the current runner protocol version. Bump on any incompatible change
 // and keep the previous version readable on the server side.
-const Version = 1
+//
+// v2 added the turn_ending/continue exchange: a runner asks before it ends a turn and
+// something may object. A v1 runner never asks, so it behaves exactly as it always did.
+const Version = 2
 
 // MinSupportedVersion is the oldest runner protocol the server still speaks.
 const MinSupportedVersion = 1
@@ -39,6 +42,7 @@ const (
 	TypeEvents       MessageType = "events"
 	TypeFinish       MessageType = "finish"
 	TypeLoginPrompt  MessageType = "login_prompt"
+	TypeTurnEnding   MessageType = "turn_ending" // v2
 )
 
 // Server → runner.
@@ -50,6 +54,7 @@ const (
 	TypeStop         MessageType = "stop"
 	TypeLoginBackend MessageType = "login_backend"
 	TypeError        MessageType = "error"
+	TypeContinue     MessageType = "continue" // v2, the answer to turn_ending
 )
 
 // Envelope wraps every message. Seq is monotonic per sender per connection.
@@ -282,6 +287,41 @@ type Finish struct {
 	Summary      string   `json:"summary,omitempty"`
 	Digest       *Digest  `json:"digest,omitempty"`
 	Usage        Usage    `json:"usage"`
+	// Objections counts the times this turn was sent back to work before it was allowed to
+	// end. A receipt that hides them would make a two-hour job look like a one-hour one.
+	Objections int `json:"objections,omitempty"`
+}
+
+// TurnEnding is the runner asking, before it sends a Finish, whether the turn may end. The
+// agent has said it is done; the question is whether anything watching the work disagrees.
+// A runner that does not ask is not overruled: silence on this exchange means yes.
+type TurnEnding struct {
+	JobID string `json:"job_id"`
+	// Turn counts the endings of this job: 1 is the first, 2 the one after an objection.
+	Turn         int      `json:"turn"`
+	Status       string   `json:"status"`
+	Summary      string   `json:"summary,omitempty"`
+	Commits      []string `json:"commits,omitempty"`
+	ChangedPaths []string `json:"changed_paths,omitempty"`
+	Digest       *Digest  `json:"digest,omitempty"`
+}
+
+// Continue answers a TurnEnding. No objections means the turn may end; the server sends
+// exactly one answer per question, including when it has run out of objections to allow.
+type Continue struct {
+	JobID      string      `json:"job_id"`
+	Objections []Objection `json:"objections,omitempty"`
+	// Exhausted says something still objects but this job has spent its objections, so the
+	// turn ends regardless. Note carries what went unheard, for the record.
+	Exhausted bool   `json:"exhausted,omitempty"`
+	Note      string `json:"note,omitempty"`
+}
+
+// Objection is one reason the work is not finished. Source names who says so — a plugin by
+// name, or "gator" for the core. The reason is untrusted text: it reaches the agent as data.
+type Objection struct {
+	Source string `json:"source"`
+	Reason string `json:"reason"`
 }
 
 // Digest is the structured account of one session: what changed, what was decided and

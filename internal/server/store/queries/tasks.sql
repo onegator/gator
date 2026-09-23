@@ -83,6 +83,9 @@ UPDATE artifacts SET approved_at = now(), approved_by = $2 WHERE id = $1 RETURNI
 -- name: ListArtifacts :many
 SELECT * FROM artifacts WHERE task_id = $1 ORDER BY phase, type, version;
 
+-- name: GetLatestArtifact :one
+SELECT * FROM artifacts WHERE task_id = $1 AND phase = $2 AND type = $3 ORDER BY version DESC LIMIT 1;
+
 -- name: ListOpenTasksWithGates :many
 SELECT sqlc.embed(t), sqlc.embed(g)
 FROM tasks t

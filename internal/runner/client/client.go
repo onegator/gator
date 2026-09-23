@@ -27,6 +27,10 @@ type JobIO struct {
 	Emit func(typ string, payload any)
 	// Steer receives corrections sent by a person while the job runs.
 	Steer <-chan string
+	// TurnEnding asks the server whether the turn may end, before the receipt is sent. It
+	// returns what objects, or nothing when nothing does — including when the server is old,
+	// unreachable or slow, because an agent must never be held by a question nobody answers.
+	TurnEnding func(proto.TurnEnding) []proto.Objection
 }
 
 // Executor runs one job and returns its receipt. It must stop when ctx is cancelled
@@ -95,6 +99,8 @@ type outMsg struct {
 type runningJob struct {
 	cancel context.CancelCauseFunc
 	steer  chan string
+	// cont carries the server's answer to a turn_ending question, one per question.
+	cont chan proto.Continue
 }
 
 // Client is one runner.
@@ -433,6 +439,18 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				}
 				c.mu.Unlock()
 			}
+		case proto.TypeContinue:
+			var cn proto.Continue
+			if env.Into(&cn) == nil {
+				c.mu.Lock()
+				if rj := c.jobs[cn.JobID]; rj != nil && rj.cont != nil {
+					select {
+					case rj.cont <- cn:
+					default: // nobody is waiting any more; the turn went ahead
+					}
+				}
+				c.mu.Unlock()
+			}
 		case proto.TypeStop:
 			var sp proto.Stop
 			if env.Into(&sp) == nil {
@@ -487,7 +505,7 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 		prev := cancel
 		cancel = func(err error) { prev(err); tcancel() }
 	}
-	rj := &runningJob{cancel: cancel, steer: make(chan string, 8)}
+	rj := &runningJob{cancel: cancel, steer: make(chan string, 8), cont: make(chan proto.Continue, 1)}
 	c.jobs[job.JobID] = rj
 	c.mu.Unlock()
 
@@ -505,7 +523,9 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 			seqMu.Unlock()
 			c.sendReliable(&outMsg{typ: proto.TypeEvents, payload: proto.Events{JobID: job.JobID, Events: []proto.JobEvent{ev}}})
 		}
-		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer})
+		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer, TurnEnding: func(te proto.TurnEnding) []proto.Objection {
+			return c.askTurnEnding(jctx, rj, te)
+		}})
 		cause := context.Cause(jctx)
 		cancel(nil)
 		fin.JobID = job.JobID
@@ -552,4 +572,34 @@ func SplitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// turnAnswerWait bounds how long a finished agent is held waiting for the server's verdict.
+// Past it the turn ends: an unanswered question must not cost more than the answer would.
+const turnAnswerWait = 30 * time.Second
+
+// askTurnEnding asks the server whether the turn may end and returns what objects. Every way
+// of not getting an answer — an old server, a dropped connection, a slow one — means the turn
+// ends, which is exactly how runners behaved before this question existed.
+func (c *Client) askTurnEnding(ctx context.Context, rj *runningJob, te proto.TurnEnding) []proto.Objection {
+	// Drain a late answer to an earlier question, so it cannot be mistaken for this one's.
+	select {
+	case <-rj.cont:
+	default:
+	}
+	c.sendBestEffort(proto.TypeTurnEnding, te)
+	timer := time.NewTimer(turnAnswerWait)
+	defer timer.Stop()
+	select {
+	case cn := <-rj.cont:
+		if cn.Exhausted && cn.Note != "" {
+			c.log.Info("a turn ended with an objection outstanding", "job", te.JobID, "note", cn.Note)
+		}
+		return cn.Objections
+	case <-timer.C:
+		c.log.Warn("no answer to turn_ending; ending the turn", "job", te.JobID)
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
 }

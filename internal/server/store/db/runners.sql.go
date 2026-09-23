@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpJobObjections = `-- name: BumpJobObjections :one
+UPDATE jobs SET objections = objections + 1, updated_at = now() WHERE id = $1 RETURNING objections
+`
+
+func (q *Queries) BumpJobObjections(ctx context.Context, id pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, bumpJobObjections, id)
+	var objections int32
+	err := row.Scan(&objections)
+	return objections, err
+}
+
 const countActiveJobsForRunner = `-- name: CountActiveJobsForRunner :one
 SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled')
 `
@@ -25,7 +36,7 @@ func (q *Queries) CountActiveJobsForRunner(ctx context.Context, runnerID pgtype.
 const createJob = `-- name: CreateJob :one
 INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections
 `
 
 type CreateJobParams struct {
@@ -84,6 +95,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.UnassignableSince,
 		&i.ContextBytes,
 		&i.ContextDocs,
+		&i.Objections,
 	)
 	return i, err
 }
@@ -132,7 +144,7 @@ func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) error {
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs FROM jobs WHERE id = $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections FROM jobs WHERE id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -165,12 +177,13 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 		&i.UnassignableSince,
 		&i.ContextBytes,
 		&i.ContextDocs,
+		&i.Objections,
 	)
 	return i, err
 }
 
 const getJobForUpdate = `-- name: GetJobForUpdate :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs FROM jobs WHERE id = $1 FOR UPDATE
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections FROM jobs WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -203,6 +216,7 @@ func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, err
 		&i.UnassignableSince,
 		&i.ContextBytes,
 		&i.ContextDocs,
+		&i.Objections,
 	)
 	return i, err
 }
@@ -298,7 +312,7 @@ WHERE id IN (
     LIMIT $5
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections
 `
 
 type LeaseJobsParams struct {
@@ -353,6 +367,7 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 			&i.UnassignableSince,
 			&i.ContextBytes,
 			&i.ContextDocs,
+			&i.Objections,
 		); err != nil {
 			return nil, err
 		}
@@ -524,7 +539,7 @@ func (q *Queries) ListJobEvents(ctx context.Context, arg ListJobEventsParams) ([
 }
 
 const listJobsByTask = `-- name: ListJobsByTask :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs FROM jobs WHERE task_id = $1 ORDER BY created_at
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections FROM jobs WHERE task_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
@@ -563,6 +578,7 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 			&i.UnassignableSince,
 			&i.ContextBytes,
 			&i.ContextDocs,
+			&i.Objections,
 		); err != nil {
 			return nil, err
 		}
@@ -655,7 +671,7 @@ const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
 SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
 WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections
 `
 
 type MarkJobActiveParams struct {
@@ -694,6 +710,7 @@ func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (J
 		&i.UnassignableSince,
 		&i.ContextBytes,
 		&i.ContextDocs,
+		&i.Objections,
 	)
 	return i, err
 }

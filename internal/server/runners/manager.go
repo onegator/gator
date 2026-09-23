@@ -59,6 +59,12 @@ type Config struct {
 	// AgentTokenTTL bounds that identity. Zero takes 12 hours, long enough for the longest
 	// job anyone should be running unattended and short enough that a leaked one expires.
 	AgentTokenTTL time.Duration
+	// Judge may object when an agent says its turn is over. Optional.
+	Judge TurnJudge
+	// MaxObjections is how many times one job may be sent back to work. Zero takes 2: enough
+	// for a plugin to be right about something the agent missed, few enough that a plugin
+	// which is never satisfied cannot spend a person's money in a loop.
+	MaxObjections int
 }
 
 // AgentTokenIssuer mints and revokes the per-job identity. The interface keeps this package
@@ -66,6 +72,12 @@ type Config struct {
 type AgentTokenIssuer interface {
 	IssueForJob(ctx context.Context, jobID, projectID pgtype.UUID, ttl time.Duration) (string, error)
 	RevokeForJob(ctx context.Context, jobID pgtype.UUID) error
+}
+
+// TurnJudge is asked whether an agent's turn may end. Plugins implement it; without one the
+// core's own objection is the only one, and a job ends when the agent says it is done.
+type TurnJudge interface {
+	Objections(ctx context.Context, job db.Job, te proto.TurnEnding) []proto.Objection
 }
 
 // JobPreparer lets plugins add context to a job before a runner gets it.
@@ -88,6 +100,9 @@ func (c *Config) defaults() {
 	}
 	if c.RegisterTimeout == 0 {
 		c.RegisterTimeout = 10 * time.Second
+	}
+	if c.MaxObjections == 0 {
+		c.MaxObjections = 2
 	}
 	if c.UnassignableAfter == 0 {
 		c.UnassignableAfter = 2 * time.Minute

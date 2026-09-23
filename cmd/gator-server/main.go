@@ -173,6 +173,7 @@ func serve(ctx context.Context) error {
 		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
 		Preparer:       pluginHost,
+		Judge:          pluginHost,
 		// Every job gets an identity of its own to talk back with, revoked when it ends.
 		AgentTokens: auth.Tokens{Pool: db.Pool},
 	})

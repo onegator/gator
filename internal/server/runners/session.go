@@ -225,6 +225,15 @@ func (s *session) readLoop() {
 			if err := s.dispatch(s.ctx, 0, false); err != nil {
 				s.m.log.Warn("dispatch after finish", "runner", s.name, "err", err)
 			}
+		case proto.TypeTurnEnding:
+			var te proto.TurnEnding
+			if err := env.Into(&te); err != nil {
+				s.sendError("bad_turn_ending", err)
+				s.ack(env.Seq)
+				continue
+			}
+			s.turnEnding(te)
+			s.ack(env.Seq)
 		case proto.TypeLoginPrompt:
 			var lp proto.LoginPrompt
 			if err := env.Into(&lp); err == nil {

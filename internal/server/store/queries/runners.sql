@@ -165,3 +165,6 @@ SET kind = EXCLUDED.kind, phase = EXCLUDED.phase, title = EXCLUDED.title, origin
 
 -- name: ListJobContext :many
 SELECT * FROM job_context WHERE job_id = $1 ORDER BY position;
+
+-- name: BumpJobObjections :one
+UPDATE jobs SET objections = objections + 1, updated_at = now() WHERE id = $1 RETURNING objections;

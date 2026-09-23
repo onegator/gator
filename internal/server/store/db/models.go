@@ -185,6 +185,7 @@ type Job struct {
 	UnassignableSince pgtype.Timestamptz `json:"unassignable_since"`
 	ContextBytes      int32              `json:"context_bytes"`
 	ContextDocs       int32              `json:"context_docs"`
+	Objections        int32              `json:"objections"`
 }
 
 type JobContext struct {

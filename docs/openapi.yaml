@@ -881,6 +881,7 @@ components:
         receipt: { type: object, additionalProperties: true }
         contextBytes: { type: integer, description: "how much of the prompt was documents this job was handed" }
         contextDocs: { type: integer, description: "how many documents" }
+        objections: { type: integer, description: "how many times this turn was sent back to work before it was allowed to end" }
         createdAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }

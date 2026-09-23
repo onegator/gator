@@ -29,12 +29,13 @@ const (
 	MethodJobPrepare       = "jobPrepare"
 	MethodJobFinish        = "jobFinish"
 	MethodQualityEvaluate  = "qualityEvaluate" // M8
+	MethodTurnEnding       = "turnEnding"      // M9
 )
 
 // Hooks are the core → plugin methods a manifest may declare.
 var Hooks = []string{MethodWebhook, MethodPhaseTransition, MethodGateEvaluate, MethodArtifactApproved,
 	MethodRelease, MethodIncidentClosed, MethodSchedule, MethodRenderUI, MethodJobPrepare, MethodJobFinish,
-	MethodQualityEvaluate}
+	MethodQualityEvaluate, MethodTurnEnding}
 
 // Plugin → core methods.
 const (
@@ -243,6 +244,29 @@ type JobFinishParams struct {
 	Task    TaskRef         `json:"task"`
 	Job     JobRef          `json:"job"`
 	Receipt json.RawMessage `json:"receipt"`
+}
+
+// TurnEndingParams asks whether an agent's turn may end. The core asks when the runner says
+// the agent is done, before the receipt is written — the moment at which a plugin still knows
+// something the gate will only find out about ten minutes later.
+type TurnEndingParams struct {
+	Task TaskRef `json:"task"`
+	Job  JobRef  `json:"job"`
+	// Turn counts this job's endings: 1 is the first, 2 the one after a first objection.
+	Turn         int      `json:"turn"`
+	Status       string   `json:"status"` // what the receipt would say: done | failed | stopped
+	Summary      string   `json:"summary,omitempty"`
+	Commits      []string `json:"commits,omitempty"`
+	ChangedPaths []string `json:"changed_paths,omitempty"`
+	// Digest is the agent's own account of the session, when it wrote one.
+	Digest json.RawMessage `json:"digest,omitempty"`
+}
+
+// TurnEndingResult is the plugin's answer. An empty objection means "yes, it may end" — the
+// same as not handling the hook at all. An objection reaches the agent as data, not as an
+// instruction, and the core allows only a couple of them per job before the turn ends anyway.
+type TurnEndingResult struct {
+	Objection string `json:"objection,omitempty"`
 }
 
 // ReleaseParams asks a deploy plugin to ship a task's work. The plugin answers when the
