@@ -428,6 +428,15 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/admit:
+    post:
+      operationId: admitTask
+      description: "Lets work raised outside the workspace through: an agent may then start on it. Refused for a task raised inside."
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/component:
     put:
       operationId: setTaskComponent
@@ -1398,6 +1407,9 @@ components:
         kind: { type: string }
         title: { type: string }
         description: { type: string }
+        origin: { type: string, enum: [internal, external], description: "external means the words came from outside the workspace — a webhook, an issue, an alert" }
+        originSource: { type: string, description: "who raised it: a plugin's name, usually" }
+        admittedAt: { type: string, format: date-time, description: "when a person let outside work through; until then nothing runs on it by itself" }
         phase: { type: string }
         urgency: { type: integer }
         ownerKind: { type: string }
@@ -1439,7 +1451,7 @@ components:
       properties:
         task: { $ref: "#/components/schemas/Task" }
         waitingSince: { type: string, format: date-time }
-        reason: { type: string, enum: [approval, blocked, requirements_changed, idea, job_failed, no_runner] }
+        reason: { type: string, enum: [approval, blocked, requirements_changed, idea, job_failed, no_runner, external] }
         rollbacks: { type: integer, description: times this task was sent back into its current phase }
     Reason:
       type: object

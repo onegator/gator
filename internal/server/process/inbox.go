@@ -21,6 +21,8 @@ const (
 	ReasonIdea                DecisionReason = "idea"
 	ReasonJobFailed           DecisionReason = "job_failed"
 	ReasonNoRunner            DecisionReason = "no_runner"
+	// ReasonExternal is work raised from outside the workspace, waiting to be let in.
+	ReasonExternal DecisionReason = "external"
 )
 
 // Decision is one inbox row: a task that needs a human now.
@@ -121,7 +123,7 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 // children's routine approvals, never their problems.
 func stuck(r DecisionReason) bool {
 	switch r {
-	case ReasonBlocked, ReasonJobFailed, ReasonNoRunner, ReasonRequirementsChanged:
+	case ReasonBlocked, ReasonJobFailed, ReasonNoRunner, ReasonRequirementsChanged, ReasonExternal:
 		return true
 	}
 	return false
@@ -136,6 +138,9 @@ func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignabl
 	switch {
 	case t.BlockedReason != nil:
 		return ReasonBlocked, true
+	case t.Origin == "external" && !t.AdmittedAt.Valid:
+		// Somebody outside wrote this. Nothing runs on it until a person says it may.
+		return ReasonExternal, true
 	case t.RequirementsChanged:
 		return ReasonRequirementsChanged, true
 	case unassignable:

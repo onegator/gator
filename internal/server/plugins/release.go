@@ -115,8 +115,9 @@ func (i *instance) upsertIncident(ctx context.Context, q *db.Queries, p plugin.I
 	}
 	task, err := i.h.proc.Create(ctx, process.CreateParams{
 		ProjectID: i.b.projectID, Kind: "incident", Title: title,
-		Description: incidentDescription(p, int(row.Count)),
-		Urgency:     int16(urgencyFor(severity)),
+		Description:  incidentDescription(p, int(row.Count)),
+		Urgency:      int16(urgencyFor(severity)),
+		OriginSource: i.b.name,
 	}, process.Actor{Kind: process.ActorPlugin})
 	if err != nil {
 		return out, plugin.Errorf(plugin.CodeInvalidParams, "%v", err)

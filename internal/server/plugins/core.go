@@ -56,7 +56,7 @@ func (i *instance) core(ctx context.Context, method string, raw json.RawMessage)
 			urgency = 3
 		}
 		t, err := i.h.proc.Create(ctx, process.CreateParams{ProjectID: i.b.projectID, Kind: p.Kind, Title: p.Title,
-			Description: p.Description, Urgency: urgency}, process.Actor{Kind: process.ActorPlugin})
+			Description: p.Description, Urgency: urgency, OriginSource: i.b.name}, process.Actor{Kind: process.ActorPlugin})
 		if err != nil {
 			return nil, plugin.Errorf(plugin.CodeInvalidParams, "%v", err)
 		}

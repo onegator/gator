@@ -314,7 +314,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 				Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
 			}
 			if t, err := q.GetTask(ctx, j.TaskID); err == nil {
-				pj.TaskTitle, pj.TaskDescription = t.Title, t.Description
+				pj.TaskTitle, pj.TaskDescription, pj.TaskOrigin = t.Title, t.Description, t.Origin
 			}
 			if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
 				pj.Guide = g

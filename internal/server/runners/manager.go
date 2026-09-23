@@ -242,6 +242,11 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 	if d.Task.ClosedAt.Valid || d.Task.BlockedReason != nil || d.Phase.Owner != process.OwnerRunner || d.Phase.Role == "" {
 		return db.Job{}, false, nil
 	}
+	// Work raised from outside the workspace waits for a person to let it in. An agent runs
+	// with the operator's credentials, so a stranger's words must not start one by themselves.
+	if d.Task.Origin == "external" && !d.Task.AdmittedAt.Valid {
+		return db.Job{}, false, nil
+	}
 	enabled, _, err := m.process.Autopilot(ctx, d.Task.ProjectID, m.cfg.DefaultBackend)
 	if err != nil || !enabled {
 		return db.Job{}, false, err

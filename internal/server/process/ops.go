@@ -21,6 +21,8 @@ var (
 	ErrGateNotSatisfied = errors.New("gate not satisfied")
 	ErrTaskBlocked      = errors.New("task is blocked")
 	ErrTaskClosed       = errors.New("task is closed")
+	// ErrNotExternal answers an attempt to admit work that was raised inside the workspace.
+	ErrNotExternal = errors.New("not raised outside the workspace")
 )
 
 // ActorKind identifies who performs an operation.
@@ -104,12 +106,25 @@ func (s *Service) machine(ctx context.Context, projectID pgtype.UUID, kind strin
 
 // CreateParams describes a new task.
 type CreateParams struct {
-	ProjectID    pgtype.UUID
-	Kind         string
-	Title        string
-	Description  string
-	Urgency      int16
+	ProjectID   pgtype.UUID
+	Kind        string
+	Title       string
+	Description string
+	Urgency     int16
+	// OriginSource names who raised it, for a person to read: a plugin's name, usually. It
+	// labels the origin but never decides it — see Create.
+	OriginSource string
 	SourceTaskID pgtype.UUID
+}
+
+// OriginFor says whether a task's words came from outside this workspace. It is derived from
+// the actor, never from what the caller asks for: a plugin acts on a webhook it did not write,
+// so anything it raises carries text a stranger may have chosen.
+func OriginFor(actor Actor) string {
+	if actor.Kind == ActorPlugin {
+		return "external"
+	}
+	return "internal"
 }
 
 // Create inserts a task in the first phase of its template.
@@ -128,6 +143,7 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 		task, err = q.CreateTask(ctx, db.CreateTaskParams{
 			ProjectID: p.ProjectID, Kind: p.Kind, Title: p.Title, Description: p.Description, Phase: first.Name,
 			Urgency: p.Urgency, SourceTaskID: p.SourceTaskID,
+			Origin: OriginFor(actor), OriginSource: p.OriginSource,
 		})
 		if err != nil {
 			return err
@@ -138,9 +154,42 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 		if err := s.record(ctx, q, task.ID, nil, first.Name, "create", actor, "", nil); err != nil {
 			return err
 		}
-		return s.emit(ctx, q, "task.created", task.ID, map[string]any{"kind": p.Kind, "phase": first.Name})
+		return s.emit(ctx, q, "task.created", task.ID, map[string]any{"kind": p.Kind, "phase": first.Name, "origin": task.Origin})
 	})
 	return task, err
+}
+
+// Admit is a person letting an outside task through: until then nothing starts on it by
+// itself, because the words in it were written by somebody this workspace does not vouch for.
+// Admitting one is a decision, so it is recorded like any other.
+func (s *Service) Admit(ctx context.Context, taskID pgtype.UUID, actor Actor) (db.Task, error) {
+	var out db.Task
+	err := s.tx(ctx, func(q *db.Queries) error {
+		task, err := q.GetTaskForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if task.Origin != "external" {
+			return ErrNotExternal
+		}
+		if task.AdmittedAt.Valid {
+			out = task
+			return nil // somebody got there first; saying so twice is not an error
+		}
+		var by pgtype.UUID
+		if actor.Kind == ActorUser {
+			by = actor.ID
+		}
+		out, err = q.AdmitTask(ctx, db.AdmitTaskParams{ID: taskID, AdmittedBy: by})
+		if err != nil {
+			return err
+		}
+		if err := s.record(ctx, q, taskID, nil, task.Phase, "create", actor, "admitted work raised from outside the workspace", nil); err != nil {
+			return err
+		}
+		return s.emit(ctx, q, "task.admitted", taskID, map[string]any{"phase": task.Phase, "source": task.OriginSource})
+	})
+	return out, err
 }
 
 // Advance moves a task to the next phase if the current gate is satisfied.

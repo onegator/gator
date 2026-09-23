@@ -410,6 +410,10 @@ type Task struct {
 	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
 	Description         string             `json:"description"`
 	ComponentID         pgtype.UUID        `json:"component_id"`
+	Origin              string             `json:"origin"`
+	OriginSource        string             `json:"origin_source"`
+	AdmittedAt          pgtype.Timestamptz `json:"admitted_at"`
+	AdmittedBy          pgtype.UUID        `json:"admitted_by"`
 }
 
 type UsageRecord struct {

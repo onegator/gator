@@ -163,22 +163,26 @@ type ContextDoc struct {
 
 // Job is one unit of work handed to a runner.
 type Job struct {
-	JobID           string       `json:"job_id"`
-	TaskID          string       `json:"task_id"`
-	TaskTitle       string       `json:"task_title"`
-	TaskDescription string       `json:"task_description,omitempty"`
-	Guide           string       `json:"guide,omitempty"`   // the role's prompt, resolved per project
-	Context         []ContextDoc `json:"context,omitempty"` // earlier artifacts and rollback reasons
-	Repo            *Repo        `json:"repo,omitempty"`
-	ProjectID       string       `json:"project_id"`
-	Phase           string       `json:"phase"`
-	Role            string       `json:"role"`
-	Backend         string       `json:"backend"`
-	Model           string       `json:"model,omitempty"` // empty = the backend's default
-	Instruction     string       `json:"instruction"`
-	Bounds          Bounds       `json:"bounds"`
-	Attempt         int          `json:"attempt"`
-	LeaseExpiresAt  time.Time    `json:"lease_expires_at"`
+	JobID           string `json:"job_id"`
+	TaskID          string `json:"task_id"`
+	TaskTitle       string `json:"task_title"`
+	TaskDescription string `json:"task_description,omitempty"`
+	// TaskOrigin is "external" when the task's words were written outside the workspace — a
+	// webhook, an issue, an alert. The prompt then carries them as data to judge, never as
+	// instructions to follow.
+	TaskOrigin     string       `json:"task_origin,omitempty"`
+	Guide          string       `json:"guide,omitempty"`   // the role's prompt, resolved per project
+	Context        []ContextDoc `json:"context,omitempty"` // earlier artifacts and rollback reasons
+	Repo           *Repo        `json:"repo,omitempty"`
+	ProjectID      string       `json:"project_id"`
+	Phase          string       `json:"phase"`
+	Role           string       `json:"role"`
+	Backend        string       `json:"backend"`
+	Model          string       `json:"model,omitempty"` // empty = the backend's default
+	Instruction    string       `json:"instruction"`
+	Bounds         Bounds       `json:"bounds"`
+	Attempt        int          `json:"attempt"`
+	LeaseExpiresAt time.Time    `json:"lease_expires_at"`
 }
 
 // Lease hands jobs to the runner. An empty list means nothing is queued for it.

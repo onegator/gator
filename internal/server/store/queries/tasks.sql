@@ -1,7 +1,13 @@
 -- name: CreateTask :one
-INSERT INTO tasks (project_id, kind, title, description, phase, urgency, owner_kind, owner_id, source_task_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO tasks (project_id, kind, title, description, phase, urgency, owner_kind, owner_id, source_task_id, origin, origin_source)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
+
+-- name: AdmitTask :one
+-- A person letting an outside task through. Doing it twice changes nothing, because two people
+-- reading the same inbox row should not race each other.
+UPDATE tasks SET admitted_at = COALESCE(admitted_at, now()), admitted_by = COALESCE(admitted_by, sqlc.narg(admitted_by))
+WHERE id = $1 RETURNING *;
 
 -- name: GetTask :one
 SELECT * FROM tasks WHERE id = $1;

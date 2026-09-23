@@ -316,6 +316,29 @@ func (s *Server) ApproveTask(w http.ResponseWriter, r *http.Request, taskId gen.
 	s.respondTask(w, r, taskId)
 }
 
+// AdmitTask lets work raised outside the workspace through. Until a person does this, no agent
+// starts on it by itself: the words in it were written by somebody this workspace does not
+// vouch for, and an agent runs with the operator's credentials.
+func (s *Server) AdmitTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	p, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember)
+	if !ok {
+		return
+	}
+	if p.Kind != auth.KindUser {
+		writeError(w, http.StatusForbidden, "admitting outside work requires a user identity", "forbidden")
+		return
+	}
+	if _, err := s.Process.Admit(r.Context(), fromUUID(taskId), ActorFromContext(r.Context())); err != nil {
+		if errors.Is(err, process.ErrNotExternal) {
+			writeError(w, http.StatusBadRequest, "this task was raised inside the workspace; there is nothing to admit", "invalid")
+			return
+		}
+		s.fail(w, err)
+		return
+	}
+	s.respondTask(w, r, taskId)
+}
+
 func (s *Server) AdvanceTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
 	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember); !ok {
 		return
