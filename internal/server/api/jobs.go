@@ -139,6 +139,31 @@ func (s *Server) SteerJob(w http.ResponseWriter, r *http.Request, jobId gen.JobI
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// ListAgentCalls answers what the agent said back while the job ran. It reads next to the
+// job's output, because "the agent asked a question" belongs in the same story as its text.
+func (s *Server) ListAgentCalls(w http.ResponseWriter, r *http.Request, jobId gen.JobId, params gen.ListAgentCallsParams) {
+	job, ok := s.requireJob(w, r, jobId, auth.RoleViewer)
+	if !ok {
+		return
+	}
+	limit := 200
+	if params.Limit != nil && *params.Limit > 0 {
+		limit = *params.Limit
+	}
+	rows, err := db.New(s.Pool).ListAgentCalls(r.Context(), db.ListAgentCallsParams{JobID: job.ID, Limit: int32(limit)})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]gen.AgentCall, 0, len(rows))
+	for _, c := range rows {
+		detail := map[string]any{}
+		_ = json.Unmarshal(c.Detail, &detail)
+		out = append(out, gen.AgentCall{Command: c.Command, Detail: detail, At: c.CreatedAt.Time})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) ListRunners(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.principal(w, r)
 	if !ok {

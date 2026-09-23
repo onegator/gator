@@ -738,6 +738,15 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1000 } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/JobEvent" } } } } }
+  /jobs/{jobId}/agent-calls:
+    get:
+      operationId: listAgentCalls
+      description: What the agent said back to Gator while this job ran — blocked, asked, recorded, proposed — in the order it said it.
+      parameters:
+        - { $ref: "#/components/parameters/jobId" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AgentCall" } } } } }
   /jobs/{jobId}/stop:
     post:
       operationId: stopJob
@@ -864,6 +873,13 @@ components:
         type: { type: string }
         at: { type: string, format: date-time }
         payload: { type: object, additionalProperties: true }
+    AgentCall:
+      type: object
+      required: [command, detail, at]
+      properties:
+        command: { type: string, description: "task show | task blocked | ask | artifact put | product propose | catalogue show | knowledge search" }
+        detail: { type: object, additionalProperties: true }
+        at: { type: string, format: date-time }
     StopJob:
       type: object
       properties: { reason: { type: string } }
