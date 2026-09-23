@@ -67,6 +67,37 @@ func (s *Service) ExpirePhases(ctx context.Context, now time.Time) ([]string, er
 	return blocked, nil
 }
 
+// Block stops a task and says why, in the words of whoever stopped it: an agent that cannot go
+// on, a plugin that found something wrong. The gate carries the same reason, so the inbox asks
+// a person about it like any other blocked task.
+func (s *Service) Block(ctx context.Context, taskID pgtype.UUID, actor Actor, reason, by string) error {
+	if reason == "" {
+		return errors.New("blocking requires a reason")
+	}
+	return s.tx(ctx, func(q *db.Queries) error {
+		task, err := q.GetTaskForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if task.ClosedAt.Valid {
+			return ErrTaskClosed
+		}
+		if task.BlockedReason != nil {
+			return nil // already stopped, and the first reason is the one that matters
+		}
+		if err := q.SetTaskBlocked(ctx, db.SetTaskBlockedParams{ID: taskID, BlockedReason: &reason}); err != nil {
+			return err
+		}
+		if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &reason, BlockedBy: &by}); err != nil {
+			return err
+		}
+		if err := s.record(ctx, q, taskID, &task.Phase, task.Phase, "auto_block", actor, reason, nil); err != nil {
+			return err
+		}
+		return s.emit(ctx, q, "gate.blocked", taskID, map[string]any{"phase": task.Phase, "reason": reason, "by": by})
+	})
+}
+
 // Unblock clears a block set by automation or a human so the task can move again.
 func (s *Service) Unblock(ctx context.Context, taskID pgtype.UUID, actor Actor, reason string) error {
 	if reason == "" {

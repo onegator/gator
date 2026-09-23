@@ -23,6 +23,29 @@ import (
 	"github.com/onegator/gator/internal/version"
 )
 
+// agentCLI finds gator-cli: next to this binary, which is how every release and the Mac app
+// ship it, or wherever GATOR_RUNNER_CLI_PATH says. Without it the agent gets no tools and the
+// prompt does not pretend otherwise.
+func agentCLI(log *slog.Logger) string {
+	if p := os.Getenv("GATOR_RUNNER_CLI_PATH"); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+		log.Warn("GATOR_RUNNER_CLI_PATH does not exist; jobs run without agent tools", "path", p)
+		return ""
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Join(filepath.Dir(self), "gator-cli")
+	if _, err := os.Stat(candidate); err != nil {
+		log.Info("no gator-cli next to the runner; jobs run without agent tools", "looked", candidate)
+		return ""
+	}
+	return candidate
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "gator-runner:", err)
@@ -62,10 +85,12 @@ func run(args []string) error {
 			log.Warn("no usable GATOR_RUNNER_BACKENDS; this runner stays online but receives no jobs")
 		}
 		ex := &executor.Executor{
-			WS:       &workspace.Manager{Root: cfg.WorkDir},
-			Backends: backends,
-			Push:     os.Getenv("GATOR_RUNNER_PUSH") != "0",
-			Log:      log,
+			WS:        &workspace.Manager{Root: cfg.WorkDir},
+			Backends:  backends,
+			Push:      os.Getenv("GATOR_RUNNER_PUSH") != "0",
+			Log:       log,
+			ServerURL: cfg.ServerURL,
+			CLIPath:   agentCLI(log),
 		}
 		for name, state := range ex.AuthState() {
 			log.Info("backend", "name", name, "auth", state)

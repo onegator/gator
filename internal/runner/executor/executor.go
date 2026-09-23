@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +24,24 @@ type Executor struct {
 	Backends map[string]backend.Backend
 	Push     bool
 	Log      *slog.Logger
+	// ServerURL is where gator-cli talks back, and CLIPath is the gator-cli binary. Both are
+	// passed to the agent only when the server minted the job an identity.
+	ServerURL string
+	CLIPath   string
+}
+
+// agentEnv is what the agent's process gets so gator-cli works inside the job: where Gator is,
+// the job's own identity, and the directory holding the binary added to PATH. Without a token
+// from the server none of it is set and the agent simply has no tools, as before.
+func (e *Executor) agentEnv(job proto.Job) []string {
+	if job.AgentToken == "" || e.ServerURL == "" || e.CLIPath == "" {
+		return nil
+	}
+	env := []string{"GATOR_URL=" + e.ServerURL, "GATOR_JOB_TOKEN=" + job.AgentToken}
+	if dir := filepath.Dir(e.CLIPath); dir != "" && dir != "." {
+		env = append(env, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+	return env
 }
 
 var _ client.Executor = (*Executor)(nil)
@@ -75,7 +95,8 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 				budget = 1
 			}
 		}
-		last = be.Run(runCtx, backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: budget, MaxCostUSD: costLeft(job, usage)}, backend.Emit(io.Emit))
+		last = be.Run(runCtx, backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model,
+			MaxToolCalls: budget, MaxCostUSD: costLeft(job, usage), Env: e.agentEnv(job)}, backend.Emit(io.Emit))
 		close(done)
 		cancelRun(nil)
 		addUsage(&usage, last.Usage)
@@ -120,7 +141,8 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	// because the context is cached, and it keeps the working state complete.
 	if fin.Status == proto.StatusDone && digest == nil && session != "" && ctx.Err() == nil {
 		io.Emit("digest_requested", map[string]any{"session_id": session})
-		out := be.Run(ctx, backend.Spec{Dir: ws.Dir, Prompt: DigestPrompt, SessionID: session, Model: job.Model, MaxToolCalls: 1}, backend.Emit(io.Emit))
+		out := be.Run(ctx, backend.Spec{Dir: ws.Dir, Prompt: DigestPrompt, SessionID: session, Model: job.Model,
+			MaxToolCalls: 1, Env: e.agentEnv(job)}, backend.Emit(io.Emit))
 		addUsage(&usage, out.Usage)
 		fin.Usage = usage
 		if out.Status == proto.StatusDone {
@@ -160,6 +182,17 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 // Prompt is the opening instruction for a job: the role's guide (resolved by the server per
 // project), the task and what the person asked for, the job's own instruction, and earlier
 // documents. Without a guide it falls back to a generic framing.
+// AgentTools is what the prompt says when the job carries an identity of its own. It is short
+// on purpose: an agent that has to read a manual mid-task will not use the tools at all.
+const AgentTools = `You can talk back to Gator while you work, with gator-cli (JSON out, --help for the rest):
+
+- ` + "`gator-cli task show`" + ` — the task, its phase and the documents earlier phases produced.
+- ` + "`gator-cli task blocked --reason \"...\"`" + ` — stop and ask a person, rather than guessing for an hour.
+- ` + "`gator-cli ask --question \"...\"`" + ` — ask a question and stop there; it reaches a person's inbox.
+- ` + "`gator-cli artifact put --type report --file -`" + ` — record a document now, so it survives a failed job.
+- ` + "`gator-cli product propose --kind lesson --title \"...\" --file -`" + ` — propose what this work taught the product; a person approves it.
+- ` + "`gator-cli catalogue show`" + ` and ` + "`gator-cli knowledge search --query \"...\"`" + ` — look things up that your prompt did not carry.`
+
 func Prompt(job proto.Job, hasRepo bool) string {
 	var b strings.Builder
 	title := job.TaskTitle
@@ -210,6 +243,10 @@ func Prompt(job proto.Job, hasRepo bool) string {
 	}
 	if guide == "" {
 		b.WriteString(" Finish with a short summary of what you did and what is left.")
+	}
+	if job.AgentToken != "" {
+		b.WriteString("\n\n")
+		b.WriteString(AgentTools)
 	}
 	b.WriteString("\n\n")
 	b.WriteString(DigestInstruction)

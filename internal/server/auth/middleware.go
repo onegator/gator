@@ -32,6 +32,13 @@ func Authenticate(tokens Tokens, devHeader bool, log *slog.Logger) func(http.Han
 					writeErr(w, http.StatusUnauthorized, "invalid or expired token")
 					return
 				}
+				// A job's identity exists for one conversation: the agent surface. Anywhere
+				// else it is refused outright rather than left to fail for lack of a role —
+				// the whole point is that words from outside cannot wander the API.
+				if p.Kind == KindJob && !strings.HasPrefix(r.URL.Path, agentPrefix) {
+					writeErr(w, http.StatusForbidden, "a job's identity may only use the agent commands")
+					return
+				}
 				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
 				return
 			}
@@ -52,6 +59,10 @@ func Authenticate(tokens Tokens, devHeader bool, log *slog.Logger) func(http.Han
 		})
 	}
 }
+
+// agentPrefix is the only path a job token may take. It is matched on the request path, which
+// includes the API version, because the router mounts the API under it.
+const agentPrefix = "/api/v1/agent/"
 
 // RequireAuth rejects anonymous requests.
 func RequireAuth(next http.Handler) http.Handler {

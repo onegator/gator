@@ -23,6 +23,13 @@ builds:
       - -X github.com/onegator/gator/internal/version.Version={{.Version}}
       - -X github.com/onegator/gator/internal/version.Commit={{.ShortCommit}}
       - -X github.com/onegator/gator/internal/version.Date={{.Date}}
+  - id: gator-cli
+    main: ./cmd/gator-cli
+    binary: gator-cli
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: [-s -w]
   # Plugins ship with the server they talk to, so a release never pairs a plugin with a
   # protocol it was not built against. The binary name is what the install command points at.
   - id: plugin-github
@@ -64,7 +71,9 @@ archives:
       - deploy/caddy/Caddyfile
       - docs/deploy.md
   - id: runner
-    ids: [gator-runner]
+    # gator-cli rides with the runner: the runner looks for it beside itself, and a job
+    # without it has no way to talk back.
+    ids: [gator-runner, gator-cli]
     name_template: "gator-runner_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - deploy/install.sh

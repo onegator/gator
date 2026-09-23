@@ -50,7 +50,7 @@ func (q *Queries) GetTaskProject(ctx context.Context, id pgtype.UUID) (pgtype.UU
 }
 
 const getTokenByHash = `-- name: GetTokenByHash :one
-SELECT id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at FROM api_tokens
+SELECT id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at, job_id FROM api_tokens
 WHERE hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
 `
 
@@ -69,6 +69,7 @@ func (q *Queries) GetTokenByHash(ctx context.Context, hash []byte) (ApiToken, er
 		&i.Name,
 		&i.ProjectID,
 		&i.LastUsedAt,
+		&i.JobID,
 	)
 	return i, err
 }
@@ -134,9 +135,9 @@ func (q *Queries) InsertAudit(ctx context.Context, arg InsertAuditParams) error 
 }
 
 const insertToken = `-- name: InsertToken :one
-INSERT INTO api_tokens (kind, scope, hash, user_id, project_id, name, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at
+INSERT INTO api_tokens (kind, scope, hash, user_id, project_id, name, expires_at, job_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at, job_id
 `
 
 type InsertTokenParams struct {
@@ -147,6 +148,7 @@ type InsertTokenParams struct {
 	ProjectID pgtype.UUID        `json:"project_id"`
 	Name      string             `json:"name"`
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	JobID     pgtype.UUID        `json:"job_id"`
 }
 
 func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) (ApiToken, error) {
@@ -158,6 +160,7 @@ func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) (ApiTo
 		arg.ProjectID,
 		arg.Name,
 		arg.ExpiresAt,
+		arg.JobID,
 	)
 	var i ApiToken
 	err := row.Scan(
@@ -172,6 +175,7 @@ func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) (ApiTo
 		&i.Name,
 		&i.ProjectID,
 		&i.LastUsedAt,
+		&i.JobID,
 	)
 	return i, err
 }
@@ -201,7 +205,7 @@ func (q *Queries) ListMembershipsForUser(ctx context.Context, userID pgtype.UUID
 }
 
 const listTokensByKind = `-- name: ListTokensByKind :many
-SELECT id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at FROM api_tokens WHERE kind = $1 AND revoked_at IS NULL ORDER BY created_at DESC
+SELECT id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at, job_id FROM api_tokens WHERE kind = $1 AND revoked_at IS NULL ORDER BY created_at DESC
 `
 
 func (q *Queries) ListTokensByKind(ctx context.Context, kind string) ([]ApiToken, error) {
@@ -225,6 +229,7 @@ func (q *Queries) ListTokensByKind(ctx context.Context, kind string) ([]ApiToken
 			&i.Name,
 			&i.ProjectID,
 			&i.LastUsedAt,
+			&i.JobID,
 		); err != nil {
 			return nil, err
 		}
@@ -237,7 +242,7 @@ func (q *Queries) ListTokensByKind(ctx context.Context, kind string) ([]ApiToken
 }
 
 const listTokensForUser = `-- name: ListTokensForUser :many
-SELECT id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at FROM api_tokens WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC
+SELECT id, kind, scope, hash, user_id, expires_at, revoked_at, created_at, name, project_id, last_used_at, job_id FROM api_tokens WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC
 `
 
 func (q *Queries) ListTokensForUser(ctx context.Context, userID pgtype.UUID) ([]ApiToken, error) {
@@ -261,6 +266,7 @@ func (q *Queries) ListTokensForUser(ctx context.Context, userID pgtype.UUID) ([]
 			&i.Name,
 			&i.ProjectID,
 			&i.LastUsedAt,
+			&i.JobID,
 		); err != nil {
 			return nil, err
 		}
@@ -278,6 +284,16 @@ UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL
 
 func (q *Queries) RevokeToken(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, revokeToken, id)
+	return err
+}
+
+const revokeTokensForJob = `-- name: RevokeTokensForJob :exec
+UPDATE api_tokens SET revoked_at = now() WHERE job_id = $1 AND revoked_at IS NULL
+`
+
+// A job's token dies with the job: the agent has nothing more to say once the work is over.
+func (q *Queries) RevokeTokensForJob(ctx context.Context, jobID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, revokeTokensForJob, jobID)
 	return err
 }
 

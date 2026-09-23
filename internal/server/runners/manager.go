@@ -53,6 +53,19 @@ type Config struct {
 	DefaultBackend string // backend for autopilot jobs when the project names none; default "claude"
 	// Preparer adds plugin instructions to a job before it is leased. Optional.
 	Preparer JobPreparer
+	// AgentTokens mints the identity a job's agent uses to talk back to Gator. Optional:
+	// without it an agent simply has no tools, which is how things were before.
+	AgentTokens AgentTokenIssuer
+	// AgentTokenTTL bounds that identity. Zero takes 12 hours, long enough for the longest
+	// job anyone should be running unattended and short enough that a leaked one expires.
+	AgentTokenTTL time.Duration
+}
+
+// AgentTokenIssuer mints and revokes the per-job identity. The interface keeps this package
+// off auth.
+type AgentTokenIssuer interface {
+	IssueForJob(ctx context.Context, jobID, projectID pgtype.UUID, ttl time.Duration) (string, error)
+	RevokeForJob(ctx context.Context, jobID pgtype.UUID) error
 }
 
 // JobPreparer lets plugins add context to a job before a runner gets it.

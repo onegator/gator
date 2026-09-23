@@ -134,6 +134,12 @@ cmd_install() {
 			fresh_env=0
 		fi
 	else
+		# The agent's own command-line tool travels with the runner and must sit beside it:
+		# that is where the runner looks for it, and without it jobs simply have no tools.
+		if [ -f "$work/x/gator-cli" ]; then
+			install -m 0755 "$work/x/gator-cli" "$PREFIX/bin/gator-cli"
+			log "installed $PREFIX/bin/gator-cli"
+		fi
 		ensure_user gator-runner /var/lib/gator-runner /bin/bash
 		mkdir -p /var/lib/gator-runner/work
 		chown -R gator-runner:gator-runner /var/lib/gator-runner

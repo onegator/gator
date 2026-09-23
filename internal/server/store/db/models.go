@@ -8,6 +8,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AgentCall struct {
+	ID        int64              `json:"id"`
+	JobID     pgtype.UUID        `json:"job_id"`
+	TaskID    pgtype.UUID        `json:"task_id"`
+	Command   string             `json:"command"`
+	Detail    []byte             `json:"detail"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type ApiToken struct {
 	ID         pgtype.UUID        `json:"id"`
 	Kind       string             `json:"kind"`
@@ -20,6 +29,7 @@ type ApiToken struct {
 	Name       string             `json:"name"`
 	ProjectID  pgtype.UUID        `json:"project_id"`
 	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	JobID      pgtype.UUID        `json:"job_id"`
 }
 
 type Artifact struct {

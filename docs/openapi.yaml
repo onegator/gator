@@ -629,6 +629,74 @@ paths:
           schema: { type: string, format: date-time }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectMetrics" } } } }
+  /agent/task:
+    get:
+      operationId: agentTask
+      description: "What this job is about: its task, phase, gate and the documents its phases produced. For a job's own identity; a person reads the same thing through /tasks."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentTask" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/blocked:
+    post:
+      operationId: agentBlocked
+      description: "The agent cannot go on: the task is blocked with this reason and a person is asked. Better than burning the job guessing."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentReason" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentWrite" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/question:
+    post:
+      operationId: agentQuestion
+      description: "Asks the person a question and stops the phase until it is answered. The question blocks the gate, so it reaches the inbox like any other decision."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentReason" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentWrite" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/artifacts:
+    post:
+      operationId: agentPutArtifact
+      description: Records a document for the job's phase — a brief, a plan, a review — without waiting for the job to end.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentArtifact" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentWrite" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/product:
+    post:
+      operationId: agentProposeProduct
+      description: "Proposes a decision or a lesson for the product context. Always proposed, never approved: a person decides what the product knows about itself."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentProduct" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentWrite" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/catalogue:
+    get:
+      operationId: agentCatalogue
+      description: The parts this project is made of, as the catalogue records them.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Component" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/knowledge:
+    get:
+      operationId: agentKnowledge
+      description: "Searches the project's knowledge and product context for words the job's own package did not carry."
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AgentDocument" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/artifacts:
     get:
       operationId: listTaskArtifacts
@@ -1175,6 +1243,49 @@ components:
       properties:
         key: { type: string }
         reason: { type: string }
+    AgentTask:
+      type: object
+      required: [jobId, task, phase, role, artifacts]
+      properties:
+        jobId: { type: string, format: uuid }
+        task: { $ref: "#/components/schemas/Task" }
+        phase: { type: string }
+        role: { type: string }
+        gate: { $ref: "#/components/schemas/Gate" }
+        artifacts: { type: array, items: { $ref: "#/components/schemas/Artifact" } }
+    AgentReason:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, description: "said plainly, for a person to read in the inbox" }
+    AgentArtifact:
+      type: object
+      required: [type, content]
+      properties:
+        type: { type: string, description: "brief | plan | report | review | note" }
+        content: { type: string }
+    AgentProduct:
+      type: object
+      required: [kind, title, content]
+      properties:
+        kind: { type: string, enum: [decision, lesson] }
+        title: { type: string }
+        content: { type: string }
+    AgentWrite:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        id: { type: string, format: uuid }
+        link: { type: string, description: "where to open it: gator://tasks/<id>" }
+        detail: { type: string }
+    AgentDocument:
+      type: object
+      required: [kind, title, body]
+      properties:
+        kind: { type: string, description: "knowledge | product" }
+        title: { type: string }
+        body: { type: string }
     Scorecard:
       type: object
       required: [component, earned, possible, checks]

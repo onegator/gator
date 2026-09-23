@@ -82,7 +82,7 @@ func newHarness(t *testing.T) *harness {
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
 	mgr := runners.New(pool, svc, hub, slog.Default(), runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host})
+		StallAfter: testStallAfter, Preparer: host, AgentTokens: auth.Tokens{Pool: pool}})
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
@@ -101,6 +101,27 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, admin: admin, runner: runner}
+}
+
+// asJob sends a request with one job's own identity, the way gator-cli does from a worktree.
+func (h *harness) asJob(token, method, path string, body, out any) int {
+	h.t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		_ = json.NewEncoder(&buf).Encode(body)
+	}
+	req, _ := http.NewRequest(method, h.srv.URL+"/api/v1"+path, &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if out != nil {
+		_ = json.NewDecoder(res.Body).Decode(out)
+	}
+	return res.StatusCode
 }
 
 func (h *harness) do(method, path string, body, out any) int {

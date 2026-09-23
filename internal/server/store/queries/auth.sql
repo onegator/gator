@@ -24,9 +24,13 @@ SELECT count(*) FROM users;
 UPDATE users SET workspace_role = $2 WHERE id = $1;
 
 -- name: InsertToken :one
-INSERT INTO api_tokens (kind, scope, hash, user_id, project_id, name, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO api_tokens (kind, scope, hash, user_id, project_id, name, expires_at, job_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, sqlc.narg(job_id))
 RETURNING *;
+
+-- name: RevokeTokensForJob :exec
+-- A job's token dies with the job: the agent has nothing more to say once the work is over.
+UPDATE api_tokens SET revoked_at = now() WHERE job_id = $1 AND revoked_at IS NULL;
 
 -- name: GetTokenByHash :one
 SELECT * FROM api_tokens

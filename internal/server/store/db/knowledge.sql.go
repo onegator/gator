@@ -326,6 +326,53 @@ func (q *Queries) ListWorkspaceKnowledge(ctx context.Context) ([]KnowledgeEntry,
 	return items, nil
 }
 
+const searchProjectDocuments = `-- name: SearchProjectDocuments :many
+(SELECT 'knowledge'::text AS kind, k.scope || ': ' || k.title AS title, k.content FROM knowledge_entries k
+ WHERE (k.project_id = $1 OR k.project_id IS NULL)
+   AND (k.content ILIKE '%' || $2::text || '%' OR k.title ILIKE '%' || $2::text || '%')
+ ORDER BY k.position LIMIT $3)
+UNION ALL
+(SELECT 'product'::text AS kind, p.kind || ': ' || p.title AS title, p.content FROM product_context p
+ WHERE p.project_id = $1 AND p.status = 'approved' AND p.archived_at IS NULL
+   AND (p.content ILIKE '%' || $2::text || '%' OR p.title ILIKE '%' || $2::text || '%')
+ LIMIT $3)
+`
+
+type SearchProjectDocumentsParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Query     string      `json:"query"`
+	MaxRows   int32       `json:"max_rows"`
+}
+
+type SearchProjectDocumentsRow struct {
+	Kind    string      `json:"kind"`
+	Title   interface{} `json:"title"`
+	Content string      `json:"content"`
+}
+
+// What this project knows, by words: technical notes (its own and the workspace's) and the
+// product context a person approved. For an agent looking for something its job's package did
+// not carry. Scoped to one project, so no job can read its way into another.
+func (q *Queries) SearchProjectDocuments(ctx context.Context, arg SearchProjectDocumentsParams) ([]SearchProjectDocumentsRow, error) {
+	rows, err := q.db.Query(ctx, searchProjectDocuments, arg.ProjectID, arg.Query, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchProjectDocumentsRow
+	for rows.Next() {
+		var i SearchProjectDocumentsRow
+		if err := rows.Scan(&i.Kind, &i.Title, &i.Content); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateKnowledgeEntry = `-- name: UpdateKnowledgeEntry :one
 UPDATE knowledge_entries SET scope = $2, title = $3, content = $4, position = $5, updated_at = now()
 WHERE id = $1 RETURNING id, project_id, scope, title, content, position, created_at, updated_at

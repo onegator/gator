@@ -316,6 +316,19 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			if t, err := q.GetTask(ctx, j.TaskID); err == nil {
 				pj.TaskTitle, pj.TaskDescription, pj.TaskOrigin = t.Title, t.Description, t.Origin
 			}
+			// The identity the agent talks back with. Minted per job and revoked when the job
+			// ends, so it can only ever discuss the work it was handed.
+			if issuer := s.m.cfg.AgentTokens; issuer != nil {
+				ttl := s.m.cfg.AgentTokenTTL
+				if ttl == 0 {
+					ttl = 12 * time.Hour
+				}
+				if token, err := issuer.IssueForJob(ctx, j.ID, j.ProjectID, ttl); err == nil {
+					pj.AgentToken = token
+				} else {
+					s.m.log.Warn("minting the agent's identity", "job", uuidString(j.ID), "err", err)
+				}
+			}
 			if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
 				pj.Guide = g
 			}
@@ -473,6 +486,12 @@ func (s *session) finish(fin proto.Finish) error {
 	var stop *string
 	if reason != "" {
 		stop = &reason
+	}
+	// Whatever the agent was given stops working now, whichever way the job ended.
+	if issuer := s.m.cfg.AgentTokens; issuer != nil {
+		if err := issuer.RevokeForJob(ctx, jobID); err != nil {
+			s.m.log.Warn("revoking the agent's identity", "job", uuidString(jobID), "err", err)
+		}
 	}
 	err = s.m.tx(ctx, func(q *db.Queries) error {
 		j, err := q.GetJobForUpdate(ctx, jobID)

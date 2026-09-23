@@ -101,7 +101,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 
 	cmd := exec.Command(b.bin(), args...)
 	cmd.Dir = spec.Dir
-	cmd.Env = cleanEnv(os.Environ())
+	cmd.Env = append(cleanEnv(os.Environ()), spec.Env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Stdout goes through our own pipe: a background process that inherits it must not be
 	// able to keep this run alive after claude itself exits.

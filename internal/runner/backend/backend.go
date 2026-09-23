@@ -16,6 +16,9 @@ type Spec struct {
 	Model        string  // overrides the backend default
 	MaxToolCalls int     // 0 = unlimited
 	MaxCostUSD   float64 // dollars this run may spend, for backends that can cap it; 0 = no cap
+	// Env is added to the agent's environment, as KEY=VALUE. It carries the job's own identity
+	// for gator-cli, and the directory that holds it.
+	Env []string
 }
 
 // Emit streams one event.

@@ -15,6 +15,9 @@ const (
 	KindUser   Kind = "user"
 	KindRunner Kind = "runner"
 	KindPlugin Kind = "plugin"
+	// KindJob is one running job's own identity: an agent talking back about the work it was
+	// given, and about nothing else.
+	KindJob Kind = "job"
 )
 
 // Principal is the authenticated subject of a request.
@@ -23,7 +26,8 @@ type Principal struct {
 	UserID        pgtype.UUID // set for users
 	TokenID       pgtype.UUID // set when authenticated by token
 	Scope         string      // runner:<id> | plugin:<project>:<name> | user
-	ProjectID     pgtype.UUID // set for plugin tokens
+	ProjectID     pgtype.UUID // set for plugin and job tokens
+	JobID         pgtype.UUID // set for job tokens
 	WorkspaceRole string      // admin | member, users only
 	Name          string
 }

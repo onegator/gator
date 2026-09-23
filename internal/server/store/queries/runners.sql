@@ -149,3 +149,9 @@ SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.sta
 FROM jobs j JOIN tasks t ON t.id = j.task_id
 WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
 ORDER BY j.started_at NULLS LAST;
+
+-- name: RecordAgentCall :exec
+INSERT INTO agent_calls (job_id, task_id, command, detail) VALUES ($1, $2, $3, $4);
+
+-- name: ListAgentCalls :many
+SELECT * FROM agent_calls WHERE job_id = $1 ORDER BY id LIMIT $2;

@@ -170,19 +170,22 @@ type Job struct {
 	// TaskOrigin is "external" when the task's words were written outside the workspace — a
 	// webhook, an issue, an alert. The prompt then carries them as data to judge, never as
 	// instructions to follow.
-	TaskOrigin     string       `json:"task_origin,omitempty"`
-	Guide          string       `json:"guide,omitempty"`   // the role's prompt, resolved per project
-	Context        []ContextDoc `json:"context,omitempty"` // earlier artifacts and rollback reasons
-	Repo           *Repo        `json:"repo,omitempty"`
-	ProjectID      string       `json:"project_id"`
-	Phase          string       `json:"phase"`
-	Role           string       `json:"role"`
-	Backend        string       `json:"backend"`
-	Model          string       `json:"model,omitempty"` // empty = the backend's default
-	Instruction    string       `json:"instruction"`
-	Bounds         Bounds       `json:"bounds"`
-	Attempt        int          `json:"attempt"`
-	LeaseExpiresAt time.Time    `json:"lease_expires_at"`
+	TaskOrigin  string       `json:"task_origin,omitempty"`
+	Guide       string       `json:"guide,omitempty"`   // the role's prompt, resolved per project
+	Context     []ContextDoc `json:"context,omitempty"` // earlier artifacts and rollback reasons
+	Repo        *Repo        `json:"repo,omitempty"`
+	ProjectID   string       `json:"project_id"`
+	Phase       string       `json:"phase"`
+	Role        string       `json:"role"`
+	Backend     string       `json:"backend"`
+	Model       string       `json:"model,omitempty"` // empty = the backend's default
+	Instruction string       `json:"instruction"`
+	Bounds      Bounds       `json:"bounds"`
+	// AgentToken is the job's own identity for talking back to Gator, for the runner to put
+	// in the agent's environment. Empty when the server mints none.
+	AgentToken     string    `json:"agent_token,omitempty"`
+	Attempt        int       `json:"attempt"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at"`
 }
 
 // Lease hands jobs to the runner. An empty list means nothing is queued for it.

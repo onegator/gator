@@ -415,6 +415,42 @@ func (q *Queries) ListActiveJobsOnRunners(ctx context.Context) ([]ListActiveJobs
 	return items, nil
 }
 
+const listAgentCalls = `-- name: ListAgentCalls :many
+SELECT id, job_id, task_id, command, detail, created_at FROM agent_calls WHERE job_id = $1 ORDER BY id LIMIT $2
+`
+
+type ListAgentCallsParams struct {
+	JobID pgtype.UUID `json:"job_id"`
+	Limit int32       `json:"limit"`
+}
+
+func (q *Queries) ListAgentCalls(ctx context.Context, arg ListAgentCallsParams) ([]AgentCall, error) {
+	rows, err := q.db.Query(ctx, listAgentCalls, arg.JobID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentCall
+	for rows.Next() {
+		var i AgentCall
+		if err := rows.Scan(
+			&i.ID,
+			&i.JobID,
+			&i.TaskID,
+			&i.Command,
+			&i.Detail,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobEvents = `-- name: ListJobEvents :many
 SELECT job_id, seq, type, payload, at, created_at FROM job_events WHERE job_id = $1 AND seq > $2 ORDER BY seq LIMIT $3
 `
@@ -742,6 +778,27 @@ func (q *Queries) MarkUnassignableJobs(ctx context.Context, before pgtype.Timest
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordAgentCall = `-- name: RecordAgentCall :exec
+INSERT INTO agent_calls (job_id, task_id, command, detail) VALUES ($1, $2, $3, $4)
+`
+
+type RecordAgentCallParams struct {
+	JobID   pgtype.UUID `json:"job_id"`
+	TaskID  pgtype.UUID `json:"task_id"`
+	Command string      `json:"command"`
+	Detail  []byte      `json:"detail"`
+}
+
+func (q *Queries) RecordAgentCall(ctx context.Context, arg RecordAgentCallParams) error {
+	_, err := q.db.Exec(ctx, recordAgentCall,
+		arg.JobID,
+		arg.TaskID,
+		arg.Command,
+		arg.Detail,
+	)
+	return err
 }
 
 const requeueExpiredLeases = `-- name: RequeueExpiredLeases :many
