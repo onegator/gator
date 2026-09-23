@@ -59,9 +59,14 @@ func (b Backend) bin() string {
 
 // AuthState implements backend.Backend. On macOS the login lives in the Keychain, which
 // cannot be inspected without prompting, so it reports "unknown" there.
+//
+// A command this runner cannot find is "no_cli", not "missing": launchd hands an agent a
+// nearly empty PATH, so a Mac whose owner is signed in perfectly well can fail this check
+// simply because claude sits in ~/.local/bin. Saying "missing" sent that person to log in
+// again, which fixed nothing.
 func (b Backend) AuthState() string {
 	if _, err := exec.LookPath(b.bin()); err != nil {
-		return "missing"
+		return "no_cli"
 	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
 		return "ok"

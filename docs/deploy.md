@@ -79,8 +79,13 @@ tools…) are never reachable from a job, even with `bypassPermissions`. Grant a
 `GATOR_RUNNER_CLAUDE_MCP_CONFIG`. Each job's `session` event lists the MCP servers it had.
 Prefer a Claude account dedicated to runners over a personal one.
 
-The runner logs each backend's login state at start (`ok`, `missing`, or `unknown` on macOS,
-where the login lives in the Keychain and cannot be read without prompting).
+The runner logs each backend's login state at start: `ok`, `missing` (the command is there, the
+credentials are not), `no_cli` (the command is not on the runner's PATH at all) or `unknown` on
+macOS, where the login lives in the Keychain and cannot be read without prompting. `no_cli` is
+the one that catches people out on a Mac: launchd hands an agent a nearly empty PATH, and Claude
+Code installs itself in `~/.local/bin`, so a machine whose owner is signed in can still report
+that its backend is not there. The app's agent puts `~/.local/bin` on the PATH; a hand-written
+plist should too.
 
 Signing a backend in happens **on the runner's own machine, as the user the runner runs as** —
 `claude` in a terminal there. The runner reads `~/.claude/.credentials.json`, or

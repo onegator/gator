@@ -138,8 +138,11 @@ type Registered struct {
 // Heartbeat is sent every HeartbeatInterval. It extends the lease of every job listed in
 // ActiveJobs; a leased job the runner no longer lists expires and goes back to the queue.
 type Heartbeat struct {
-	Load       int               `json:"load"`
-	AuthState  map[string]string `json:"auth_state"` // backend → "ok" | "expired" | "missing"
+	Load int `json:"load"`
+	// AuthState is backend → "ok" | "expired" | "missing" | "no_cli" | "unknown". "no_cli"
+	// says the command is not on this runner's PATH, which is a different problem from being
+	// logged out and has a different fix.
+	AuthState  map[string]string `json:"auth_state"`
 	ActiveJobs []string          `json:"active_jobs"`
 }
 

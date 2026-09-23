@@ -41,6 +41,10 @@ type Outcome struct {
 type Backend interface {
 	Name() string
 	Run(ctx context.Context, spec Spec, emit Emit) Outcome
-	// AuthState reports "ok", "missing" or "unknown" for the login of this backend.
+	// AuthState reports the login of this backend: "ok", "missing" (the command is there, the
+	// credentials are not), "no_cli" (the command itself is not on this runner's PATH) or
+	// "unknown". A missing command and a missing login are different problems with different
+	// fixes, and reporting the first as the second sends a person to log in again on a machine
+	// they were already logged in on.
 	AuthState() string
 }

@@ -140,9 +140,6 @@ func TestMissingBinary(t *testing.T) {
 	if out.Status != proto.StatusFailed || !strings.Contains(out.Reason, "start") {
 		t.Fatalf("outcome: %+v", out)
 	}
-	if (Backend{Bin: "/nonexistent/claude"}).AuthState() != "missing" {
-		t.Fatal("missing binary should report missing")
-	}
 }
 
 func assertDead(t *testing.T, pidFile string) {
@@ -187,5 +184,14 @@ func TestLongFinalAnswerIsKeptWhole(t *testing.T) {
 	out, _ := run(t, b, context.Background(), backend.Spec{Prompt: "x"})
 	if out.Status != proto.StatusDone || len(out.Summary) < 6000 || !strings.HasSuffix(strings.TrimSpace(out.Summary), "end-of-document-marker") {
 		t.Fatalf("summary cut: %d chars, ends %q", len(out.Summary), out.Summary[max(0, len(out.Summary)-40):])
+	}
+}
+
+// A command the runner cannot find is not a logged-out account. launchd hands an agent a
+// nearly empty PATH, so a Mac whose owner is signed in can still fail the lookup — and being
+// told to log in again fixes nothing there.
+func TestAMissingCommandIsNotAMissingLogin(t *testing.T) {
+	if got := (Backend{Bin: "/nonexistent/claude"}).AuthState(); got != "no_cli" {
+		t.Fatalf("a command that is not there should say so, got %q", got)
 	}
 }

@@ -597,7 +597,9 @@ func (s *session) leasable() []string {
 	out := make([]string, 0, len(s.caps.Backends))
 	for _, b := range s.caps.Backends {
 		switch s.auth[b] {
-		case "expired", "missing":
+		case "expired", "missing", "no_cli":
+			// no_cli is not a login problem, but a runner without the command cannot run the
+			// job either, so it is no more leasable than a logged-out one.
 			continue
 		}
 		out = append(out, b)
