@@ -80,7 +80,13 @@ tools…) are never reachable from a job, even with `bypassPermissions`. Grant a
 Prefer a Claude account dedicated to runners over a personal one.
 
 The runner logs each backend's login state at start (`ok`, `missing`, or `unknown` on macOS,
-where the login lives in the Keychain).
+where the login lives in the Keychain and cannot be read without prompting).
+
+Signing a backend in happens **on the runner's own machine, as the user the runner runs as** —
+`claude` in a terminal there. The runner reads `~/.claude/.credentials.json`, or
+`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from its environment. No runner can be driven
+through an interactive login from the app today: runners say so in `capabilities.canLogin`, and
+`POST /runners/{id}/login` is refused with 409 rather than accepted and dropped.
 
 To push job branches the runner user needs git access to the project's repositories, for
 example a deploy key with write access or a fine-grained token in its git credential helper.
@@ -145,8 +151,10 @@ you turn on **This Mac is a runner** on the Runners screen: it mints the Mac a r
 its own, writes the token to `~/Library/Application Support/Gator/runner-token` (mode 600) and
 the agent to `~/Library/LaunchAgents/dev.onegator.gator.runner.plist`, which names that file in
 `GATOR_RUNNER_TOKEN_FILE` rather than carrying the secret. Turning the switch off boots the
-agent out and deletes both; the token stays valid until revoked on the Runners screen, so a Mac
-that is gone can be cut off from another machine.
+agent out, deletes both and forgets the runner on the server, which revokes its token — a Mac
+that is gone leaves no credentials behind. Any runner can also be forgotten from the Runners
+screen once it is disconnected: it leaves the list and its token stops working, while the jobs
+it ran keep pointing at it.
 
 `deploy/launchd/dev.onegator.gator-runner.plist` is the same agent by hand, for a Mac without
 the app. Either way a sleeping Mac or a logged-out user shows as offline and its leases return

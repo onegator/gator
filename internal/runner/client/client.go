@@ -274,7 +274,8 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 	defer conn.CloseNow()
 
 	reg := proto.Register{Name: c.cfg.Name, Location: c.cfg.Location, BinaryVersion: c.cfg.BinaryVersion,
-		Capabilities: proto.Capabilities{Backends: c.cfg.Backends, MaxParallel: c.cfg.MaxParallel, Projects: c.cfg.Projects}}
+		Capabilities: proto.Capabilities{Backends: c.cfg.Backends, MaxParallel: c.cfg.MaxParallel, Projects: c.cfg.Projects,
+			CanLogin: c.canLogin()}}
 	if err := write(sctx, conn, proto.TypeRegister, 1, reg); err != nil {
 		return false, err
 	}
@@ -474,6 +475,14 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 			}
 		}
 	}
+}
+
+// canLogin reports whether this runner can drive an interactive backend login. Today no
+// executor can, and the honest answer travels with the registration so that asking is refused
+// where it would do nothing.
+func (c *Client) canLogin() bool {
+	_, ok := c.exec.(Loginer)
+	return ok
 }
 
 func (c *Client) login(ctx context.Context, backend string) {

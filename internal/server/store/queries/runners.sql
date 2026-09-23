@@ -24,7 +24,13 @@ WHERE status <> 'offline' AND last_heartbeat_at < sqlc.arg(before)
 RETURNING id, name;
 
 -- name: ListRunners :many
-SELECT * FROM runners ORDER BY name;
+SELECT * FROM runners WHERE retired_at IS NULL ORDER BY name;
+
+-- name: RetireRunner :one
+UPDATE runners SET retired_at = now(), status = 'offline', updated_at = now(),
+    offline_reason = 'forgotten', offline_since = now()
+WHERE id = $1 AND retired_at IS NULL
+RETURNING *;
 
 -- name: GetRunner :one
 SELECT * FROM runners WHERE id = $1;

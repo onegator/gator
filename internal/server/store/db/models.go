@@ -413,6 +413,7 @@ type Runner struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	OfflineReason   string             `json:"offline_reason"`
 	OfflineSince    pgtype.Timestamptz `json:"offline_since"`
+	RetiredAt       pgtype.Timestamptz `json:"retired_at"`
 }
 
 type Task struct {

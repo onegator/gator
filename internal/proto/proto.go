@@ -123,6 +123,10 @@ type Capabilities struct {
 	Backends    []string `json:"backends"`     // "claude", "codex", "pi"
 	MaxParallel int      `json:"max_parallel"` // concurrent jobs
 	Projects    []string `json:"projects"`     // project ids; empty = any project
+	// CanLogin says this runner can drive an interactive backend login and answer with a
+	// LoginPrompt. A runner that cannot must say so, rather than leaving a person clicking a
+	// button that writes one line into a log file nobody reads.
+	CanLogin bool `json:"can_login,omitempty"`
 }
 
 // Registered acknowledges a registration.

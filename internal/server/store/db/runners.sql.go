@@ -222,7 +222,7 @@ func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, err
 }
 
 const getRunner = `-- name: GetRunner :one
-SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since FROM runners WHERE id = $1
+SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since, retired_at FROM runners WHERE id = $1
 `
 
 func (q *Queries) GetRunner(ctx context.Context, id pgtype.UUID) (Runner, error) {
@@ -244,6 +244,7 @@ func (q *Queries) GetRunner(ctx context.Context, id pgtype.UUID) (Runner, error)
 		&i.UpdatedAt,
 		&i.OfflineReason,
 		&i.OfflineSince,
+		&i.RetiredAt,
 	)
 	return i, err
 }
@@ -591,7 +592,7 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 }
 
 const listRunners = `-- name: ListRunners :many
-SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since FROM runners ORDER BY name
+SELECT id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since, retired_at FROM runners WHERE retired_at IS NULL ORDER BY name
 `
 
 func (q *Queries) ListRunners(ctx context.Context) ([]Runner, error) {
@@ -619,6 +620,7 @@ func (q *Queries) ListRunners(ctx context.Context) ([]Runner, error) {
 			&i.UpdatedAt,
 			&i.OfflineReason,
 			&i.OfflineSince,
+			&i.RetiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -891,6 +893,37 @@ func (q *Queries) RequeueExpiredLeases(ctx context.Context, now pgtype.Timestamp
 	return items, nil
 }
 
+const retireRunner = `-- name: RetireRunner :one
+UPDATE runners SET retired_at = now(), status = 'offline', updated_at = now(),
+    offline_reason = 'forgotten', offline_since = now()
+WHERE id = $1 AND retired_at IS NULL
+RETURNING id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since, retired_at
+`
+
+func (q *Queries) RetireRunner(ctx context.Context, id pgtype.UUID) (Runner, error) {
+	row := q.db.QueryRow(ctx, retireRunner, id)
+	var i Runner
+	err := row.Scan(
+		&i.ID,
+		&i.TokenID,
+		&i.Name,
+		&i.Location,
+		&i.Status,
+		&i.Capabilities,
+		&i.AuthState,
+		&i.ProtocolVersion,
+		&i.BinaryVersion,
+		&i.ConnectedAt,
+		&i.LastHeartbeatAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OfflineReason,
+		&i.OfflineSince,
+		&i.RetiredAt,
+	)
+	return i, err
+}
+
 const runnerHeartbeat = `-- name: RunnerHeartbeat :exec
 UPDATE runners SET last_heartbeat_at = now(), auth_state = $2, status = $3, updated_at = now() WHERE id = $1
 `
@@ -987,7 +1020,7 @@ SET name = EXCLUDED.name, location = EXCLUDED.location, status = 'online',
     capabilities = EXCLUDED.capabilities, protocol_version = EXCLUDED.protocol_version,
     binary_version = EXCLUDED.binary_version, connected_at = now(), last_heartbeat_at = now(), updated_at = now(),
     offline_reason = '', offline_since = NULL
-RETURNING id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since
+RETURNING id, token_id, name, location, status, capabilities, auth_state, protocol_version, binary_version, connected_at, last_heartbeat_at, created_at, updated_at, offline_reason, offline_since, retired_at
 `
 
 type UpsertRunnerParams struct {
@@ -1025,6 +1058,7 @@ func (q *Queries) UpsertRunner(ctx context.Context, arg UpsertRunnerParams) (Run
 		&i.UpdatedAt,
 		&i.OfflineReason,
 		&i.OfflineSince,
+		&i.RetiredAt,
 	)
 	return i, err
 }

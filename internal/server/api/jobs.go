@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/onegator/gator/internal/proto"
@@ -203,6 +204,47 @@ func (s *Server) ListRunners(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// ForgetRunner ends a runner for good: its token stops authenticating and it leaves the list.
+// The row stays. Every job it ran points at it, and jobs.runner_id is ON DELETE SET NULL, so
+// deleting the row would quietly erase which machine did the work — a worse loss than a long
+// list. A connected runner is refused, because it would simply reappear on its next heartbeat.
+func (s *Server) ForgetRunner(w http.ResponseWriter, r *http.Request, runnerId gen.RunnerId) {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
+	if !p.IsWorkspaceAdmin() {
+		writeError(w, http.StatusForbidden, "forgetting a runner requires workspace admin", "forbidden")
+		return
+	}
+	id := fromUUID(runnerId)
+	q := db.New(s.Pool)
+	runner, err := q.GetRunner(r.Context(), id)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if s.Runners.Connected(id) {
+		writeError(w, http.StatusConflict, "this runner is connected; stop it first, or it comes back on its next heartbeat", "conflict")
+		return
+	}
+	if runner.RetiredAt.Valid {
+		w.WriteHeader(http.StatusNoContent) // already forgotten; saying so twice is the same answer
+		return
+	}
+	// The token first: if the second statement fails, the runner is already locked out, which
+	// is the half that matters.
+	if err := q.RevokeToken(r.Context(), runner.TokenID); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if _, err := q.RetireRunner(r.Context(), id); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) RequestRunnerLogin(w http.ResponseWriter, r *http.Request, runnerId gen.RunnerId) {
 	p, ok := s.principal(w, r)
 	if !ok {
@@ -214,6 +256,21 @@ func (s *Server) RequestRunnerLogin(w http.ResponseWriter, r *http.Request, runn
 	}
 	var in gen.LoginRequest
 	if !decode(w, r, &in) {
+		return
+	}
+	// A runner that cannot drive a login used to answer 202 and then do nothing at all: the
+	// request reached it, it wrote one line into a log file and stopped. Refuse it here, where
+	// a person can read the refusal.
+	runner, err := db.New(s.Pool).GetRunner(r.Context(), fromUUID(runnerId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	var caps proto.Capabilities
+	_ = json.Unmarshal(runner.Capabilities, &caps)
+	if !caps.CanLogin {
+		writeError(w, http.StatusConflict,
+			"this runner cannot sign a backend in for you; log in on that machine, as the user the runner runs as", "conflict")
 		return
 	}
 	if err := s.Runners.RequestLogin(fromUUID(runnerId), in.Backend); err != nil {
@@ -273,8 +330,9 @@ func toRunner(r db.Runner, connected bool) gen.RunnerInfo {
 	_ = json.Unmarshal(r.AuthState, &authState)
 	out := gen.RunnerInfo{
 		Id: toUUID(r.ID), Name: r.Name, Location: r.Location, Status: gen.RunnerInfoStatus(r.Status), Connected: connected,
-		Capabilities: gen.RunnerCapabilities{Backends: caps.Backends, MaxParallel: caps.MaxParallel, Projects: caps.Projects},
-		AuthState:    authState, ProtocolVersion: int(r.ProtocolVersion), BinaryVersion: r.BinaryVersion,
+		Capabilities: gen.RunnerCapabilities{Backends: caps.Backends, MaxParallel: caps.MaxParallel, Projects: caps.Projects,
+			CanLogin: &caps.CanLogin},
+		AuthState: authState, ProtocolVersion: int(r.ProtocolVersion), BinaryVersion: r.BinaryVersion,
 	}
 	if r.LastHeartbeatAt.Valid {
 		v := r.LastHeartbeatAt.Time

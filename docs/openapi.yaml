@@ -788,10 +788,28 @@ paths:
       operationId: listRunners
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RunnerInfo" } } } } }
+  /runners/{runnerId}:
+    delete:
+      operationId: forgetRunner
+      description: |
+        Forget a runner: its token stops authenticating and it leaves the list. The row stays,
+        because every job it ran points at it and the record of which machine did the work is
+        worth more than a tidy table. A connected runner is refused: disconnect it first, or it
+        reappears on its next heartbeat. Requires workspace admin.
+      parameters: [ { $ref: "#/components/parameters/runnerId" } ]
+      responses:
+        "204": { description: forgotten }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /runners/{runnerId}/login:
     post:
       operationId: requestRunnerLogin
-      description: Ask a connected runner to start a backend login; the URL and code arrive on the WebSocket topic runner:<id>.
+      description: |
+        Ask a connected runner to start a backend login; the URL and code arrive on the WebSocket
+        topic runner:<id>. Refused with 409 unless the runner declared capabilities.canLogin — no
+        runner does today, so a backend is signed in on the machine itself, as the user the runner
+        runs as.
       parameters: [ { $ref: "#/components/parameters/runnerId" } ]
       requestBody:
         required: true
@@ -938,6 +956,7 @@ components:
         backends: { type: array, items: { type: string } }
         maxParallel: { type: integer }
         projects: { type: array, items: { type: string } }
+        canLogin: { type: boolean, description: "this runner can drive an interactive backend login; when false, asking it to is refused" }
     RunnerInfo:
       type: object
       required: [id, name, location, status, connected, capabilities, authState, protocolVersion, binaryVersion]
