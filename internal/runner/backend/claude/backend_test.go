@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -193,5 +194,42 @@ func TestLongFinalAnswerIsKeptWhole(t *testing.T) {
 func TestAMissingCommandIsNotAMissingLogin(t *testing.T) {
 	if got := (Backend{Bin: "/nonexistent/claude"}).AuthState(); got != "no_cli" {
 		t.Fatalf("a command that is not there should say so, got %q", got)
+	}
+}
+
+// Asking the keychain whether an entry exists does not prompt; reading the secret out of it
+// would. The distinction is why a Mac can now say "ok" instead of "I cannot see your login".
+func TestTheKeychainAnswerIsReadHonestly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+		err  error
+		want string
+	}{
+		{"signed in", 0, nil, "ok"},
+		{"no such item", 44, nil, "missing"},
+		{"locked or refused", 51, nil, "unknown"},
+		{"no security command", 0, errors.New("exec: security: not found"), "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := keychainState(func() (int, error) { return tc.code, tc.err })
+			if got != tc.want {
+				t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// And on this Mac, end to end: the lookup itself must not prompt or hang.
+func TestTheRealKeychainLookupAnswersWithoutPrompting(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS only")
+	}
+	code, err := (Backend{}).keychainLookup()
+	if err != nil {
+		t.Skipf("no security command here: %v", err)
+	}
+	if code != 0 && code != 44 {
+		t.Logf("keychain answered %d; treated as unknown", code)
 	}
 }

@@ -57,8 +57,10 @@ func (b Backend) bin() string {
 	return b.Bin
 }
 
-// AuthState implements backend.Backend. On macOS the login lives in the Keychain, which
-// cannot be inspected without prompting, so it reports "unknown" there.
+// keychainService is where Claude Code keeps a macOS login.
+const keychainService = "Claude Code-credentials"
+
+// AuthState implements backend.Backend.
 //
 // A command this runner cannot find is "no_cli", not "missing": launchd hands an agent a
 // nearly empty PATH, so a Mac whose owner is signed in perfectly well can fail this check
@@ -77,9 +79,44 @@ func (b Backend) AuthState() string {
 		}
 	}
 	if runtime.GOOS == "darwin" {
-		return "unknown"
+		return keychainState(b.keychainLookup)
 	}
 	return "missing"
+}
+
+// keychainLookup asks the login keychain whether the item exists, and nothing more. Reading a
+// secret out of the keychain prompts the person; asking whether an entry is there returns only
+// its attributes and does not, which is why this was worth a second look — "Gator cannot see
+// your login" was a limit we assumed rather than one we met.
+func (b Backend) keychainLookup() (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainService)
+	cmd.Stdout, cmd.Stderr = nil, nil
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
+	}
+	return 0, err
+}
+
+// keychainState reads that answer. Found is "ok" and errSecItemNotFound is "missing"; anything
+// else — a locked keychain, no security command, a timeout — is "unknown", because not knowing
+// is its own answer and dressing it as a verdict is how a person ends up logging in again on a
+// machine that was signed in all along.
+func keychainState(lookup func() (int, error)) string {
+	code, err := lookup()
+	switch {
+	case err != nil:
+		return "unknown"
+	case code == 0:
+		return "ok"
+	case code == 44: // errSecItemNotFound
+		return "missing"
+	default:
+		return "unknown"
+	}
 }
 
 // Run implements backend.Backend.
