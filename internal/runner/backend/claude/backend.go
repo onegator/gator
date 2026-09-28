@@ -94,8 +94,7 @@ func (b Backend) keychainLookup() (int, error) {
 	cmd := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainService)
 	cmd.Stdout, cmd.Stderr = nil, nil
 	err := cmd.Run()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exit.ExitCode(), nil
 	}
 	return 0, err
@@ -297,8 +296,7 @@ func cleanEnv(env []string) []string {
 }
 
 func exitText(err error) string {
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 		return fmt.Sprintf("exit %d", ee.ExitCode())
 	}
 	if err != nil {

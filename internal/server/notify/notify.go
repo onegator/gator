@@ -98,25 +98,11 @@ func (n *Notifier) Run(ctx context.Context) {
 
 // drain delivers the events after the cursor, at least once.
 func (n *Notifier) drain(ctx context.Context) {
-	q := db.New(n.pool)
-	for ctx.Err() == nil {
-		cursor, err := q.GetEventCursor(ctx, cursorName)
-		if err != nil {
-			return
+	events.DrainCursor(ctx, n.pool, cursorName, watched, func(r db.EventsAfterRow) {
+		if err := n.handle(ctx, r); err != nil && ctx.Err() == nil {
+			n.log.Warn("notify", "event", r.Type, "err", err)
 		}
-		rows, err := q.EventsAfter(ctx, db.EventsAfterParams{After: cursor, Types: watched, MaxRows: 100})
-		if err != nil || len(rows) == 0 {
-			return
-		}
-		for _, r := range rows {
-			if err := n.handle(ctx, r); err != nil && ctx.Err() == nil {
-				n.log.Warn("notify", "event", r.Type, "err", err)
-			}
-		}
-		if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursorName, EventID: rows[len(rows)-1].ID}); err != nil {
-			return
-		}
-	}
+	})
 }
 
 func (n *Notifier) handle(ctx context.Context, row db.EventsAfterRow) error {

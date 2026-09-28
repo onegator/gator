@@ -169,7 +169,7 @@ func TestRollbackRequiresReasonIsBackwardAndHitsCeiling(t *testing.T) {
 	}
 
 	// bug allows 2 rollbacks into a phase; the third blocks the task instead of moving it
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		task, err = svc.Rollback(ctx, task.ID, "planning", user, "plan was wrong")
 		if err != nil || task.Phase != "planning" {
 			t.Fatalf("rollback %d: %q %v", i, task.Phase, err)

@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
 	"go.opentelemetry.io/otel/metric"
@@ -341,7 +341,7 @@ func (s *Service) Rollback(ctx context.Context, taskID pgtype.UUID, to string, a
 				if err := q.SetTaskBlocked(ctx, db.SetTaskBlockedParams{ID: taskID, BlockedReason: &msg}); err != nil {
 					return err
 				}
-				if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &msg, BlockedBy: ptr("automation")}); err != nil {
+				if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &msg, BlockedBy: new("automation")}); err != nil {
 					return err
 				}
 				if err := s.record(ctx, q, taskID, &task.Phase, task.Phase, "auto_block", Actor{Kind: ActorSystem}, msg, map[string]any{"requested_rollback_to": to, "requested_by": actor.Kind, "reason": reason}); err != nil {
@@ -447,7 +447,7 @@ func (s *Service) SetCheck(ctx context.Context, taskID pgtype.UUID, c Check) err
 			if err := q.SetTaskBlocked(ctx, db.SetTaskBlockedParams{ID: taskID, BlockedReason: &failing}); err != nil {
 				return err
 			}
-			if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &failing, BlockedBy: ptr("automation")}); err != nil {
+			if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &failing, BlockedBy: new("automation")}); err != nil {
 				return err
 			}
 			if err := s.record(ctx, q, taskID, &task.Phase, task.Phase, "auto_block", Actor{Kind: ActorPlugin}, failing, map[string]any{"check": c}); err != nil {
@@ -563,15 +563,7 @@ func gateSatisfied(p Phase, g db.Gate) error {
 }
 
 func (s *Service) tx(ctx context.Context, fn func(q *db.Queries) error) error {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := fn(db.New(tx)); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return store.InTx(ctx, s.pool, fn)
 }
 
 func (s *Service) record(ctx context.Context, q *db.Queries, taskID pgtype.UUID, from *string, to, kind string, actor Actor, reason string, evidence map[string]any) error {
@@ -602,8 +594,6 @@ func (s *Service) emit(ctx context.Context, q *db.Queries, typ string, taskID pg
 	_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: typ, Aggregate: "task", AggregateID: taskID, Payload: b})
 	return err
 }
-
-func ptr(s string) *string { return &s }
 
 func uuidString(u pgtype.UUID) string {
 	if !u.Valid {

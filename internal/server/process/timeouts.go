@@ -51,7 +51,7 @@ func (s *Service) ExpirePhases(ctx context.Context, now time.Time) ([]string, er
 			if err := q.SetTaskBlocked(ctx, db.SetTaskBlockedParams{ID: t.ID, BlockedReason: &reason}); err != nil {
 				return err
 			}
-			if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: t.ID, Phase: t.Phase, BlockedReason: &reason, BlockedBy: ptr("automation")}); err != nil {
+			if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: t.ID, Phase: t.Phase, BlockedReason: &reason, BlockedBy: new("automation")}); err != nil {
 				return err
 			}
 			if err := s.record(ctx, q, t.ID, &t.Phase, t.Phase, "auto_block", Actor{Kind: ActorSystem}, reason, map[string]any{"timeout": p.Timeout.Std().String(), "waited": waited.String()}); err != nil {

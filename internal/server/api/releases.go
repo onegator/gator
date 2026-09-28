@@ -51,11 +51,7 @@ func (s *Server) ListIncidents(w http.ResponseWriter, r *http.Request, projectId
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.Incident, 0, len(rows))
-	for _, inc := range rows {
-		out = append(out, toIncident(inc))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toIncident))
 }
 
 func toRelease(r db.Release, openIncidents int, now time.Time) gen.Release {

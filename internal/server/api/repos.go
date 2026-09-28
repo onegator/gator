@@ -39,11 +39,7 @@ func (s *Server) ListProjectRepos(w http.ResponseWriter, r *http.Request, projec
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.ProjectRepo, 0, len(rows))
-	for _, rp := range rows {
-		out = append(out, toRepo(rp))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toRepo))
 }
 
 func (s *Server) PutProjectRepo(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {

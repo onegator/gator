@@ -9,6 +9,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -181,9 +183,7 @@ func (c *Core) KV() map[string]json.RawMessage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := map[string]json.RawMessage{}
-	for k, v := range c.kv {
-		out[k] = v
-	}
+	maps.Copy(out, c.kv)
 	return out
 }
 
@@ -261,10 +261,8 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 			return nil, plugin.Errorf(plugin.CodeInvalidParams, "kind must be feature, bug, incident or chore, and title is required")
 		}
 		refs := map[string]string{}
-		for k, v := range p.ExternalRefs {
-			refs[k] = v
-		}
-		t := &Task{TaskRef: plugin.TaskRef{ID: newID(), ProjectID: c.ProjectID, Kind: p.Kind, Title: p.Title, Phase: phase, ExternalRefs: refs},
+		maps.Copy(refs, p.ExternalRefs)
+		t := &Task{ID: newID(), ProjectID: c.ProjectID, Kind: p.Kind, Title: p.Title, Phase: phase, ExternalRefs: refs,
 			Description: p.Description, Urgency: p.Urgency}
 		c.tasks = append(c.tasks, t)
 		return t.TaskRef, nil
@@ -273,9 +271,9 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		for i := len(c.tasks) - 1; i >= 0; i-- {
-			if c.tasks[i].ExternalRefs[p.Key] == p.Value {
-				return c.tasks[i].TaskRef, nil
+		for _, v := range slices.Backward(c.tasks) {
+			if v.ExternalRefs[p.Key] == p.Value {
+				return v.TaskRef, nil
 			}
 		}
 		return nil, nil
@@ -288,9 +286,7 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 		if t == nil {
 			return nil, notFound(p.TaskID)
 		}
-		for k, v := range p.ExternalRefs {
-			t.ExternalRefs[k] = v
-		}
+		maps.Copy(t.ExternalRefs, p.ExternalRefs)
 		return t.TaskRef, nil
 	case plugin.CoreGateSetCheck:
 		p, err := decode[plugin.SetCheckParams](raw)
@@ -384,8 +380,8 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 			inc.IncidentUpsertParams = p
 			return plugin.IncidentUpsertResult{IncidentID: inc.ID, TaskID: inc.TaskID}, nil
 		}
-		task := &Task{TaskRef: plugin.TaskRef{ID: newID(), ProjectID: c.ProjectID, Kind: "incident",
-			Title: p.Title, Phase: firstPhase["incident"], ExternalRefs: map[string]string{}}}
+		task := &Task{ID: newID(), ProjectID: c.ProjectID, Kind: "incident",
+			Title: p.Title, Phase: firstPhase["incident"], ExternalRefs: map[string]string{}}
 		c.tasks = append(c.tasks, task)
 		inc := &Incident{IncidentUpsertParams: p, ID: newID(), Count: 1, TaskID: task.ID}
 		c.incidents[p.Fingerprint] = inc

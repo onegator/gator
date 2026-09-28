@@ -41,7 +41,7 @@ func ParseKeyring(current, old string) (*Keyring, error) {
 	}
 	k.current = id
 	k.keys[id] = key
-	for _, entry := range strings.Split(old, ",") {
+	for entry := range strings.SplitSeq(old, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue

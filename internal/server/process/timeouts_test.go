@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 )
@@ -28,12 +29,7 @@ func TestExpirePhasesBlocksOverdueTasks(t *testing.T) {
 	// The sweep is global; the shared test database may hold other overdue tasks, so only
 	// assert about the two tasks this test owns.
 	has := func(ids []string, id string) bool {
-		for _, v := range ids {
-			if v == id {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(ids, id)
 	}
 	blocked, err := svc.ExpirePhases(ctx, time.Now())
 	if err != nil {

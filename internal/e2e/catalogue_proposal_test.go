@@ -35,8 +35,7 @@ func (h *harness) finishWithPaths(projectID, taskID string, paths []string) {
 // not one per file, and not until the corner has been worked in more than once.
 func TestTheCuratorProposesOneComponentForADirectoryWorkedInTwice(t *testing.T) {
 	h := newHarness(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	go product.NewCurator(h.pool, h.hub, slog.Default(), 50*time.Millisecond).Run(ctx)
 	time.Sleep(150 * time.Millisecond)
 
@@ -81,7 +80,7 @@ func TestTheCuratorProposesOneComponentForADirectoryWorkedInTwice(t *testing.T) 
 
 	// A proposal reaches no prompt until a person accepts it.
 	if code := h.do("PUT", "/tasks/"+task.Id.String()+"/component",
-		gen.TaskComponent{Key: ptr("billing")}, nil); code == 200 {
+		gen.TaskComponent{Key: new("billing")}, nil); code == 200 {
 		before := h.jobContext(task.Id.String(), "worker")
 		for _, doc := range before {
 			if doc == "component|billing" {

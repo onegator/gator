@@ -27,7 +27,7 @@ func (h *harness) campaign(title string) (gen.Project, gen.Task) {
 
 func (h *harness) addTargets(taskID string, keys ...string) gen.Campaign {
 	h.t.Helper()
-	in := gen.CampaignTargets{Instruction: ptr("Update to 2.0 and run the tests.")}
+	in := gen.CampaignTargets{Instruction: new("Update to 2.0 and run the tests.")}
 	for _, k := range keys {
 		in.Targets = append(in.Targets, gen.CampaignTargetInput{Key: k})
 	}

@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/metric"
@@ -23,6 +23,7 @@ import (
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
 )
@@ -561,23 +562,13 @@ func (m *Manager) Run(ctx context.Context) {
 // --- helpers ---
 
 func (m *Manager) tx(ctx context.Context, fn func(q *db.Queries) error) error {
-	tx, err := m.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := fn(db.New(tx)); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return store.InTx(ctx, m.pool, fn)
 }
 
 // emitJob writes a job event plus its task-level mirror so task and inbox views update.
 func (m *Manager) emitJob(ctx context.Context, q *db.Queries, typ string, job db.Job, extra map[string]any) error {
 	payload := map[string]any{"task_id": uuidString(job.TaskID), "status": job.Status, "phase": job.Phase, "role": job.Role, "backend": job.Backend}
-	for k, v := range extra {
-		payload[k] = v
-	}
+	maps.Copy(payload, extra)
 	if err := emit(ctx, q, typ, "job", job.ID, payload); err != nil {
 		return err
 	}

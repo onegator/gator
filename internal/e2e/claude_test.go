@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"context"
 	"log/slog"
 	"math"
 	"os"
@@ -70,8 +69,7 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	c := client.New(client.Config{ServerURL: h.srv.URL, Token: h.runner, Name: "e2e-claude", Location: "other",
 		Backends: []string{"claude"}, Projects: []string{task.ProjectId.String()}, MaxParallel: 1,
 		HeartbeatInterval: 100 * time.Millisecond, MinBackoff: 50 * time.Millisecond}, ex, slog.Default())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() { _ = c.Run(ctx) }()
 
 	job := h.job(task, "claude", "Make the change.", 0)

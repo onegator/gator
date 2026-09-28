@@ -36,6 +36,8 @@ services:
     environment:
       GATOR_DATABASE_URL: postgres://gator:${POSTGRES_PASSWORD}@postgres:5432/gator?sslmode=disable
       GATOR_LISTEN_ADDR: :8080
+      # The host's proxies reach the container through Docker's bridge, not loopback.
+      GATOR_TRUSTED_PROXIES: 127.0.0.0/8,::1,172.16.0.0/12
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

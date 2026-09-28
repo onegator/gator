@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -180,11 +181,7 @@ func LoadCatalog(fsys fs.FS) (Catalog, error) {
 // templates keyed by kind; a kind absent from overrides keeps the default.
 func (c Catalog) Override(overrides Catalog) Catalog {
 	out := Catalog{}
-	for k, v := range c {
-		out[k] = v
-	}
-	for k, v := range overrides {
-		out[k] = v
-	}
+	maps.Copy(out, c)
+	maps.Copy(out, overrides)
 	return out
 }

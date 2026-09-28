@@ -34,11 +34,7 @@ func (s *Server) ListProductContext(w http.ResponseWriter, r *http.Request, proj
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.ProductEntry, 0, len(rows))
-	for _, e := range rows {
-		out = append(out, toProductEntry(e))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toProductEntry))
 }
 
 // AddProductEntry writes what a person says about the product; it needs no approval.

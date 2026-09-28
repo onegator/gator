@@ -49,6 +49,9 @@ type Server struct {
 	// RateLimit applies per token (or IP when anonymous). Zero disables.
 	RateLimitPerSecond float64
 	RateLimitBurst     int
+	// TrustedProxies may name the client in X-Forwarded-For; everyone else is who they
+	// connect from.
+	TrustedProxies limits.Proxies
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -56,7 +59,7 @@ var _ gen.ServerInterface = (*Server)(nil)
 // Router mounts the API under /api/v1 plus the WebSocket endpoint.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	r.Use(middleware.RequestID, s.TrustedProxies.RealIP, middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
 		return otelhttp.NewHandler(next, "http", otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			if rc := chi.RouteContext(r.Context()); rc != nil && rc.RoutePattern() != "" {
@@ -219,11 +222,7 @@ func (s *Server) ListTasks(w http.ResponseWriter, r *http.Request, projectId gen
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.Task, 0, len(rows))
-	for _, t := range rows {
-		out = append(out, toTask(t))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toTask))
 }
 
 func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
@@ -410,11 +409,7 @@ func (s *Server) ListTaskTransitions(w http.ResponseWriter, r *http.Request, tas
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.Transition, 0, len(rows))
-	for _, tr := range rows {
-		out = append(out, toTransition(tr))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toTransition))
 }
 
 // --- websocket ---
@@ -517,6 +512,16 @@ func writeError(w http.ResponseWriter, status int, msg, code string) {
 	writeJSON(w, status, gen.Error{Error: msg, Code: &code})
 }
 
+// mapAll converts every row for the response. It never returns nil: an empty list is
+// [] in JSON, not null.
+func mapAll[T, U any](rows []T, to func(T) U) []U {
+	out := make([]U, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, to(r))
+	}
+	return out
+}
+
 func deref(s *string) string {
 	if s == nil {
 		return ""
@@ -533,9 +538,5 @@ func (s *Server) ListTaskArtifacts(w http.ResponseWriter, r *http.Request, taskI
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.Artifact, 0, len(rows))
-	for _, a := range rows {
-		out = append(out, toArtifact(a))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toArtifact))
 }

@@ -30,13 +30,14 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	msg := e.Message
+	var msg strings.Builder
+	msg.WriteString(e.Message)
 	for _, x := range e.Errors {
 		if x.Message != "" {
-			msg += ": " + x.Message
+			msg.WriteString(": " + x.Message)
 		}
 	}
-	return fmt.Sprintf("github %d: %s", e.Status, msg)
+	return fmt.Sprintf("github %d: %s", e.Status, msg.String())
 }
 
 // PR is a pull request.

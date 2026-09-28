@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -89,9 +90,7 @@ func newFake(t *testing.T) *fakeLinear {
 func start(t *testing.T, core *plugintest.Core, api string, cfg map[string]any, key string) *plugintest.Process {
 	t.Helper()
 	config := map[string]any{"api_url": api, "state_map": "implementation=In Progress, approved=Done"}
-	for k, v := range cfg {
-		config[k] = v
-	}
+	maps.Copy(config, cfg)
 	secrets := map[string]string{"webhook_secret": secret}
 	if key != "" {
 		secrets["api_key"] = key

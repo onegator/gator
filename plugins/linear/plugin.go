@@ -135,7 +135,7 @@ func (l *linear) webhook(ctx context.Context, core *plugin.Core, p plugin.Webhoo
 // parseStateMap reads "implementation=In Progress, approved=Done" into phase → state name.
 func parseStateMap(s string) map[string]string {
 	out := map[string]string{}
-	for _, pair := range strings.Split(s, ",") {
+	for pair := range strings.SplitSeq(s, ",") {
 		phase, state, ok := strings.Cut(pair, "=")
 		if !ok {
 			continue

@@ -63,7 +63,7 @@ first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is writt
 - OpenTelemetry traces and metrics export over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; otherwise no-op.
   Instruments: `gator.task.transitions`, `gator.task.phase_seconds`, `gator.gate.blocked`, `gator.jobs`,
   `gator.runners.online`, `gator.plugin.calls`, `gator.plugin.call_seconds`, `gator.agent.cost_usd`, `gator.http.rate_limited`.
-- API rate limit per token (or IP when anonymous): `GATOR_RATE_LIMIT_RPS` / `GATOR_RATE_LIMIT_BURST`; 429 with `Retry-After`.
+- API rate limit per token (or IP when anonymous): `GATOR_RATE_LIMIT_RPS` / `GATOR_RATE_LIMIT_BURST`; 429 with `Retry-After`. The client IP comes from `X-Forwarded-For` only when the request arrives from `GATOR_TRUSTED_PROXIES` (default loopback).
 - `internal/server/limits.Breaker` is the circuit breaker the plugin host wraps every plugin with (M3).
 
 ## Background jobs and backups

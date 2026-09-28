@@ -187,7 +187,7 @@ func serve(ctx context.Context) error {
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
 		Quality: scorecards,
 		Tokens:  auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
-		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst,
+		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
 	}
 	if oc := auth.LoadOIDCConfig(); oc.Enabled() {
 		o, err := auth.NewOIDC(ctx, oc, db.Pool)

@@ -74,7 +74,7 @@ func TestASlipOpensOneTaskAndClosesItselfWhenFixed(t *testing.T) {
 
 	// Now the component is filled in, which is exactly what the task asked for.
 	h.putComponent(p.Id.String(), gen.ComponentInput{Key: "api", Name: "API", Kind: "api",
-		Repo: ptr("acme/api"), Notes: ptr("Talks to the payments provider.")})
+		Repo: new("acme/api"), Notes: new("Talks to the payments provider.")})
 	if err := h.quality.Sweep(context.Background(), projectUUID(p.Id.String())); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestScoringIsOffUnlessAProjectAsksForIt(t *testing.T) {
 func TestScoringOnDemandAnswersTheNewScore(t *testing.T) {
 	h := newHarness(t)
 	p := h.qualityProject(map[string]any{"enabled": true, "on_regression": "none"},
-		gen.ComponentInput{Key: "lib", Name: "Lib", Kind: "lib", Repo: ptr("acme/lib")})
+		gen.ComponentInput{Key: "lib", Name: "Lib", Kind: "lib", Repo: new("acme/lib")})
 
 	var cards []gen.Scorecard
 	if code := h.do("POST", "/projects/"+p.Id.String()+"/quality", nil, &cards); code != 200 {

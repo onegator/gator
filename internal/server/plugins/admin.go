@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -121,9 +122,7 @@ func (h *Host) Configure(ctx context.Context, projectID pgtype.UUID, name string
 		}
 	}
 	check := map[string]any{}
-	for k, v := range public {
-		check[k] = v
-	}
+	maps.Copy(check, public)
 	for k := range sec {
 		check[k] = "set"
 	}

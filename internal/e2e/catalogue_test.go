@@ -31,16 +31,16 @@ func TestAJobIsToldAboutItsComponentAndItsNeighbours(t *testing.T) {
 	id := p.Id.String()
 
 	h.putComponent(id, gen.ComponentInput{Key: "auth", Name: "Auth service", Kind: gen.ComponentInputKindApi,
-		Repo: ptr("acme/auth"), Notes: ptr("Issues and checks the session tokens.")})
+		Repo: new("acme/auth"), Notes: new("Issues and checks the session tokens.")})
 	h.putComponent(id, gen.ComponentInput{Key: "tokens", Name: "Token library", Kind: gen.ComponentInputKindLib,
-		Repo: ptr("acme/tokens")})
+		Repo: new("acme/tokens")})
 	h.putComponent(id, gen.ComponentInput{Key: "web", Name: "Web app", Kind: gen.ComponentInputKindApp,
 		DependsOn: &[]string{"auth"}})
 	// A part of the product this task has nothing to do with.
 	h.putComponent(id, gen.ComponentInput{Key: "billing", Name: "Billing", Kind: gen.ComponentInputKindApi,
-		Repo: ptr("acme/billing"), Notes: ptr("Invoices and dunning.")})
+		Repo: new("acme/billing"), Notes: new("Invoices and dunning.")})
 	h.putComponent(id, gen.ComponentInput{Key: "auth", Name: "Auth service", Kind: gen.ComponentInputKindApi,
-		Repo: ptr("acme/auth"), Notes: ptr("Issues and checks the session tokens."),
+		Repo: new("acme/auth"), Notes: new("Issues and checks the session tokens."),
 		DependsOn: &[]string{"tokens"}})
 
 	var task gen.Task
@@ -75,7 +75,7 @@ func TestTheCatalogueStaysInsideItsProject(t *testing.T) {
 	h.do("POST", "/projects", gen.NewProject{Slug: uniqueSlug("cata"), Name: "A"}, &a)
 	h.do("POST", "/projects", gen.NewProject{Slug: uniqueSlug("catb"), Name: "B"}, &b)
 	h.putComponent(a.Id.String(), gen.ComponentInput{Key: "shared-name", Name: "A's service", Kind: gen.ComponentInputKindApi,
-		Notes: ptr("Belongs to project A alone.")})
+		Notes: new("Belongs to project A alone.")})
 	h.putComponent(b.Id.String(), gen.ComponentInput{Key: "other", Name: "B's service", Kind: gen.ComponentInputKindApi})
 
 	// B cannot depend on A's component, even by its exact key.

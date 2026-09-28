@@ -19,15 +19,15 @@ func TestProjectConfigAndPeople(t *testing.T) {
 		t.Fatalf("read config: %d", code)
 	}
 
-	good := map[string]interface{}{
-		"autopilot": map[string]interface{}{"enabled": false},
-		"policy":    map[string]interface{}{"default": map[string]interface{}{"backend": "claude"}, "daily_budget_usd": 25},
+	good := map[string]any{
+		"autopilot": map[string]any{"enabled": false},
+		"policy":    map[string]any{"default": map[string]any{"backend": "claude"}, "daily_budget_usd": 25},
 	}
 	var saved gen.ProjectConfig
 	if code := h.do("PUT", "/projects/"+project+"/config", gen.ProjectConfig{Config: good}, &saved); code != 200 {
 		t.Fatalf("write config: %d", code)
 	}
-	policy, ok := saved.Config["policy"].(map[string]interface{})
+	policy, ok := saved.Config["policy"].(map[string]any)
 	if !ok || policy["daily_budget_usd"] != float64(25) {
 		t.Fatalf("saved config: %+v", saved.Config)
 	}
@@ -38,7 +38,7 @@ func TestProjectConfigAndPeople(t *testing.T) {
 	}
 
 	// A template without phases would leave tasks with nowhere to go.
-	broken := map[string]interface{}{"templates": map[string]interface{}{"bug": map[string]interface{}{"kind": "bug"}}}
+	broken := map[string]any{"templates": map[string]any{"bug": map[string]any{"kind": "bug"}}}
 	var failure gen.Error
 	if code := h.do("PUT", "/projects/"+project+"/config", gen.ProjectConfig{Config: broken}, &failure); code != 400 {
 		t.Fatalf("a template with no phases must be refused: %d", code)

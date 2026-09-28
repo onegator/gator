@@ -81,8 +81,7 @@ func TestSilentRunnerNotifiesTheAdmins(t *testing.T) {
 		t.Fatalf("register device: %d", code)
 	}
 	sender := &fakeSender{}
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	go notify.New(h.pool, h.svc, sender, h.hub, slog.Default(), 50*time.Millisecond).Run(ctx)
 	time.Sleep(150 * time.Millisecond) // let the cursor start at the newest event
 

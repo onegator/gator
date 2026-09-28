@@ -208,7 +208,7 @@ func short(id string) string {
 // ("?? file"), and file names may too, so words are the wrong unit.
 func lines(s string) []string {
 	var out []string
-	for _, l := range strings.Split(s, "\n") {
+	for l := range strings.SplitSeq(s, "\n") {
 		if strings.TrimSpace(l) != "" {
 			out = append(out, l)
 		}

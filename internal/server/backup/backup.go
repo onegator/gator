@@ -158,7 +158,7 @@ func Restore(ctx context.Context, databaseURL, path string) error {
 		return fmt.Errorf("pg_restore: %w", err)
 	}
 	var filtered strings.Builder
-	for _, line := range strings.Split(string(sql), "\n") {
+	for line := range strings.SplitSeq(string(sql), "\n") {
 		if isUnportableSetting(line) {
 			continue
 		}

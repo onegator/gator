@@ -59,8 +59,7 @@ func (h *Host) webhook(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.cfg.WebhookMaxBytes))
 	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			hookJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
 			return
 		}

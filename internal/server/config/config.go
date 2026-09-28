@@ -3,8 +3,11 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/onegator/gator/internal/server/limits"
 )
 
 // Config is the complete server configuration. Every field has a working default
@@ -16,7 +19,13 @@ type Config struct {
 	DevAuth            bool    // GATOR_DEV_AUTH=1 accepts X-Gator-User; local development only
 	RateLimitPerSecond float64 // GATOR_RATE_LIMIT_RPS, default 20; 0 disables
 	RateLimitBurst     int     // GATOR_RATE_LIMIT_BURST, default 40
+	// TrustedProxies may name the client in X-Forwarded-For (GATOR_TRUSTED_PROXIES, a comma-
+	// separated list of addresses and CIDRs, default loopback). Nobody else can.
+	TrustedProxies limits.Proxies
 }
+
+// DefaultTrustedProxies is loopback: Caddy and tailscale serve both proxy from this host.
+const DefaultTrustedProxies = "127.0.0.0/8,::1"
 
 // Load reads configuration from environment variables prefixed GATOR_.
 func Load() (Config, error) {
@@ -31,6 +40,11 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" {
 		return c, errors.New("GATOR_DATABASE_URL is required")
 	}
+	proxies, err := limits.ParseProxies(env("GATOR_TRUSTED_PROXIES", DefaultTrustedProxies))
+	if err != nil {
+		return c, fmt.Errorf("GATOR_TRUSTED_PROXIES: %w", err)
+	}
+	c.TrustedProxies = proxies
 	return c, nil
 }
 

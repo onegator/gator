@@ -92,7 +92,6 @@ func decodeParams[T any](raw json.RawMessage) (T, error) {
 }
 
 func dispatch(ctx context.Context, h *Handlers, core *Core, method string, raw json.RawMessage) (any, error) {
-	notFound := Errorf(CodeMethodNotFound, "hook %q not handled", method)
 	switch method {
 	case MethodInitialize:
 		p, err := decodeParams[InitializeParams](raw)
@@ -109,115 +108,55 @@ func dispatch(ctx context.Context, h *Handlers, core *Core, method string, raw j
 	case MethodShutdown:
 		return nil, nil
 	case MethodWebhook:
-		if h.Webhook == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[WebhookParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, h.Webhook(ctx, core, p)
+		return tell(ctx, core, method, raw, h.Webhook)
 	case MethodPhaseTransition:
-		if h.PhaseTransition == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[PhaseTransitionParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, h.PhaseTransition(ctx, core, p)
+		return tell(ctx, core, method, raw, h.PhaseTransition)
 	case MethodGateEvaluate:
-		if h.GateEvaluate == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[GateEvaluateParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return h.GateEvaluate(ctx, core, p)
+		return ask(ctx, core, method, raw, h.GateEvaluate)
 	case MethodTurnEnding:
-		if h.TurnEnding == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[TurnEndingParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return h.TurnEnding(ctx, core, p)
+		return ask(ctx, core, method, raw, h.TurnEnding)
 	case MethodArtifactApproved:
-		if h.ArtifactApproved == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[ArtifactApprovedParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, h.ArtifactApproved(ctx, core, p)
+		return tell(ctx, core, method, raw, h.ArtifactApproved)
 	case MethodSchedule:
-		if h.Schedule == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[ScheduleParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, h.Schedule(ctx, core, p)
+		return tell(ctx, core, method, raw, h.Schedule)
 	case MethodRenderUI:
-		if h.RenderUI == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[RenderUIParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return h.RenderUI(ctx, core, p)
+		return ask(ctx, core, method, raw, h.RenderUI)
 	case MethodJobPrepare:
-		if h.JobPrepare == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[JobPrepareParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return h.JobPrepare(ctx, core, p)
+		return ask(ctx, core, method, raw, h.JobPrepare)
 	case MethodJobFinish:
-		if h.JobFinish == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[JobFinishParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, h.JobFinish(ctx, core, p)
+		return tell(ctx, core, method, raw, h.JobFinish)
 	case MethodRelease:
-		if h.Release == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[ReleaseParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, h.Release(ctx, core, p)
+		return tell(ctx, core, method, raw, h.Release)
 	case MethodIncidentClosed:
-		if h.IncidentClosed == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[IncidentClosedParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return nil, h.IncidentClosed(ctx, core, p)
+		return tell(ctx, core, method, raw, h.IncidentClosed)
 	case MethodQualityEvaluate:
-		if h.QualityEvaluate == nil {
-			return nil, notFound
-		}
-		p, err := decodeParams[QualityEvaluateParams](raw)
-		if err != nil {
-			return nil, err
-		}
-		return h.QualityEvaluate(ctx, core, p)
+		return ask(ctx, core, method, raw, h.QualityEvaluate)
 	}
 	return nil, Errorf(CodeMethodNotFound, "method %q not found", method)
+}
+
+// ask calls a hook the plugin answers; a plugin without the hook has not handled it.
+func ask[P, R any](ctx context.Context, core *Core, method string, raw json.RawMessage, fn func(context.Context, *Core, P) (R, error)) (any, error) {
+	if fn == nil {
+		return nil, Errorf(CodeMethodNotFound, "hook %q not handled", method)
+	}
+	p, err := decodeParams[P](raw)
+	if err != nil {
+		return nil, err
+	}
+	return fn(ctx, core, p)
+}
+
+// tell calls a hook that answers with nothing but whether it went well.
+func tell[P any](ctx context.Context, core *Core, method string, raw json.RawMessage, fn func(context.Context, *Core, P) error) (any, error) {
+	if fn == nil {
+		return nil, Errorf(CodeMethodNotFound, "hook %q not handled", method)
+	}
+	p, err := decodeParams[P](raw)
+	if err != nil {
+		return nil, err
+	}
+	return nil, fn(ctx, core, p)
 }
 
 // Core is the plugin's handle on gator-server: its settings and the core methods.

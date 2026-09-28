@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -45,8 +46,8 @@ func refreshWorkingState(ctx context.Context, q *db.Queries, taskID pgtype.UUID)
 	last := done[len(done)-1]
 	b.WriteString("# Working state\n\n")
 	fmt.Fprintf(&b, "_After the %s job in %s on %s, %s._\n", last.job.Role, last.job.Phase, last.job.Backend, last.job.FinishedAt.Time.UTC().Format("2006-01-02 15:04 UTC"))
-	for i := len(done) - 1; i >= 0; i-- {
-		if f := done[i].fin; f.Branch != "" && len(f.Commits) > 0 {
+	for _, d := range slices.Backward(done) {
+		if f := d.fin; f.Branch != "" && len(f.Commits) > 0 {
 			fmt.Fprintf(&b, "\nLatest code: branch `%s`, commit `%s`.\n", f.Branch, short(f.Commits[len(f.Commits)-1]))
 			break
 		}
