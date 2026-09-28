@@ -101,21 +101,8 @@ func (s *Server) AgentBlocked(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in gen.AgentReason
-	if !decode(w, r, &in) {
-		return
-	}
-	reason := strings.TrimSpace(in.Reason)
-	if reason == "" {
-		writeError(w, http.StatusBadRequest, "say why, in a sentence a person can act on", "invalid")
-		return
-	}
-	if err := s.Process.Block(r.Context(), job.TaskID, agentActor(job), "the agent stopped: "+reason, "agent"); err != nil {
-		if errors.Is(err, process.ErrTaskClosed) {
-			writeError(w, http.StatusBadRequest, "this task is closed", "invalid")
-			return
-		}
-		s.fail(w, err)
+	reason, ok := s.blockOnAgent(w, r, job, "the agent stopped: ", "say why, in a sentence a person can act on")
+	if !ok {
 		return
 	}
 	s.note(r, job, "task blocked", map[string]any{"reason": reason})
@@ -131,26 +118,36 @@ func (s *Server) AgentQuestion(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var in gen.AgentReason
-	if !decode(w, r, &in) {
-		return
-	}
-	question := strings.TrimSpace(in.Reason)
-	if question == "" {
-		writeError(w, http.StatusBadRequest, "ask something", "invalid")
-		return
-	}
-	if err := s.Process.Block(r.Context(), job.TaskID, agentActor(job), "the agent asks: "+question, "agent"); err != nil {
-		if errors.Is(err, process.ErrTaskClosed) {
-			writeError(w, http.StatusBadRequest, "this task is closed", "invalid")
-			return
-		}
-		s.fail(w, err)
+	question, ok := s.blockOnAgent(w, r, job, "the agent asks: ", "ask something")
+	if !ok {
 		return
 	}
 	s.note(r, job, "ask", map[string]any{"question": question})
 	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: new(toUUID(job.TaskID)), Link: new(taskLink(job.TaskID)),
 		Detail: new("the question is in the inbox; answer it by unblocking the task")})
+}
+
+// blockOnAgent blocks the job's task on what the agent said, prefixed so a person can tell
+// a stop from a question. It answers the request itself when it cannot, and says so with ok.
+func (s *Server) blockOnAgent(w http.ResponseWriter, r *http.Request, job db.Job, prefix, empty string) (string, bool) {
+	var in gen.AgentReason
+	if !decode(w, r, &in) {
+		return "", false
+	}
+	said := strings.TrimSpace(in.Reason)
+	if said == "" {
+		writeError(w, http.StatusBadRequest, empty, "invalid")
+		return "", false
+	}
+	if err := s.Process.Block(r.Context(), job.TaskID, agentActor(job), prefix+said, "agent"); err != nil {
+		if errors.Is(err, process.ErrTaskClosed) {
+			writeError(w, http.StatusBadRequest, "this task is closed", "invalid")
+			return "", false
+		}
+		s.fail(w, err)
+		return "", false
+	}
+	return said, true
 }
 
 // AgentPutArtifact records a document for the job's phase before the job ends, so work survives
