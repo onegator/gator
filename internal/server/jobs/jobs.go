@@ -205,6 +205,13 @@ type Options struct {
 	CondenseEvery  time.Duration
 }
 
+// every schedules args on an interval. A run still queued or in flight is not queued again.
+func every(interval time.Duration, args river.JobArgs, runOnStart bool) *river.PeriodicJob {
+	return river.NewPeriodicJob(river.PeriodicInterval(interval), func() (river.JobArgs, *river.InsertOpts) {
+		return args, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
+	}, &river.PeriodicJobOpts{RunOnStart: runOnStart})
+}
+
 // New builds a River client with workers and periodic jobs registered. Call Start.
 func New(o Options) (*river.Client[pgx.Tx], error) {
 	if o.ExpireEvery == 0 {
@@ -232,27 +239,19 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &ExpirePhasesWorker{Process: o.Process, Log: o.Log})
 	periodic := []*river.PeriodicJob{
-		river.NewPeriodicJob(river.PeriodicInterval(o.ExpireEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return ExpirePhasesArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
-		}, &river.PeriodicJobOpts{RunOnStart: true}),
+		every(o.ExpireEvery, ExpirePhasesArgs{}, true),
 	}
 	if o.Plugins != nil {
 		river.AddWorker(workers, &ReconcileChecksWorker{Plugins: o.Plugins, Stale: o.StaleAfter, Log: o.Log})
-		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.ReconcileEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return ReconcileChecksArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
-		}, &river.PeriodicJobOpts{RunOnStart: false}))
+		periodic = append(periodic, every(o.ReconcileEvery, ReconcileChecksArgs{}, false))
 	}
 	if o.Releases != nil {
 		river.AddWorker(workers, &SettleReleasesWorker{Releases: o.Releases, Log: o.Log})
-		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.SettleEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return SettleReleasesArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
-		}, &river.PeriodicJobOpts{RunOnStart: false}))
+		periodic = append(periodic, every(o.SettleEvery, SettleReleasesArgs{}, false))
 	}
 	if o.Quality != nil {
 		river.AddWorker(workers, &ScoreQualityWorker{Quality: o.Quality, Log: o.Log})
-		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.QualityEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return ScoreQualityArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
-		}, &river.PeriodicJobOpts{RunOnStart: false}))
+		periodic = append(periodic, every(o.QualityEvery, ScoreQualityArgs{}, false))
 	}
 	if o.Product != nil {
 		if o.CondenseEvery == 0 {
@@ -261,15 +260,11 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 			o.CondenseEvery = 24 * time.Hour
 		}
 		river.AddWorker(workers, &CondenseProductWorker{Product: o.Product, Log: o.Log})
-		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.CondenseEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return CondenseProductArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
-		}, &river.PeriodicJobOpts{RunOnStart: false}))
+		periodic = append(periodic, every(o.CondenseEvery, CondenseProductArgs{}, false))
 	}
 	if o.Backup.Enabled() {
 		river.AddWorker(workers, &BackupWorker{Config: o.Backup, DatabaseURL: o.DatabaseURL, Log: o.Log})
-		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(o.BackupEvery), func() (river.JobArgs, *river.InsertOpts) {
-			return BackupArgs{}, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: activeStates}}
-		}, &river.PeriodicJobOpts{RunOnStart: false}))
+		periodic = append(periodic, every(o.BackupEvery, BackupArgs{}, false))
 	}
 	return river.NewClient(riverpgxv5.New(o.Pool), &river.Config{
 		Queues:       map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 4}},
