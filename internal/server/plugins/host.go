@@ -184,25 +184,11 @@ var hookEvents = []string{"task.created", "task.phase_changed", "task.closed", "
 // drain delivers events after the cursor, at least once: a crash between delivery and the
 // cursor update repeats a batch, which hooks must tolerate.
 func (h *Host) drain(ctx context.Context) {
-	q := db.New(h.pool)
-	for ctx.Err() == nil {
-		cur, err := q.GetEventCursor(ctx, cursorName)
-		if err != nil {
-			return
+	events.DrainCursor(ctx, h.pool, cursorName, hookEvents, func(r db.EventsAfterRow) {
+		if h.active() {
+			h.onEvent(ctx, events.Event{ID: r.ID, Type: r.Type, Aggregate: r.Aggregate, AggregateID: uuidString(r.AggregateID), Payload: r.Payload})
 		}
-		rows, err := q.EventsAfter(ctx, db.EventsAfterParams{After: cur, Types: hookEvents, MaxRows: 100})
-		if err != nil || len(rows) == 0 {
-			return
-		}
-		for _, r := range rows {
-			if h.active() {
-				h.onEvent(ctx, events.Event{ID: r.ID, Type: r.Type, Aggregate: r.Aggregate, AggregateID: uuidString(r.AggregateID), Payload: r.Payload})
-			}
-		}
-		if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursorName, EventID: rows[len(rows)-1].ID}); err != nil {
-			return
-		}
-	}
+	})
 }
 
 func (h *Host) active() bool {

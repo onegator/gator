@@ -68,25 +68,11 @@ func (c *Curator) Run(ctx context.Context) {
 }
 
 func (c *Curator) drain(ctx context.Context) {
-	q := db.New(c.pool)
-	for ctx.Err() == nil {
-		cursor, err := q.GetEventCursor(ctx, cursorName)
-		if err != nil {
-			return
+	events.DrainCursor(ctx, c.pool, cursorName, watched, func(r db.EventsAfterRow) {
+		if err := c.handle(ctx, r); err != nil && ctx.Err() == nil {
+			c.log.Warn("product proposal", "event", r.Type, "err", err)
 		}
-		rows, err := q.EventsAfter(ctx, db.EventsAfterParams{After: cursor, Types: watched, MaxRows: 100})
-		if err != nil || len(rows) == 0 {
-			return
-		}
-		for _, r := range rows {
-			if err := c.handle(ctx, r); err != nil && ctx.Err() == nil {
-				c.log.Warn("product proposal", "event", r.Type, "err", err)
-			}
-		}
-		if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursorName, EventID: rows[len(rows)-1].ID}); err != nil {
-			return
-		}
-	}
+	})
 }
 
 func (c *Curator) handle(ctx context.Context, row db.EventsAfterRow) error {

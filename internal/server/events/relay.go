@@ -136,3 +136,27 @@ func (r *Relay) Drain(ctx context.Context) error {
 		}
 	}
 }
+
+// DrainCursor hands deliver every event of the given types after the named cursor, then moves
+// the cursor past them. Delivery is at least once: a crash between delivery and the cursor
+// update repeats a batch, which deliver must tolerate. It stops at the first database error
+// and tries again on the caller's next wake.
+func DrainCursor(ctx context.Context, pool *pgxpool.Pool, cursor string, types []string, deliver func(db.EventsAfterRow)) {
+	q := db.New(pool)
+	for ctx.Err() == nil {
+		after, err := q.GetEventCursor(ctx, cursor)
+		if err != nil {
+			return
+		}
+		rows, err := q.EventsAfter(ctx, db.EventsAfterParams{After: after, Types: types, MaxRows: 100})
+		if err != nil || len(rows) == 0 {
+			return
+		}
+		for _, r := range rows {
+			deliver(r)
+		}
+		if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursor, EventID: rows[len(rows)-1].ID}); err != nil {
+			return
+		}
+	}
+}
