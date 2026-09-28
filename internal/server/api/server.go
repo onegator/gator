@@ -49,6 +49,9 @@ type Server struct {
 	// RateLimit applies per token (or IP when anonymous). Zero disables.
 	RateLimitPerSecond float64
 	RateLimitBurst     int
+	// TrustedProxies may name the client in X-Forwarded-For; everyone else is who they
+	// connect from.
+	TrustedProxies limits.Proxies
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -56,7 +59,7 @@ var _ gen.ServerInterface = (*Server)(nil)
 // Router mounts the API under /api/v1 plus the WebSocket endpoint.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	r.Use(middleware.RequestID, s.TrustedProxies.RealIP, middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
 		return otelhttp.NewHandler(next, "http", otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			if rc := chi.RouteContext(r.Context()); rc != nil && rc.RoutePattern() != "" {
