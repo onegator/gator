@@ -44,35 +44,50 @@ func (m *Manager) serve(parent context.Context, c *websocket.Conn, p auth.Princi
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	defer c.CloseNow()
-
-	reject := func(code, msg string) {
-		b, _ := proto.Encode(proto.TypeError, 1, proto.Error{Code: code, Message: msg, Fatal: true})
-		wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
-		_ = c.Write(wctx, websocket.MessageText, b)
-		wcancel()
-		_ = c.Close(websocket.StatusPolicyViolation, code)
+	reg, version, ok := m.handshake(ctx, c, p)
+	if !ok {
+		return
 	}
+	s, ok := m.connect(ctx, cancel, c, p, reg, version)
+	if !ok {
+		return
+	}
+	s.readLoop()
+	m.disconnect(s)
+}
 
+// reject tells the runner why it is refused and closes the connection.
+func reject(ctx context.Context, c *websocket.Conn, code, msg string) {
+	b, _ := proto.Encode(proto.TypeError, 1, proto.Error{Code: code, Message: msg, Fatal: true})
+	wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
+	_ = c.Write(wctx, websocket.MessageText, b)
+	wcancel()
+	_ = c.Close(websocket.StatusPolicyViolation, code)
+}
+
+// handshake reads the runner's register, which must come first and in a protocol version
+// this server speaks, and fills in what the runner left out.
+func (m *Manager) handshake(ctx context.Context, c *websocket.Conn, p auth.Principal) (proto.Register, int, bool) {
 	rctx, rcancel := context.WithTimeout(ctx, m.cfg.RegisterTimeout)
 	_, first, err := c.Read(rctx)
 	rcancel()
 	if err != nil {
-		return
+		return proto.Register{}, 0, false
 	}
 	env, err := proto.Decode(first)
 	if err != nil || env.Type != proto.TypeRegister {
-		reject("register_first", "the first message must be register")
-		return
+		reject(ctx, c, "register_first", "the first message must be register")
+		return proto.Register{}, 0, false
 	}
 	version, err := proto.Negotiate(env.Version)
 	if err != nil {
-		reject("unsupported_version", err.Error())
-		return
+		reject(ctx, c, "unsupported_version", err.Error())
+		return proto.Register{}, 0, false
 	}
 	var reg proto.Register
 	if err := env.Into(&reg); err != nil {
-		reject("bad_register", err.Error())
-		return
+		reject(ctx, c, "bad_register", err.Error())
+		return proto.Register{}, 0, false
 	}
 	if reg.Capabilities.MaxParallel < 1 {
 		reg.Capabilities.MaxParallel = 1
@@ -85,6 +100,12 @@ func (m *Manager) serve(parent context.Context, c *websocket.Conn, p auth.Princi
 	default:
 		reg.Location = "other"
 	}
+	return reg, version, true
+}
+
+// connect records the runner, makes this connection its session — replacing one it may still
+// have open — and tells the runner and everyone watching that it is online.
+func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn, p auth.Principal, reg proto.Register, version int) (*session, bool) {
 	var projects []pgtype.UUID
 	for _, s := range reg.Capabilities.Projects {
 		if u, ok := parseUUID(s); ok {
@@ -98,8 +119,8 @@ func (m *Manager) serve(parent context.Context, c *websocket.Conn, p auth.Princi
 	})
 	if err != nil {
 		m.log.Error("runner upsert", "err", err)
-		reject("internal", "could not register runner")
-		return
+		reject(ctx, c, "internal", "could not register runner")
+		return nil, false
 	}
 
 	s := &session{m: m, conn: c, runnerID: row.ID, tokenID: p.TokenID, name: reg.Name, caps: reg.Capabilities, projects: projects}
@@ -113,25 +134,28 @@ func (m *Manager) serve(parent context.Context, c *websocket.Conn, p auth.Princi
 
 	if err := s.send(proto.TypeRegistered, proto.Registered{RunnerID: uuidString(row.ID), Version: version}); err != nil {
 		m.dropSession(s)
-		return
+		return nil, false
 	}
 	runnersOnline(ctx, 1)
 	_ = m.tx(ctx, func(q *db.Queries) error {
 		return emit(ctx, q, "runner.online", "runner", row.ID, map[string]any{"name": reg.Name, "location": reg.Location, "backends": reg.Capabilities.Backends})
 	})
 	m.log.Info("runner connected", "runner", reg.Name, "location", reg.Location, "backends", reg.Capabilities.Backends, "proto", version)
+	return s, true
+}
 
-	s.readLoop()
-
+// disconnect marks the runner offline, unless a newer connection has already taken its place.
+func (m *Manager) disconnect(s *session) {
 	runnersOnline(context.Background(), -1)
-	if m.dropSession(s) {
-		bg := context.Background()
-		_ = db.New(m.pool).SetRunnerStatus(bg, db.SetRunnerStatusParams{ID: row.ID, Status: "offline", Reason: "disconnected"})
-		_ = m.tx(bg, func(q *db.Queries) error {
-			return emit(bg, q, "runner.offline", "runner", row.ID, map[string]any{"name": reg.Name, "reason": "disconnected"})
-		})
-		m.log.Info("runner disconnected", "runner", reg.Name)
+	if !m.dropSession(s) {
+		return
 	}
+	bg := context.Background()
+	_ = db.New(m.pool).SetRunnerStatus(bg, db.SetRunnerStatusParams{ID: s.runnerID, Status: "offline", Reason: "disconnected"})
+	_ = m.tx(bg, func(q *db.Queries) error {
+		return emit(bg, q, "runner.offline", "runner", s.runnerID, map[string]any{"name": s.name, "reason": "disconnected"})
+	})
+	m.log.Info("runner disconnected", "runner", s.name)
 }
 
 // dropSession removes s if it is still the current session; reports whether it was.
