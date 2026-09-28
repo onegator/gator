@@ -341,7 +341,7 @@ func (s *Service) Rollback(ctx context.Context, taskID pgtype.UUID, to string, a
 				if err := q.SetTaskBlocked(ctx, db.SetTaskBlockedParams{ID: taskID, BlockedReason: &msg}); err != nil {
 					return err
 				}
-				if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &msg, BlockedBy: ptr("automation")}); err != nil {
+				if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &msg, BlockedBy: new("automation")}); err != nil {
 					return err
 				}
 				if err := s.record(ctx, q, taskID, &task.Phase, task.Phase, "auto_block", Actor{Kind: ActorSystem}, msg, map[string]any{"requested_rollback_to": to, "requested_by": actor.Kind, "reason": reason}); err != nil {
@@ -447,7 +447,7 @@ func (s *Service) SetCheck(ctx context.Context, taskID pgtype.UUID, c Check) err
 			if err := q.SetTaskBlocked(ctx, db.SetTaskBlockedParams{ID: taskID, BlockedReason: &failing}); err != nil {
 				return err
 			}
-			if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &failing, BlockedBy: ptr("automation")}); err != nil {
+			if err := q.SetGateBlocked(ctx, db.SetGateBlockedParams{TaskID: taskID, Phase: task.Phase, BlockedReason: &failing, BlockedBy: new("automation")}); err != nil {
 				return err
 			}
 			if err := s.record(ctx, q, taskID, &task.Phase, task.Phase, "auto_block", Actor{Kind: ActorPlugin}, failing, map[string]any{"check": c}); err != nil {
@@ -602,8 +602,6 @@ func (s *Service) emit(ctx context.Context, q *db.Queries, typ string, taskID pg
 	_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: typ, Aggregate: "task", AggregateID: taskID, Payload: b})
 	return err
 }
-
-func ptr(s string) *string { return &s }
 
 func uuidString(u pgtype.UUID) string {
 	if !u.Valid {

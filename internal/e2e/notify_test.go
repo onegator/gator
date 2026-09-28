@@ -44,14 +44,13 @@ func TestDevicesAndNotifications(t *testing.T) {
 	}
 
 	sender := &fakeSender{}
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	go notify.New(h.pool, h.svc, sender, h.hub, slog.Default(), 50*time.Millisecond).Run(ctx)
 	time.Sleep(150 * time.Millisecond) // let the cursor start at the newest event
 
 	task := h.task()
 	if code := h.do("PUT", "/tasks/"+task.Id.String()+"/checks",
-		gen.Check{Name: "ci", Source: "plugin:test", Status: gen.CheckStatusFail, Detail: ptr("the build is red")}, nil); code != 200 {
+		gen.Check{Name: "ci", Source: "plugin:test", Status: gen.CheckStatusFail, Detail: new("the build is red")}, nil); code != 200 {
 		t.Fatalf("set check: %d", code)
 	}
 
@@ -82,5 +81,3 @@ func TestDevicesAndNotifications(t *testing.T) {
 		t.Fatalf("forgetting twice: %d", code)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

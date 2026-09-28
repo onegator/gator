@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -177,10 +178,8 @@ func (h *harness) waitJob(id string, want ...string) gen.Job {
 	var j gen.Job
 	for time.Now().Before(deadline) {
 		h.do("GET", "/jobs/"+id, nil, &j)
-		for _, w := range want {
-			if string(j.Status) == w {
-				return j
-			}
+		if slices.Contains(want, string(j.Status)) {
+			return j
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -263,7 +262,7 @@ func (r *rawRunner) recv() proto.RawEnvelope {
 
 func (r *rawRunner) recvType(want proto.MessageType) proto.RawEnvelope {
 	r.t.Helper()
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		env := r.recv()
 		if env.Type == want {
 			return env

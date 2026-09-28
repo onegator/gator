@@ -235,8 +235,7 @@ func TestAutopilotReactsToTaskEvents(t *testing.T) {
 	backend := uniqueBackend()
 	_, task := h.featureTask(backend)
 	task = h.approveAdvance(task) // discovery, no job yet: this harness has no relay
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go h.mgr.RunAutopilot(ctx)
 	time.Sleep(50 * time.Millisecond)
 	h.hub.Publish(events.Event{Type: "task.phase_changed", Aggregate: "task", AggregateID: task.Id.String(), Payload: []byte(`{}`)})

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -117,12 +118,7 @@ func (m Manifest) Validate() error {
 func (m Manifest) HasHook(h string) bool { return contains(m.Hooks, h) }
 
 func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, s)
 }
 
 // InitializeParams is the first call of every process. ProjectID is empty when the core

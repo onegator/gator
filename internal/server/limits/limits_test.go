@@ -47,7 +47,7 @@ func TestBreakerTripsCoolsAndRecovers(t *testing.T) {
 	b.OnTrip = func() { trips++ }
 	boom := errors.New("boom")
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := b.Do(func() error { return boom }); !errors.Is(err, boom) {
 			t.Fatal(err)
 		}

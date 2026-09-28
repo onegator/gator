@@ -19,7 +19,7 @@ func TestImportBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("go list %s: %v\n%s", pattern, err, out)
 		}
-		for _, line := range strings.Split(string(out), "\n") {
+		for line := range strings.SplitSeq(string(out), "\n") {
 			if strings.HasPrefix(line, forbidden) {
 				t.Errorf("%s imports %s, which crosses the server/runner boundary", pattern, line)
 			}

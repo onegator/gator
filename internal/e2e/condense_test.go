@@ -29,8 +29,7 @@ func (h *harness) seedLessons(projectID string, n int) {
 // curator writes becomes one proposal — while every original stays readable.
 func TestCondensingProposesOneEntryAndKeepsTheOriginals(t *testing.T) {
 	h := newHarness(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	curator := product.NewCurator(h.pool, h.hub, slog.Default(), 50*time.Millisecond)
 	condenser := product.NewCondenser(curator, h.svc, 5, 1<<20)
 	go curator.Run(ctx)
@@ -121,8 +120,7 @@ func TestCondensingProposesOneEntryAndKeepsTheOriginals(t *testing.T) {
 // and the words drift further from what anybody actually decided.
 func TestACondensateDoesNotTriggerAnotherCondensation(t *testing.T) {
 	h := newHarness(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	curator := product.NewCurator(h.pool, h.hub, slog.Default(), 50*time.Millisecond)
 	condenser := product.NewCondenser(curator, h.svc, 2, 1<<20)
 

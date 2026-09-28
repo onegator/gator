@@ -168,7 +168,7 @@ func TestBudgetShowsWhatTheGateCounts(t *testing.T) {
 	h.do("PUT", "/projects/"+project+"/config",
 		map[string]any{"config": map[string]any{"policy": map[string]any{"daily_budget_usd": 5}}}, nil)
 	h.do("POST", "/tasks/"+task.Id.String()+"/usage",
-		gen.UsageInput{DurationMs: 1000, CostUsd: ptr(1.25), Backend: ptr("claude")}, nil)
+		gen.UsageInput{DurationMs: 1000, CostUsd: new(1.25), Backend: new("claude")}, nil)
 
 	var after gen.Budget
 	h.do("GET", "/projects/"+project+"/budget", nil, &after)

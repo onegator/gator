@@ -68,8 +68,7 @@ func TestProductContextInPromptsStaysInItsProject(t *testing.T) {
 // Approving a plan proposes what was decided; a person approves that in turn.
 func TestCuratorProposesDecisionsAndLessons(t *testing.T) {
 	h := newHarness(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	ctx := t.Context()
 	go product.NewCurator(h.pool, h.hub, slog.Default(), 50*time.Millisecond).Run(ctx)
 	time.Sleep(150 * time.Millisecond)
 

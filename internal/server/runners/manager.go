@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -575,9 +576,7 @@ func (m *Manager) tx(ctx context.Context, fn func(q *db.Queries) error) error {
 // emitJob writes a job event plus its task-level mirror so task and inbox views update.
 func (m *Manager) emitJob(ctx context.Context, q *db.Queries, typ string, job db.Job, extra map[string]any) error {
 	payload := map[string]any{"task_id": uuidString(job.TaskID), "status": job.Status, "phase": job.Phase, "role": job.Role, "backend": job.Backend}
-	for k, v := range extra {
-		payload[k] = v
-	}
+	maps.Copy(payload, extra)
 	if err := emit(ctx, q, typ, "job", job.ID, payload); err != nil {
 		return err
 	}

@@ -41,7 +41,7 @@ func orEmpty(s []string) []string {
 func toInstalled(p db.Plugin) gen.InstalledPlugin {
 	var m plugin.Manifest
 	_ = json.Unmarshal(p.Manifest, &m)
-	var raw map[string]interface{}
+	var raw map[string]any
 	_ = json.Unmarshal(p.Manifest, &raw)
 	return gen.InstalledPlugin{Name: p.Name, Version: p.Version, Command: orEmpty(p.Command), Capabilities: orEmpty(m.Capabilities),
 		Hooks: orEmpty(m.Hooks), Enabled: p.Enabled, Manifest: &raw}
@@ -51,14 +51,14 @@ func toProjectPlugin(v plugins.View) gen.ProjectPlugin {
 	out := gen.ProjectPlugin{Name: v.Name, Version: v.Version, Enabled: v.Enabled, DisabledReason: v.DisabledReason, Running: v.Running,
 		Capabilities: orEmpty(v.Capabilities), Hooks: orEmpty(v.Hooks), Config: v.Config, SecretsSet: orEmpty(v.SecretsSet)}
 	if out.Config == nil {
-		out.Config = map[string]interface{}{}
+		out.Config = map[string]any{}
 	}
 	if len(v.UI) > 0 {
 		ui := v.UI
 		out.Ui = &ui
 	}
 	if len(v.ConfigSchema) > 0 {
-		var m map[string]interface{}
+		var m map[string]any
 		if json.Unmarshal(v.ConfigSchema, &m) == nil {
 			out.ConfigSchema = &m
 		}
@@ -169,12 +169,12 @@ func (s *Server) ListPluginCalls(w http.ResponseWriter, r *http.Request, project
 		c := gen.PluginCall{Id: row.ID, Direction: row.Direction, Method: row.Method, Error: row.Error,
 			DurationMs: int(row.DurationMs), CreatedAt: row.CreatedAt.Time}
 		if len(row.Payload) > 0 {
-			var v interface{}
+			var v any
 			_ = json.Unmarshal(row.Payload, &v)
 			c.Payload = &v
 		}
 		if len(row.Result) > 0 {
-			var v interface{}
+			var v any
 			_ = json.Unmarshal(row.Result, &v)
 			c.Result = &v
 		}

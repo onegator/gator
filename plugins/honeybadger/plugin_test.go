@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -70,9 +71,7 @@ func newFake(t *testing.T) *fakeHoneybadger {
 func start(t *testing.T, core *plugintest.Core, api string, settings map[string]any) *plugintest.Process {
 	t.Helper()
 	cfg := map[string]any{"api_url": api, "project_id": "77"}
-	for k, v := range settings {
-		cfg[k] = v
-	}
+	maps.Copy(cfg, settings)
 	p, err := plugintest.Start(context.Background(), []string{pluginBinary(t)}, core, plugintest.Options{
 		Config: cfg, Secrets: map[string]string{"webhook_token": hookToken, "auth_token": "hb-token"}})
 	if err != nil {

@@ -23,21 +23,20 @@ const DigestPrompt = "Reply with only the gator-digest block for the work in thi
 // ExtractDigest finds the last gator-digest block in an answer, decodes it and returns the
 // answer without it. An absent or malformed block yields nil and the answer unchanged.
 func ExtractDigest(answer string) (*proto.Digest, string) {
-	start := strings.LastIndex(answer, digestFence)
-	if start < 0 {
+	head, body, ok := strings.CutLast(answer, digestFence)
+	if !ok {
 		return nil, answer
 	}
-	body := answer[start+len(digestFence):]
-	end := strings.Index(body, "```")
-	if end < 0 {
+	block, tail, ok := strings.Cut(body, "```")
+	if !ok {
 		return nil, answer
 	}
 	var d proto.Digest
-	if err := json.Unmarshal([]byte(strings.TrimSpace(body[:end])), &d); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(block)), &d); err != nil {
 		return nil, answer
 	}
 	d = normalize(d)
-	rest := strings.TrimSpace(answer[:start] + body[end+3:])
+	rest := strings.TrimSpace(head + tail)
 	return &d, rest
 }
 

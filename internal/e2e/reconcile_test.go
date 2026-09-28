@@ -27,7 +27,7 @@ func TestAGateStuckOnPendingIsAskedAgain(t *testing.T) {
 
 	// What a dropped "check finished" webhook leaves behind.
 	if code := h.do("PUT", "/tasks/"+task.Id.String()+"/checks",
-		gen.Check{Name: "echo-ci", Source: "plugin:echo", Status: gen.CheckStatusPending, Detail: ptr("waiting")}, nil); code != 200 {
+		gen.Check{Name: "echo-ci", Source: "plugin:echo", Status: gen.CheckStatusPending, Detail: new("waiting")}, nil); code != 200 {
 		t.Fatalf("set pending check: %d", code)
 	}
 	if got := checkStatus(h, task.Id.String(), "echo-ci"); got != gen.CheckStatusPending {

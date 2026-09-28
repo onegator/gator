@@ -94,10 +94,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		}()
 		budget := 0
 		if job.Bounds.MaxToolCalls > 0 {
-			budget = job.Bounds.MaxToolCalls - tools
-			if budget < 1 {
-				budget = 1
-			}
+			budget = max(job.Bounds.MaxToolCalls-tools, 1)
 		}
 		last = be.Run(runCtx, backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model,
 			MaxToolCalls: budget, MaxCostUSD: costLeft(job, usage), Env: e.agentEnv(job)}, backend.Emit(io.Emit))

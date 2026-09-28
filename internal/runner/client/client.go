@@ -575,7 +575,7 @@ func (Unconfigured) Run(context.Context, proto.Job, JobIO) proto.Finish {
 // SplitList parses a comma-separated list, dropping empties.
 func SplitList(s string) []string {
 	var out []string
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}

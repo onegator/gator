@@ -61,8 +61,8 @@ func (s *Server) SetProjectConfig(w http.ResponseWriter, r *http.Request, projec
 	writeJSON(w, http.StatusOK, gen.ProjectConfig{Config: rawConfig(project.ProcessConfig)})
 }
 
-func rawConfig(b []byte) map[string]interface{} {
-	out := map[string]interface{}{}
+func rawConfig(b []byte) map[string]any {
+	out := map[string]any{}
 	if len(b) > 0 {
 		_ = json.Unmarshal(b, &out)
 	}

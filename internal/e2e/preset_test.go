@@ -33,7 +33,7 @@ func TestAProjectFromAPresetOwnsWhatItStartedWith(t *testing.T) {
 
 	var preset gen.ProjectPreset
 	if code := h.do("POST", "/presets", gen.NewProjectPreset{Name: uniqueSlug("preset"),
-		Description: ptr("How we start a product here"), FromProjectId: origin.Id}, &preset); code != 201 {
+		Description: new("How we start a product here"), FromProjectId: origin.Id}, &preset); code != 201 {
 		t.Fatalf("save preset: %d", code)
 	}
 	if len(preset.Product) == 0 {
@@ -105,8 +105,8 @@ func TestSavingAPresetTwiceReplacesIt(t *testing.T) {
 	name := uniqueSlug("preset")
 
 	var first, second gen.ProjectPreset
-	h.do("POST", "/presets", gen.NewProjectPreset{Name: name, Description: ptr("first"), FromProjectId: p.Id}, &first)
-	h.do("POST", "/presets", gen.NewProjectPreset{Name: name, Description: ptr("second"), FromProjectId: p.Id}, &second)
+	h.do("POST", "/presets", gen.NewProjectPreset{Name: name, Description: new("first"), FromProjectId: p.Id}, &first)
+	h.do("POST", "/presets", gen.NewProjectPreset{Name: name, Description: new("second"), FromProjectId: p.Id}, &second)
 	if first.Id != second.Id {
 		t.Errorf("saving the same name should replace, not add: %s then %s", first.Id, second.Id)
 	}

@@ -69,13 +69,13 @@ func (s *Server) scorecards(r *http.Request, projectID pgtype.UUID) ([]gen.Score
 	cards := map[pgtype.UUID]*card{}
 	for _, c := range components {
 		name := c.Name
-		cards[c.ID] = &card{id: c.ID, Scorecard: gen.Scorecard{
-			Component: c.Key, ComponentName: &name, Checks: []gen.QualityCheck{}}}
+		cards[c.ID] = &card{id: c.ID,
+			Component: c.Key, ComponentName: &name, Checks: []gen.QualityCheck{}}
 	}
 	for _, ch := range checks {
 		c, ok := cards[ch.ComponentID]
 		if !ok {
-			c = &card{id: ch.ComponentID, Scorecard: gen.Scorecard{Checks: []gen.QualityCheck{}}}
+			c = &card{id: ch.ComponentID, Checks: []gen.QualityCheck{}}
 			cards[ch.ComponentID] = c
 		}
 		detail := ch.Detail

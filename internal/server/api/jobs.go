@@ -349,14 +349,14 @@ func toRunner(r db.Runner, connected bool) gen.RunnerInfo {
 }
 
 // objectOf decodes JSON into an object; a non-object value is wrapped as {"value": …}.
-func objectOf(b []byte) map[string]interface{} {
-	var m map[string]interface{}
+func objectOf(b []byte) map[string]any {
+	var m map[string]any
 	if err := json.Unmarshal(b, &m); err == nil && m != nil {
 		return m
 	}
-	var v interface{}
+	var v any
 	_ = json.Unmarshal(b, &v)
-	return map[string]interface{}{"value": v}
+	return map[string]any{"value": v}
 }
 
 var _ = openapi_types.UUID{}

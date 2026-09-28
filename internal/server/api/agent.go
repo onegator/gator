@@ -119,8 +119,8 @@ func (s *Server) AgentBlocked(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.note(r, job, "task blocked", map[string]any{"reason": reason})
-	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: ptr(toUUID(job.TaskID)), Link: ptr(taskLink(job.TaskID)),
-		Detail: ptr("the task is blocked and a person has been asked")})
+	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: new(toUUID(job.TaskID)), Link: new(taskLink(job.TaskID)),
+		Detail: new("the task is blocked and a person has been asked")})
 }
 
 // AgentQuestion asks a person and stops there. The question blocks the gate, so it reaches the
@@ -149,8 +149,8 @@ func (s *Server) AgentQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.note(r, job, "ask", map[string]any{"question": question})
-	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: ptr(toUUID(job.TaskID)), Link: ptr(taskLink(job.TaskID)),
-		Detail: ptr("the question is in the inbox; answer it by unblocking the task")})
+	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: new(toUUID(job.TaskID)), Link: new(taskLink(job.TaskID)),
+		Detail: new("the question is in the inbox; answer it by unblocking the task")})
 }
 
 // AgentPutArtifact records a document for the job's phase before the job ends, so work survives
@@ -176,8 +176,8 @@ func (s *Server) AgentPutArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.note(r, job, "artifact put", map[string]any{"type": typ, "version": a.Version})
-	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: ptr(toUUID(a.ID)), Link: ptr(taskLink(job.TaskID)),
-		Detail: ptr(fmt.Sprintf("%s v%d recorded on %s", typ, a.Version, job.Phase))})
+	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: new(toUUID(a.ID)), Link: new(taskLink(job.TaskID)),
+		Detail: new(fmt.Sprintf("%s v%d recorded on %s", typ, a.Version, job.Phase))})
 }
 
 // AgentProposeProduct proposes what the work taught the product. Always proposed: a person
@@ -206,8 +206,8 @@ func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.note(r, job, "product propose", map[string]any{"kind": string(in.Kind), "title": title})
-	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: ptr(toUUID(entry.ID)), Link: ptr(taskLink(job.TaskID)),
-		Detail: ptr("proposed; a person approves it before any prompt carries it")})
+	writeJSON(w, http.StatusOK, gen.AgentWrite{Ok: true, Id: new(toUUID(entry.ID)), Link: new(taskLink(job.TaskID)),
+		Detail: new("proposed; a person approves it before any prompt carries it")})
 }
 
 // AgentCatalogue answers what the project is made of.
@@ -253,5 +253,3 @@ func (s *Server) AgentKnowledge(w http.ResponseWriter, r *http.Request, params g
 	s.note(r, job, "knowledge search", map[string]any{"query": query, "found": len(out)})
 	writeJSON(w, http.StatusOK, out)
 }
-
-func ptr[T any](v T) *T { return &v }

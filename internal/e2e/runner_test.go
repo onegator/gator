@@ -96,7 +96,7 @@ func TestRunnerRunsJobEndToEnd(t *testing.T) {
 		h.do("GET", "/runners", nil, &rs)
 		still := false
 		for _, r := range rs {
-			if r.Capabilities.Backends != nil && len(r.Capabilities.Backends) == 1 && r.Capabilities.Backends[0] == backend && (r.Connected || r.Status != "offline") {
+			if len(r.Capabilities.Backends) == 1 && r.Capabilities.Backends[0] == backend && (r.Connected || r.Status != "offline") {
 				still = true
 			}
 		}
@@ -286,7 +286,7 @@ func TestConcurrentRunnersLeaseDisjointJobs(t *testing.T) {
 	backend := uniqueBackend()
 	task := h.task()
 	want := map[string]bool{}
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		want[h.job(task, backend, "ok", 0).Id.String()] = true
 	}
 	a, _ := h.dialRaw(h.runner, backend, proto.Version, 6)

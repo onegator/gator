@@ -48,8 +48,7 @@ Output is JSON on stdout. Exit codes: 0 ok, 1 your request, 2 network, 3 identit
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		var coded *codedError
-		if errors.As(err, &coded) {
+		if coded, ok := errors.AsType[*codedError](err); ok {
 			fail(coded.code, coded.Error())
 		}
 		fail(exitOther, err.Error())

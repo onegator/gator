@@ -171,7 +171,7 @@ func TestAJobsIdentityReachesOnlyItsOwnWork(t *testing.T) {
 
 	// When the job ends, the identity stops working.
 	_ = runner
-	if code := h.do("POST", "/jobs/"+job.Id.String()+"/stop", gen.Reason{Reason: ptr("that is enough")}, nil); code != 202 && code != 200 {
+	if code := h.do("POST", "/jobs/"+job.Id.String()+"/stop", gen.Reason{Reason: new("that is enough")}, nil); code != 202 && code != 200 {
 		t.Fatalf("stop: %d", code)
 	}
 	h.waitJob(job.Id.String(), "done", "failed", "stopped")
