@@ -75,11 +75,7 @@ func (s *Server) ListWorkspaceKnowledge(w http.ResponseWriter, r *http.Request) 
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.KnowledgeEntry, 0, len(rows))
-	for _, e := range rows {
-		out = append(out, toKnowledgeEntry(e))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toKnowledgeEntry))
 }
 
 func (s *Server) AddWorkspaceKnowledge(w http.ResponseWriter, r *http.Request) {
@@ -133,11 +129,7 @@ func (s *Server) ListProjectKnowledge(w http.ResponseWriter, r *http.Request, pr
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.KnowledgeEntry, 0, len(rows))
-	for _, e := range rows {
-		out = append(out, toKnowledgeEntry(e))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toKnowledgeEntry))
 }
 
 func (s *Server) AddProjectKnowledge(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {

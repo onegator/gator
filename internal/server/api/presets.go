@@ -45,11 +45,7 @@ func (s *Server) ListProjectPresets(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.ProjectPreset, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, toPreset(row))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toPreset))
 }
 
 func toPreset(row db.ProjectTemplate) gen.ProjectPreset {

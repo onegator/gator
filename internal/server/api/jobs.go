@@ -36,11 +36,7 @@ func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.Job, 0, len(rows))
-	for _, j := range rows {
-		out = append(out, toJob(j))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toJob))
 }
 
 func (s *Server) CreateTaskJob(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {

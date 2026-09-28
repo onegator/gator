@@ -80,11 +80,7 @@ func (s *Server) ListPlugins(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.InstalledPlugin, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, toInstalled(row))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(rows, toInstalled))
 }
 
 func (s *Server) InstallPlugin(w http.ResponseWriter, r *http.Request, pluginName gen.PluginName) {
@@ -121,11 +117,7 @@ func (s *Server) ListProjectPlugins(w http.ResponseWriter, r *http.Request, proj
 		s.fail(w, err)
 		return
 	}
-	out := make([]gen.ProjectPlugin, 0, len(views))
-	for _, v := range views {
-		out = append(out, toProjectPlugin(v))
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, mapAll(views, toProjectPlugin))
 }
 
 func (s *Server) ConfigureProjectPlugin(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, pluginName gen.PluginName) {
