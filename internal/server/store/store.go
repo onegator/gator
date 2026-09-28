@@ -12,6 +12,8 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+
+	"github.com/onegator/gator/internal/server/store/db"
 )
 
 //go:embed migrations/*.sql
@@ -33,6 +35,20 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 	return &Store{Pool: pool}, nil
+}
+
+// InTx runs fn against one transaction and commits it if fn succeeds; otherwise the
+// transaction is rolled back.
+func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(q *db.Queries) error) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(db.New(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // Close releases the pool.
