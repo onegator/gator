@@ -289,16 +289,9 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 	s.dispatchMu.Lock()
 	defer s.dispatchMu.Unlock()
 	q := db.New(s.m.pool)
-	free := 0
-	if len(s.caps.Backends) > 0 {
-		active, err := q.CountActiveJobsForRunner(ctx, s.runnerID)
-		if err != nil {
-			return err
-		}
-		free = s.caps.MaxParallel - int(active)
-		if requested > 0 && requested < free {
-			free = requested
-		}
+	free, err := s.freeSlots(ctx, q, requested)
+	if err != nil {
+		return err
 	}
 	var out []proto.Job
 	backends := s.leasable()
@@ -315,75 +308,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			return err
 		}
 		for _, j := range jobs {
-			var b proto.Bounds
-			_ = json.Unmarshal(j.Bounds, &b)
-			pj := proto.Job{
-				JobID: uuidString(j.ID), TaskID: uuidString(j.TaskID), ProjectID: uuidString(j.ProjectID),
-				Phase: j.Phase, Role: j.Role, Backend: j.Backend, Model: j.Model, Instruction: j.Instruction, Bounds: b,
-				Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
-			}
-			if t, err := q.GetTask(ctx, j.TaskID); err == nil {
-				pj.TaskTitle, pj.TaskDescription, pj.TaskOrigin = t.Title, t.Description, t.Origin
-			}
-			// The identity the agent talks back with. Minted per job and revoked when the job
-			// ends, so it can only ever discuss the work it was handed.
-			if issuer := s.m.cfg.AgentTokens; issuer != nil {
-				ttl := s.m.cfg.AgentTokenTTL
-				if ttl == 0 {
-					ttl = 12 * time.Hour
-				}
-				if token, err := issuer.IssueForJob(ctx, j.ID, j.ProjectID, ttl); err == nil {
-					pj.AgentToken = token
-				} else {
-					s.m.log.Warn("minting the agent's identity", "job", uuidString(j.ID), "err", err)
-				}
-			}
-			if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
-				pj.Guide = g
-			}
-			// One counter across everything the job is handed, so the record reads in the
-			// order the prompt does.
-			pos := 0
-			record := func(d process.ContextDoc, origin string) {
-				if err := q.SaveJobContextDoc(ctx, db.SaveJobContextDocParams{
-					JobID: j.ID, Position: int32(pos), Kind: d.Kind, Phase: d.Phase, Title: d.Title,
-					Origin: origin, Body: d.Body, FullBytes: int32(d.FullBytes),
-					LeftOut: d.Left, Dropped: d.Dropped}); err != nil {
-					s.m.log.Warn("recording what a job was handed", "job", uuidString(j.ID), "err", err)
-				}
-				pos++
-			}
-			if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
-				for _, d := range docs {
-					// A document that did not fit is kept in the record but not in the prompt:
-					// the agent never saw it, and the record should say so rather than imply
-					// it was never there.
-					if !d.Dropped {
-						pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
-					}
-					record(d, d.Origin)
-				}
-			}
-			if p := s.m.cfg.Preparer; p != nil {
-				for _, d := range p.PrepareJob(ctx, j) {
-					pj.Context = append(pj.Context, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
-					d.FullBytes = len(d.Body)
-					record(d, "plugin")
-				}
-			}
-			if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
-				pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
-			}
-			// Record what this job was handed. Context is meant to save an agent from
-			// hunting for what it needs; whether it does is a question about tokens spent
-			// against context given, and that comparison needs both numbers.
-			bytes := 0
-			for _, d := range pj.Context {
-				bytes += len(d.Body)
-			}
-			_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
-				ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context))})
-			out = append(out, pj)
+			out = append(out, s.handOver(ctx, q, j))
 			_ = s.m.tx(ctx, func(q *db.Queries) error {
 				return s.m.emitJob(ctx, q, "job.leased", j, map[string]any{"runner": s.name, "attempt": j.Attempts})
 			})
@@ -397,6 +322,113 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 	}
 	// If this send fails the leases expire and the sweeper returns the jobs to the queue.
 	return s.send(proto.TypeLease, proto.Lease{Jobs: out})
+}
+
+// freeSlots is how many more jobs the runner can take, capped by what it asked for. A runner
+// with no backends takes none.
+func (s *session) freeSlots(ctx context.Context, q *db.Queries, requested int) (int, error) {
+	if len(s.caps.Backends) == 0 {
+		return 0, nil
+	}
+	active, err := q.CountActiveJobsForRunner(ctx, s.runnerID)
+	if err != nil {
+		return 0, err
+	}
+	free := s.caps.MaxParallel - int(active)
+	if requested > 0 && requested < free {
+		free = requested
+	}
+	return free, nil
+}
+
+// handOver is a leased job as the runner receives it: the task, the agent's identity and
+// guide, the documents it starts from and the repo it works in. What cannot be found is left
+// out rather than holding the job back.
+func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.Job {
+	var b proto.Bounds
+	_ = json.Unmarshal(j.Bounds, &b)
+	pj := proto.Job{
+		JobID: uuidString(j.ID), TaskID: uuidString(j.TaskID), ProjectID: uuidString(j.ProjectID),
+		Phase: j.Phase, Role: j.Role, Backend: j.Backend, Model: j.Model, Instruction: j.Instruction, Bounds: b,
+		Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
+	}
+	if t, err := q.GetTask(ctx, j.TaskID); err == nil {
+		pj.TaskTitle, pj.TaskDescription, pj.TaskOrigin = t.Title, t.Description, t.Origin
+	}
+	pj.AgentToken = s.agentToken(ctx, j)
+	if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
+		pj.Guide = g
+	}
+	pj.Context = s.handContext(ctx, q, j)
+	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
+		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
+	}
+	// Record what this job was handed. Context is meant to save an agent from
+	// hunting for what it needs; whether it does is a question about tokens spent
+	// against context given, and that comparison needs both numbers.
+	bytes := 0
+	for _, d := range pj.Context {
+		bytes += len(d.Body)
+	}
+	_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
+		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context))})
+	return pj
+}
+
+// agentToken is the identity the agent talks back with. Minted per job and revoked when the
+// job ends, so it can only ever discuss the work it was handed. Empty without an issuer.
+func (s *session) agentToken(ctx context.Context, j db.Job) string {
+	issuer := s.m.cfg.AgentTokens
+	if issuer == nil {
+		return ""
+	}
+	ttl := s.m.cfg.AgentTokenTTL
+	if ttl == 0 {
+		ttl = 12 * time.Hour
+	}
+	token, err := issuer.IssueForJob(ctx, j.ID, j.ProjectID, ttl)
+	if err != nil {
+		s.m.log.Warn("minting the agent's identity", "job", uuidString(j.ID), "err", err)
+		return ""
+	}
+	return token
+}
+
+// handContext gathers the documents the job starts from — the core's, then the plugins' —
+// and records each one, whether or not it made it into the prompt.
+func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job) []proto.ContextDoc {
+	var out []proto.ContextDoc
+	// One counter across everything the job is handed, so the record reads in the
+	// order the prompt does.
+	pos := 0
+	record := func(d process.ContextDoc, origin string) {
+		if err := q.SaveJobContextDoc(ctx, db.SaveJobContextDocParams{
+			JobID: j.ID, Position: int32(pos), Kind: d.Kind, Phase: d.Phase, Title: d.Title,
+			Origin: origin, Body: d.Body, FullBytes: int32(d.FullBytes),
+			LeftOut: d.Left, Dropped: d.Dropped}); err != nil {
+			s.m.log.Warn("recording what a job was handed", "job", uuidString(j.ID), "err", err)
+		}
+		pos++
+	}
+	if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
+		for _, d := range docs {
+			// A document that did not fit is kept in the record but not in the prompt:
+			// the agent never saw it, and the record should say so rather than imply
+			// it was never there.
+			if !d.Dropped {
+				out = append(out, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+			}
+			record(d, d.Origin)
+		}
+	}
+	if p := s.m.cfg.Preparer; p != nil {
+		for _, d := range p.PrepareJob(ctx, j) {
+			out = append(out, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+			d.FullBytes = len(d.Body)
+			record(d, "plugin")
+		}
+	}
+	return out
 }
 
 // ownJob loads the job a runner reports on, refusing one it does not hold. A database
