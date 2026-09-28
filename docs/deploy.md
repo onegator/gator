@@ -11,6 +11,11 @@ the only dependency of the server.
   `https://<host>.<tailnet>.ts.net` with a certificate, including the WebSocket.
 - Only plugin webhooks are public: Caddy (`deploy/caddy/Caddyfile`) forwards `/hooks/*` and
   answers 404 for everything else.
+- The rate limit keys anonymous callers on their address. The server takes that address from
+  `X-Forwarded-For` only when the request comes from a proxy in `GATOR_TRUSTED_PROXIES`
+  (default loopback, where Caddy and `tailscale serve` run). A proxy on another host or in a
+  container network has to be added there, or every anonymous caller shares its one bucket.
+  `X-Real-IP` and `True-Client-IP` are never read.
 
 ## VPS with systemd
 
@@ -141,6 +146,45 @@ sudo /usr/local/lib/gator/install.sh migrate
 
 Migrations never run on startup, and every migration has a down step
 (`gator-server migrate-down`).
+
+Restarting the runner ends the jobs it is running; they go back to the queue once their lease
+expires. Check first:
+
+```sh
+sudo sh -c '. /etc/gator/server.env && psql "$GATOR_DATABASE_URL" -At' <<'SQL'
+SELECT status, count(*) FROM jobs WHERE status IN ('leased', 'running', 'stalled') GROUP BY status;
+SQL
+```
+
+To see whether a build brings migrations, compare the newest file in
+`internal/server/store/migrations` with the host's `SELECT max(version_id) FROM
+goose_db_version` (same `psql` as above).
+
+### Deploying an unreleased build
+
+Until there is a tag, a host is upgraded from archives built on your machine. GoReleaser's
+snapshot mode builds the same archives a release would, named after the commit:
+
+```sh
+git checkout main && git pull
+go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean
+V=0.0.0-SNAPSHOT-$(git rev-parse --short HEAD)
+scp dist/gator-server_${V}_linux_amd64.tar.gz dist/gator-runner_${V}_linux_amd64.tar.gz host:/root/gator-release/
+scp dist/checksums.txt host:/root/gator-release/checksums-${V##*-}.txt   # keep older sums
+```
+
+Then on the host, the same `install` as above with `--archive`, which still checks the sum:
+
+```sh
+cd /root/gator-release
+V=0.0.0-SNAPSHOT-<commit>
+sudo sh /usr/local/lib/gator/install.sh install server --archive gator-server_${V}_linux_amd64.tar.gz --checksums checksums-${V##*-}.txt
+sudo sh /usr/local/lib/gator/install.sh install runner --archive gator-runner_${V}_linux_amd64.tar.gz --checksums checksums-${V##*-}.txt
+```
+
+Check it came up: `gator-server version`, `curl -fsS http://127.0.0.1:8080/api/v1/readyz`, and
+`runner connected` in `journalctl -u gator-server`. Plugins ship in their own archive
+(`gator-plugins_*`) and only need replacing when they changed.
 
 ## Docker
 
