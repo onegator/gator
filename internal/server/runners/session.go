@@ -469,103 +469,124 @@ func (s *session) finish(fin proto.Finish) error {
 	if err != nil {
 		return err
 	}
-	jobID := job.ID
 	if terminal(job.Status) {
 		return nil // a resend after reconnect; already recorded
 	}
+	status, reason := verdict(fin)
+	// Usage first: it is idempotent per job, so a crash before the finish commit loses nothing.
+	if fin.Usage.Reported() {
+		invalid, err := s.recordUsage(ctx, job, fin)
+		if err != nil {
+			return errRetry
+		}
+		if invalid != nil {
+			status, reason = proto.StatusFailed, "invalid usage report: "+invalid.Error()
+		}
+	}
+	// Whatever the agent was given stops working now, whichever way the job ended.
+	if issuer := s.m.cfg.AgentTokens; issuer != nil {
+		if err := issuer.RevokeForJob(ctx, job.ID); err != nil {
+			s.m.log.Warn("revoking the agent's identity", "job", uuidString(job.ID), "err", err)
+		}
+	}
+	if err := s.m.tx(ctx, func(q *db.Queries) error { return s.closeJob(ctx, q, job.ID, fin, status, reason) }); err != nil {
+		return errRetry
+	}
+	return nil
+}
 
-	status, reason := fin.Status, fin.StopReason
+// verdict is the status the job ends with. A runner's word is taken for failure and stops,
+// but success has to come with a usage report, and a status nobody knows is a failure.
+func verdict(fin proto.Finish) (status, reason string) {
+	status, reason = fin.Status, fin.StopReason
 	switch status {
 	case proto.StatusDone, proto.StatusFailed, proto.StatusStopped:
 	default:
-		status, reason = proto.StatusFailed, fmt.Sprintf("runner reported unknown status %q", fin.Status)
+		return proto.StatusFailed, fmt.Sprintf("runner reported unknown status %q", fin.Status)
 	}
 	if status == proto.StatusDone && !fin.Usage.Reported() {
-		status, reason = proto.StatusFailed, "done without a usage report"
+		return proto.StatusFailed, "done without a usage report"
 	}
+	return status, reason
+}
 
-	// Usage first: it is idempotent per job, so a crash before the finish commit loses nothing.
-	if fin.Usage.Reported() {
-		u := fin.Usage
-		backend := u.Backend
-		if backend == "" {
-			backend = job.Backend
-		}
-		in := process.UsageInput{
-			JobID: jobID, Phase: job.Phase, Backend: backend, Model: u.Model,
-			InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens,
-			CostUSD: u.CostUSD, CostEstimated: u.CostEstimated, DurationMS: u.DurationMS,
-			IdempotencyKey: "job:" + fin.JobID,
-		}
-		if !u.StartedAt.IsZero() {
-			in.StartedAt = ts(u.StartedAt)
-		}
-		if !u.FinishedAt.IsZero() {
-			in.FinishedAt = ts(u.FinishedAt)
-		}
-		if _, err := s.m.process.RecordUsage(ctx, job.TaskID, in, process.Actor{Kind: process.ActorRunner, ID: s.tokenID}); err != nil {
-			if errors.Is(err, process.ErrInvalidUsage) {
-				status, reason = proto.StatusFailed, "invalid usage report: "+err.Error()
-			} else {
-				return errRetry
-			}
-		}
+// recordUsage stores what the job spent. A report the core refuses comes back as invalid,
+// which fails the job; any other error is the database's and the runner resends.
+func (s *session) recordUsage(ctx context.Context, job db.Job, fin proto.Finish) (invalid, err error) {
+	u := fin.Usage
+	backend := u.Backend
+	if backend == "" {
+		backend = job.Backend
 	}
+	in := process.UsageInput{
+		JobID: job.ID, Phase: job.Phase, Backend: backend, Model: u.Model,
+		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens,
+		CostUSD: u.CostUSD, CostEstimated: u.CostEstimated, DurationMS: u.DurationMS,
+		IdempotencyKey: "job:" + fin.JobID,
+	}
+	if !u.StartedAt.IsZero() {
+		in.StartedAt = ts(u.StartedAt)
+	}
+	if !u.FinishedAt.IsZero() {
+		in.FinishedAt = ts(u.FinishedAt)
+	}
+	_, err = s.m.process.RecordUsage(ctx, job.TaskID, in, process.Actor{Kind: process.ActorRunner, ID: s.tokenID})
+	if errors.Is(err, process.ErrInvalidUsage) {
+		return err, nil
+	}
+	return nil, err
+}
 
+// closeJob records the job's end inside q's transaction, unless it already ended or was
+// taken from this runner while it worked.
+func (s *session) closeJob(ctx context.Context, q *db.Queries, jobID pgtype.UUID, fin proto.Finish, status, reason string) error {
+	j, err := q.GetJobForUpdate(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if terminal(j.Status) || j.RunnerID != s.runnerID {
+		return nil
+	}
 	receipt, _ := json.Marshal(fin)
 	var stop *string
 	if reason != "" {
 		stop = &reason
 	}
-	// Whatever the agent was given stops working now, whichever way the job ended.
-	if issuer := s.m.cfg.AgentTokens; issuer != nil {
-		if err := issuer.RevokeForJob(ctx, jobID); err != nil {
-			s.m.log.Warn("revoking the agent's identity", "job", uuidString(jobID), "err", err)
+	if err := q.FinishJob(ctx, db.FinishJobParams{ID: jobID, Status: status, Receipt: receipt, StopReason: stop}); err != nil {
+		return err
+	}
+	if err := q.InsertReceipt(ctx, db.InsertReceiptParams{Source: "runner", SubjectKind: "job", SubjectID: jobID, Status: status, Payload: receipt}); err != nil {
+		return err
+	}
+	if status == proto.StatusDone {
+		if err := recordWork(ctx, q, j, fin); err != nil {
+			return err
 		}
 	}
-	err = s.m.tx(ctx, func(q *db.Queries) error {
-		j, err := q.GetJobForUpdate(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		if terminal(j.Status) || j.RunnerID != s.runnerID {
-			return nil
-		}
-		if err := q.FinishJob(ctx, db.FinishJobParams{ID: jobID, Status: status, Receipt: receipt, StopReason: stop}); err != nil {
-			return err
-		}
-		if err := q.InsertReceipt(ctx, db.InsertReceiptParams{Source: "runner", SubjectKind: "job", SubjectID: jobID, Status: status, Payload: receipt}); err != nil {
-			return err
-		}
-		// A finished job leaves the document its role produces; the phase gate approves it.
-		if status == proto.StatusDone {
-			content := artifactContent(j.Role, fin)
-			typ := process.ArtifactTypeFor(j.Role)
-			a, err := q.CreateArtifact(ctx, db.CreateArtifactParams{TaskID: j.TaskID, Phase: j.Phase, Type: typ, Content: &content})
-			if err != nil {
-				return err
-			}
-			if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
-				return err
-			}
-			if fin.Digest != nil {
-				if err := emit(ctx, q, "job.digest", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID), "phase": j.Phase, "role": j.Role, "digest": fin.Digest}); err != nil {
-					return err
-				}
-			} else if err := emit(ctx, q, "job.digest_missing", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID)}); err != nil {
-				return err
-			}
-			if err := refreshWorkingState(ctx, q, j.TaskID); err != nil {
-				return err
-			}
-		}
-		j.Status = status
-		return s.m.emitJob(ctx, q, "job.finished", j, map[string]any{"stop_reason": reason, "summary": fin.Summary})
-	})
+	j.Status = status
+	return s.m.emitJob(ctx, q, "job.finished", j, map[string]any{"stop_reason": reason, "summary": fin.Summary})
+}
+
+// recordWork leaves the document the job's role produces, for the phase gate to approve, and
+// says whether the agent left a digest of what it did.
+func recordWork(ctx context.Context, q *db.Queries, j db.Job, fin proto.Finish) error {
+	content := artifactContent(j.Role, fin)
+	typ := process.ArtifactTypeFor(j.Role)
+	a, err := q.CreateArtifact(ctx, db.CreateArtifactParams{TaskID: j.TaskID, Phase: j.Phase, Type: typ, Content: &content})
 	if err != nil {
-		return errRetry
+		return err
 	}
-	return nil
+	if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
+		return err
+	}
+	if fin.Digest != nil {
+		if err := emit(ctx, q, "job.digest", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID), "phase": j.Phase, "role": j.Role, "digest": fin.Digest}); err != nil {
+			return err
+		}
+	} else if err := emit(ctx, q, "job.digest_missing", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID)}); err != nil {
+		return err
+	}
+	return refreshWorkingState(ctx, q, j.TaskID)
 }
 
 // artifactContent is the agent's final answer, plus the branch and commits for code work.
