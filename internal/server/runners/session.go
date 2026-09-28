@@ -180,70 +180,69 @@ func (s *session) readLoop() {
 			s.sendError("bad_message", err)
 			continue
 		}
-		switch env.Type {
-		case proto.TypeHeartbeat:
-			var hb proto.Heartbeat
-			if err := env.Into(&hb); err != nil {
-				s.sendError("bad_heartbeat", err)
-				continue
-			}
-			s.heartbeat(hb)
-		case proto.TypeLeaseRequest:
-			var lr proto.LeaseRequest
-			_ = env.Into(&lr)
-			if err := s.dispatch(s.ctx, lr.Slots, true); err != nil {
-				s.m.log.Warn("dispatch", "runner", s.name, "err", err)
-			}
-		case proto.TypeEvents:
-			var ev proto.Events
-			if err := env.Into(&ev); err != nil {
-				s.sendError("bad_events", err)
-				s.ack(env.Seq)
-				continue
-			}
-			if err := s.events(ev); err != nil {
-				s.sendError("events_rejected", err)
-				if errors.Is(err, errRetry) {
-					continue // not acked: the runner resends
-				}
-			}
-			s.ack(env.Seq)
-		case proto.TypeFinish:
-			var fin proto.Finish
-			if err := env.Into(&fin); err != nil {
-				s.sendError("bad_finish", err)
-				s.ack(env.Seq)
-				continue
-			}
-			if err := s.finish(fin); err != nil {
-				s.sendError("finish_rejected", err)
-				if errors.Is(err, errRetry) {
-					continue
-				}
-			}
-			s.ack(env.Seq)
+		s.handle(env)
+	}
+}
+
+// handle answers one message from the runner.
+func (s *session) handle(env proto.RawEnvelope) {
+	switch env.Type {
+	case proto.TypeHeartbeat:
+		var hb proto.Heartbeat
+		if err := env.Into(&hb); err != nil {
+			s.sendError("bad_heartbeat", err)
+			return
+		}
+		s.heartbeat(hb)
+	case proto.TypeLeaseRequest:
+		var lr proto.LeaseRequest
+		_ = env.Into(&lr)
+		if err := s.dispatch(s.ctx, lr.Slots, true); err != nil {
+			s.m.log.Warn("dispatch", "runner", s.name, "err", err)
+		}
+	case proto.TypeEvents:
+		report(s, env, "events", s.events)
+	case proto.TypeFinish:
+		if report(s, env, "finish", s.finish) {
 			if err := s.dispatch(s.ctx, 0, false); err != nil {
 				s.m.log.Warn("dispatch after finish", "runner", s.name, "err", err)
 			}
-		case proto.TypeTurnEnding:
-			var te proto.TurnEnding
-			if err := env.Into(&te); err != nil {
-				s.sendError("bad_turn_ending", err)
-				s.ack(env.Seq)
-				continue
-			}
+		}
+	case proto.TypeTurnEnding:
+		report(s, env, "turn_ending", func(te proto.TurnEnding) error {
 			s.turnEnding(te)
-			s.ack(env.Seq)
-		case proto.TypeLoginPrompt:
-			var lp proto.LoginPrompt
-			if err := env.Into(&lp); err == nil {
-				payload, _ := json.Marshal(lp)
-				s.m.hub.Publish(events.Event{Type: "runner.login_prompt", Aggregate: "runner", AggregateID: uuidString(s.runnerID), Payload: payload, CreatedAt: time.Now()})
-			}
-		default:
-			s.sendError("unknown_type", fmt.Errorf("unknown message type %q", env.Type))
+			return nil
+		})
+	case proto.TypeLoginPrompt:
+		var lp proto.LoginPrompt
+		if err := env.Into(&lp); err == nil {
+			payload, _ := json.Marshal(lp)
+			s.m.hub.Publish(events.Event{Type: "runner.login_prompt", Aggregate: "runner", AggregateID: uuidString(s.runnerID), Payload: payload, CreatedAt: time.Now()})
+		}
+	default:
+		s.sendError("unknown_type", fmt.Errorf("unknown message type %q", env.Type))
+	}
+}
+
+// report handles a message the runner keeps until it is acked. An unreadable one is acked
+// with an error, because resending it will not make it readable; so is one handle refuses,
+// unless the failure was ours (errRetry) and a resend may succeed. It says whether handle
+// ran and its outcome was acked.
+func report[T any](s *session, env proto.RawEnvelope, name string, handle func(T) error) bool {
+	var v T
+	if err := env.Into(&v); err != nil {
+		s.sendError("bad_"+name, err)
+		s.ack(env.Seq)
+		return false
+	}
+	if err := handle(v); err != nil {
+		s.sendError(name+"_rejected", err)
+		if errors.Is(err, errRetry) {
+			return false // not acked: the runner resends
 		}
 	}
+	s.ack(env.Seq)
+	return true
 }
 
 // errRetry marks a transient server failure: the message is not acked so the runner resends.
