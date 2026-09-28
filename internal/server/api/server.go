@@ -79,9 +79,11 @@ func (s *Server) Router() http.Handler {
 	r.Use(auth.Authenticate(s.Tokens, s.DevAuth, s.Log))
 	r.Use(auth.AuditWith(db.New(s.Pool), s.Log))
 	r.Route("/auth", func(r chi.Router) {
+		r.Get("/config", s.authConfig)
 		if s.OIDC != nil {
 			r.Get("/login", s.OIDC.Login)
 			r.Get("/callback", s.OIDC.Callback)
+			r.Post("/token", s.OIDC.Token)
 		} else {
 			r.Get("/login", func(w http.ResponseWriter, _ *http.Request) {
 				writeError(w, http.StatusNotImplemented, "OIDC is not configured (GATOR_OIDC_*)", "oidc_disabled")
@@ -100,6 +102,15 @@ func (s *Server) Router() http.Handler {
 }
 
 // --- meta ---
+
+// authConfig tells a client how it can sign in before it has any token.
+func (s *Server) authConfig(w http.ResponseWriter, _ *http.Request) {
+	resp := map[string]any{"oidc": s.OIDC != nil}
+	if s.OIDC != nil {
+		resp["provider"] = s.OIDC.ProviderName()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
 func (s *Server) Healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, gen.Status{Status: "ok"})

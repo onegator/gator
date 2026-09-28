@@ -46,8 +46,14 @@ first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is writt
 
 ## Identity and access
 
-- Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`); the callback sets an httpOnly
-  `gator_session` cookie. The first user to log in becomes workspace admin.
+- Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`, e.g. Google) with PKCE and a
+  nonce; the callback sets an httpOnly `gator_session` cookie. An account is created on first
+  sign-in. `GATOR_ADMIN_EMAILS` names the workspace admins; unset, the first person in is admin.
+  `GATOR_OIDC_ALLOWED_DOMAINS` limits who may create an account.
+- Native login (Gator.app, CLI): `GET /auth/login?redirect_uri=…&state=…&code_challenge=…&code_challenge_method=S256`
+  runs the same flow and sends the browser back to `gator://auth/…` or a loopback address with a
+  one-time code; `POST /auth/token {code, code_verifier, redirect_uri, client_name}` trades it for
+  a user token that lives 90 days. `GET /auth/config` says whether OIDC is on and the provider's name.
 - Native clients and automation: `Authorization: Bearer gtr_<kind>_…`. Mint with `POST /api/v1/tokens`
   (user tokens for yourself; runner and plugin tokens require workspace admin). Only a SHA-256 hash is stored.
 - Roles: workspace `admin` | `member`; per project `admin` | `member` | `viewer`. Runners act as members

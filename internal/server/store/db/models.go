@@ -233,6 +233,15 @@ type KnowledgePack struct {
 	FetchedAt pgtype.Timestamptz `json:"fetched_at"`
 }
 
+type LoginCode struct {
+	Hash          []byte             `json:"hash"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	CodeChallenge string             `json:"code_challenge"`
+	RedirectUri   string             `json:"redirect_uri"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type Membership struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	UserID    pgtype.UUID `json:"user_id"`
