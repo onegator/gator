@@ -399,23 +399,34 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 	return s.send(proto.TypeLease, proto.Lease{Jobs: out})
 }
 
-func (s *session) events(ev proto.Events) error {
-	ctx := s.ctx
-	jobID, ok := parseUUID(ev.JobID)
+// ownJob loads the job a runner reports on, refusing one it does not hold. A database
+// failure is errRetry: the runner resends.
+func (s *session) ownJob(ctx context.Context, q *db.Queries, id string) (db.Job, error) {
+	jobID, ok := parseUUID(id)
 	if !ok {
-		return fmt.Errorf("bad job id %q", ev.JobID)
+		return db.Job{}, fmt.Errorf("bad job id %q", id)
 	}
-	q := db.New(s.m.pool)
 	job, err := q.GetJob(ctx, jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("unknown job %s", ev.JobID)
+		return db.Job{}, fmt.Errorf("unknown job %s", id)
 	}
 	if err != nil {
-		return errRetry
+		return db.Job{}, errRetry
 	}
 	if job.RunnerID != s.runnerID {
-		return fmt.Errorf("job %s is not leased to this runner", ev.JobID)
+		return db.Job{}, fmt.Errorf("job %s is not leased to this runner", id)
 	}
+	return job, nil
+}
+
+func (s *session) events(ev proto.Events) error {
+	ctx := s.ctx
+	q := db.New(s.m.pool)
+	job, err := s.ownJob(ctx, q, ev.JobID)
+	if err != nil {
+		return err
+	}
+	jobID := job.ID
 	prev := job.Status
 	if _, err := q.MarkJobActive(ctx, db.MarkJobActiveParams{ID: jobID, RunnerID: s.runnerID}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -454,21 +465,11 @@ func (s *session) events(ev proto.Events) error {
 
 func (s *session) finish(fin proto.Finish) error {
 	ctx := s.ctx
-	jobID, ok := parseUUID(fin.JobID)
-	if !ok {
-		return fmt.Errorf("bad job id %q", fin.JobID)
-	}
-	q := db.New(s.m.pool)
-	job, err := q.GetJob(ctx, jobID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("unknown job %s", fin.JobID)
-	}
+	job, err := s.ownJob(ctx, db.New(s.m.pool), fin.JobID)
 	if err != nil {
-		return errRetry
+		return err
 	}
-	if job.RunnerID != s.runnerID {
-		return fmt.Errorf("job %s is not leased to this runner", fin.JobID)
-	}
+	jobID := job.ID
 	if terminal(job.Status) {
 		return nil // a resend after reconnect; already recorded
 	}
