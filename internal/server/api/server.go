@@ -506,7 +506,9 @@ type wsSubscribe struct {
 
 // websocket streams hub events. The client sends {"subscribe":["inbox","task:<id>"]} first
 // and may send it again to change topics. "project:<id>" carries everything that happens in
-// one project, so it is offered only to those who may read that project.
+// one project, so it is offered only to those who may read that project. Whatever the topic,
+// an event that belongs to a project reaches the caller only if they may read that project
+// (see eventFilter).
 func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 	if err != nil {
@@ -530,6 +532,8 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 	ch, stop := s.Hub.Subscribe(sub.Subscribe...)
 	defer stop()
+	p, _ := auth.FromContext(ctx)
+	visible := newEventFilter(s, p)
 
 	go func() {
 		for {
@@ -543,6 +547,9 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case e := <-ch:
+			if !visible.allow(ctx, e) {
+				continue
+			}
 			b, _ := json.Marshal(e)
 			if err := c.Write(ctx, websocket.MessageText, b); err != nil {
 				return

@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const aggregateProject = `-- name: AggregateProject :one
+SELECT COALESCE(
+    (SELECT t.project_id FROM tasks t WHERE $1::text = 'task' AND t.id = $2::uuid),
+    (SELECT j.project_id FROM jobs j WHERE $1::text = 'job' AND j.id = $2::uuid),
+    (SELECT r.project_id FROM releases r WHERE $1::text = 'release' AND r.id = $2::uuid),
+    (SELECT i.project_id FROM incidents i WHERE $1::text = 'incident' AND i.id = $2::uuid),
+    (SELECT p.id FROM projects p WHERE $1::text = 'project' AND p.id = $2::uuid)
+)::uuid AS project_id
+`
+
+type AggregateProjectParams struct {
+	Aggregate string      `json:"aggregate"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+// The project an event's aggregate belongs to, for deciding who may see the event. NULL: the
+// aggregate belongs to no project (a runner) or no longer exists.
+func (q *Queries) AggregateProject(ctx context.Context, arg AggregateProjectParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, aggregateProject, arg.Aggregate, arg.ID)
+	var project_id pgtype.UUID
+	err := row.Scan(&project_id)
+	return project_id, err
+}
+
 const insertEvent = `-- name: InsertEvent :one
 INSERT INTO events (type, aggregate, aggregate_id, payload)
 VALUES ($1, $2, $3, $4)
