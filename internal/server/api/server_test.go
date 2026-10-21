@@ -223,9 +223,6 @@ func TestRBACOverHTTP(t *testing.T) {
 	// stranger: no membership
 	strangerID, stranger := h.login("member")
 	h.token = stranger
-	if code := h.do("POST", "/projects", gen.NewProject{Slug: "nope", Name: "n"}, nil); code != 403 {
-		t.Fatalf("member creating project: %d", code)
-	}
 	if code := h.do("GET", "/tasks/"+task.Id.String(), nil, nil); code != 403 {
 		t.Fatalf("stranger reading task: %d", code)
 	}

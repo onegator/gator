@@ -99,12 +99,15 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Project" } } } } }
     post:
       operationId: createProject
+      description: "Any signed-in person may create a project; they become its admin. A repository given here becomes the primary one, over any the preset carries."
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/NewProject" } } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
         "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /projects/{projectId}:
     get:
       operationId: getProject
@@ -124,7 +127,7 @@ paths:
   /projects/{projectId}/archive:
     post:
       operationId: archiveProject
-      description: "Hides a project without losing anything: its tasks, receipts and metrics stay readable, its plugins stop. Send archived=false to bring it back."
+      description: "Hides a project without losing anything: its tasks, receipts and metrics stay readable, its plugins stop. Send archived=false to bring it back. Requires project admin."
       parameters: [ { $ref: "#/components/parameters/projectId" } ]
       requestBody:
         required: true
@@ -148,6 +151,16 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ProjectRepo" } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectRepo" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/repos/{repoName}:
+    delete:
+      operationId: deleteProjectRepo
+      description: Forget a repository. The primary one can go only when it is the last, or once another is made primary. Requires project admin.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { name: repoName, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "204": { description: removed }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/tasks:
@@ -863,7 +876,7 @@ components:
       required: [name, url]
       properties:
         name: { type: string }
-        url: { type: string, description: "https://, ssh (git@host:path), file:// or an absolute path" }
+        url: { type: string, description: "https://, ssh (git@host:path), file://, an absolute path, or GitHub shorthand owner/repo" }
         defaultBranch: { type: string }
         primary: { type: boolean }
     NewJob:
@@ -1134,6 +1147,8 @@ components:
         name: { type: string }
         tags: { type: array, items: { type: string } }
         preset: { type: string, description: "name of a project preset to start from; its vision, principles, process, packs and repository are copied, never shared" }
+        repoUrl: { type: string, description: "the project's repository; same forms as ProjectRepo.url" }
+        defaultBranch: { type: string, description: "branch work starts from; main when omitted" }
     # A saved starting point for a new project. Named "preset" because "template" already
     # means the process template per kind of task, and two meanings for one word in an API is
     # a bug waiting to be written.
@@ -1178,6 +1193,7 @@ components:
         tags: { type: array, items: { type: string } }
         createdAt: { type: string, format: date-time }
         archivedAt: { type: string, format: date-time, description: "set while the project is archived" }
+        role: { type: string, enum: [admin, member, viewer], description: "the caller's role in the project; absent for runners and plugins" }
     NewDevice:
       type: object
       required: [token, platform]

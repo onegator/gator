@@ -13,3 +13,9 @@ UPDATE project_repos SET is_primary = false WHERE project_id = $1 AND name <> $2
 
 -- name: GetPrimaryRepo :one
 SELECT * FROM project_repos WHERE project_id = $1 ORDER BY is_primary DESC, name LIMIT 1;
+
+-- name: GetProjectRepo :one
+SELECT * FROM project_repos WHERE project_id = $1 AND name = $2;
+
+-- name: DeleteProjectRepo :exec
+DELETE FROM project_repos WHERE project_id = $1 AND name = $2;

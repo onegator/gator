@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -157,13 +160,55 @@ func (s *Server) ListProjects(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	roles, err := s.userRoles(r, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	out := make([]gen.Project, 0, len(rows))
 	for _, pr := range rows {
 		if visible == nil || visible[pr.ID.Bytes] {
-			out = append(out, toProject(pr))
+			out = append(out, withRole(toProject(pr), roles(pr.ID)))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// userRoles answers the caller's role per project from one read of their memberships.
+// Runners and plugins have no role worth showing; they get none.
+func (s *Server) userRoles(r *http.Request, p auth.Principal) (func(pgtype.UUID) string, error) {
+	switch {
+	case p.Kind != auth.KindUser:
+		return func(pgtype.UUID) string { return "" }, nil
+	case p.IsWorkspaceAdmin():
+		return func(pgtype.UUID) string { return "admin" }, nil
+	}
+	ms, err := db.New(s.Pool).ListMembershipsForUser(r.Context(), p.UserID)
+	if err != nil {
+		return nil, err
+	}
+	byProject := make(map[[16]byte]string, len(ms))
+	for _, m := range ms {
+		byProject[m.ProjectID.Bytes] = m.Role
+	}
+	return func(id pgtype.UUID) string { return byProject[id.Bytes] }, nil
+}
+
+// roleIn is userRoles for a single project.
+func (s *Server) roleIn(r *http.Request, p auth.Principal, project pgtype.UUID) string {
+	roles, err := s.userRoles(r, p)
+	if err != nil {
+		return ""
+	}
+	return roles(project)
+}
+
+func withRole(p gen.Project, role string) gen.Project {
+	if role != "" {
+		r := gen.ProjectRole(role)
+		p.Role = &r
+	}
+	return p
 }
 
 func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
@@ -171,8 +216,9 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !p.IsWorkspaceAdmin() {
-		writeError(w, http.StatusForbidden, "creating projects requires workspace admin", "forbidden")
+	// Anyone signed in may start a project and runs it; a runner or a plugin may not.
+	if p.Kind != auth.KindUser {
+		writeError(w, http.StatusForbidden, "only a person can create a project", "forbidden")
 		return
 	}
 	var in gen.NewProject
@@ -183,11 +229,25 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "slug and name are required", "invalid")
 		return
 	}
+	var repo *repoInput
+	if in.RepoUrl != nil && strings.TrimSpace(*in.RepoUrl) != "" {
+		ri, err := parseRepo(in.Slug, *in.RepoUrl, in.DefaultBranch)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error(), "invalid")
+			return
+		}
+		repo = &ri
+	}
 	tags := []string{}
 	if in.Tags != nil {
 		tags = *in.Tags
 	}
 	pr, err := db.New(s.Pool).CreateProject(r.Context(), db.CreateProjectParams{Slug: in.Slug, Name: in.Name, Tags: tags, ProcessConfig: []byte("{}")})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		writeError(w, http.StatusConflict, fmt.Sprintf("a project called %q already exists; pick another short name", in.Slug), "conflict")
+		return
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -207,11 +267,19 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 			pr = updated
 		}
 	}
-	writeJSON(w, http.StatusCreated, toProject(pr))
+	// Given after the preset, so the repository named here wins over the preset's.
+	if repo != nil {
+		if _, err := s.putRepo(r.Context(), pr.ID, *repo, true); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, withRole(toProject(pr), "admin"))
 }
 
 func (s *Server) GetProject(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
-	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+	caller, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer)
+	if !ok {
 		return
 	}
 	p, err := db.New(s.Pool).GetProject(r.Context(), fromUUID(projectId))
@@ -219,7 +287,7 @@ func (s *Server) GetProject(w http.ResponseWriter, r *http.Request, projectId ge
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toProject(p))
+	writeJSON(w, http.StatusOK, withRole(toProject(p), s.roleIn(r, caller, p.ID)))
 }
 
 // --- tasks ---

@@ -56,7 +56,10 @@ first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is writt
   a user token that lives 90 days. `GET /auth/config` says whether OIDC is on and the provider's name.
 - Native clients and automation: `Authorization: Bearer gtr_<kind>_…`. Mint with `POST /api/v1/tokens`
   (user tokens for yourself; runner and plugin tokens require workspace admin). Only a SHA-256 hash is stored.
-- Roles: workspace `admin` | `member`; per project `admin` | `member` | `viewer`. Runners act as members
+- Roles: workspace `admin` | `member`; per project `admin` | `member` | `viewer`. Any signed-in
+  person may create a project and becomes its admin; a project admin manages its repositories and
+  may archive it, while deleting an (empty) project stays with workspace admins. Each project in
+  `GET /projects` carries the caller's `role`. Runners act as members
   everywhere but cannot approve; plugin tokens are members of their own project only.
 - Every non-GET request is written to `audit_log` with actor, route pattern and status.
 - Local development only: `GATOR_DEV_AUTH=1` trusts `X-Gator-User: <user uuid>`.
