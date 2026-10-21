@@ -191,21 +191,6 @@ func (s *Server) RevokeToken(w http.ResponseWriter, r *http.Request, tokenId ope
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) SetMember(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
-	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleAdmin); !ok {
-		return
-	}
-	var in gen.Member
-	if !decode(w, r, &in) {
-		return
-	}
-	if err := db.New(s.Pool).UpsertMembership(r.Context(), db.UpsertMembershipParams{ProjectID: fromUUID(projectId), UserID: fromUUID(in.UserId), Role: string(in.Role)}); err != nil {
-		s.fail(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func toToken(t db.ApiToken) gen.Token {
 	out := gen.Token{Id: toUUID(t.ID), Kind: t.Kind, Scope: t.Scope, Name: t.Name, ProjectId: toUUIDPtr(t.ProjectID), CreatedAt: t.CreatedAt.Time}
 	if t.ExpiresAt.Valid {

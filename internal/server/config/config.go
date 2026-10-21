@@ -22,6 +22,9 @@ type Config struct {
 	// TrustedProxies may name the client in X-Forwarded-For (GATOR_TRUSTED_PROXIES, a comma-
 	// separated list of addresses and CIDRs, default loopback). Nobody else can.
 	TrustedProxies limits.Proxies
+	// PublicURL is the https address people reach the server at (GATOR_PUBLIC_URL), for the
+	// invitation links they pass on. Empty: the address the inviter used.
+	PublicURL string
 }
 
 // DefaultTrustedProxies is loopback: Caddy and tailscale serve both proxy from this host.
@@ -36,6 +39,7 @@ func Load() (Config, error) {
 		DevAuth:            os.Getenv("GATOR_DEV_AUTH") == "1",
 		RateLimitPerSecond: envFloat("GATOR_RATE_LIMIT_RPS", 20),
 		RateLimitBurst:     EnvInt("GATOR_RATE_LIMIT_BURST", 40),
+		PublicURL:          os.Getenv("GATOR_PUBLIC_URL"),
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("GATOR_DATABASE_URL is required")

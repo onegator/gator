@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2"
 
+	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -307,10 +308,20 @@ func (o *OIDC) upsertUser(ctx context.Context, email, name, subject string) (db.
 	if err != nil {
 		return db.User{}, err
 	}
-	return grantAdmin(ctx, q, o.cfg.AdminEmails, u)
+	if u, err = grantAdmin(ctx, q, o.cfg.AdminEmails, u); err != nil {
+		return db.User{}, err
+	}
+	// Signing in with an invited address is the acceptance: the person lands in the projects
+	// they were invited to without having to find the link again.
+	if _, err := invites.AcceptAllFor(ctx, o.pool, u); err != nil {
+		return db.User{}, err
+	}
+	return u, nil
 }
 
-// mayJoin applies AllowedDomains to people the server has not seen yet.
+// mayJoin applies AllowedDomains to people the server has not seen yet. Someone a project
+// admin invited is let in whatever their domain: the invitation is the vouching the domain
+// list stands in for.
 func (o *OIDC) mayJoin(ctx context.Context, q *db.Queries, email string) bool {
 	if len(o.cfg.AllowedDomains) == 0 {
 		return true
@@ -319,8 +330,11 @@ func (o *OIDC) mayJoin(ctx context.Context, q *db.Queries, email string) bool {
 	if at >= 0 && containsFold(o.cfg.AllowedDomains, email[at+1:]) {
 		return true
 	}
-	_, err := q.GetUserByEmail(ctx, email)
-	return err == nil
+	if _, err := q.GetUserByEmail(ctx, email); err == nil {
+		return true
+	}
+	invited, err := invites.Waiting(ctx, q, email)
+	return err == nil && invited
 }
 
 // grantAdmin makes the named admins admins or, with none named, the first person in.
