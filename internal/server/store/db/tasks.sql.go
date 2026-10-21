@@ -472,6 +472,58 @@ func (q *Queries) LastRollbackReason(ctx context.Context, arg LastRollbackReason
 	return reason, err
 }
 
+const listActiveJobsForTask = `-- name: ListActiveJobsForTask :many
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at
+`
+
+func (q *Queries) ListActiveJobsForTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
+	rows, err := q.db.Query(ctx, listActiveJobsForTask, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.ProjectID,
+			&i.Phase,
+			&i.Role,
+			&i.Backend,
+			&i.Instruction,
+			&i.Status,
+			&i.RunnerID,
+			&i.Attempts,
+			&i.MaxAttempts,
+			&i.LeaseExpiresAt,
+			&i.LastEventAt,
+			&i.Bounds,
+			&i.Receipt,
+			&i.StopReason,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.UpdatedAt,
+			&i.Model,
+			&i.UnassignableSince,
+			&i.ContextBytes,
+			&i.ContextDocs,
+			&i.Objections,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listArtifacts = `-- name: ListArtifacts :many
 SELECT id, task_id, phase, type, version, content, url, approved_at, approved_by, created_at FROM artifacts WHERE task_id = $1 ORDER BY phase, type, version
 `
@@ -968,6 +1020,43 @@ func (q *Queries) OpenTasksByTitle(ctx context.Context, arg OpenTasksByTitlePara
 	return items, nil
 }
 
+const reopenTask = `-- name: ReopenTask :one
+UPDATE tasks SET closed_at = NULL, phase_entered_at = now(), updated_at = now()
+WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by
+`
+
+// Reopened work enters its phase afresh: the inbox's clock restarts and the autopilot sees an
+// entry that has no job yet.
+func (q *Queries) ReopenTask(ctx context.Context, id pgtype.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, reopenTask, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Phase,
+		&i.Urgency,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.RequirementsChanged,
+		&i.BlockedReason,
+		&i.SourceTaskID,
+		&i.ExternalRefs,
+		&i.PhaseEnteredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ClosedAt,
+		&i.Description,
+		&i.ComponentID,
+		&i.Origin,
+		&i.OriginSource,
+		&i.AdmittedAt,
+		&i.AdmittedBy,
+	)
+	return i, err
+}
+
 const setGateBlocked = `-- name: SetGateBlocked :exec
 UPDATE gates SET blocked_reason = $3, blocked_by = $4, updated_at = now() WHERE task_id = $1 AND phase = $2
 `
@@ -1088,6 +1177,75 @@ type SetTaskRequirementsChangedParams struct {
 func (q *Queries) SetTaskRequirementsChanged(ctx context.Context, arg SetTaskRequirementsChangedParams) error {
 	_, err := q.db.Exec(ctx, setTaskRequirementsChanged, arg.ID, arg.RequirementsChanged)
 	return err
+}
+
+const taskWorkedOn = `-- name: TaskWorkedOn :one
+SELECT (EXISTS (SELECT 1 FROM jobs j WHERE j.task_id = $1)
+    OR EXISTS (SELECT 1 FROM artifacts a WHERE a.task_id = $1)
+    OR EXISTS (SELECT 1 FROM phase_transitions p WHERE p.task_id = $1 AND p.kind NOT IN ('create', 'edit')))::boolean AS worked_on
+`
+
+// Whether anything beyond creating (and admitting, and editing) the task has happened: a job,
+// an artifact, a move. The answer decides whether its kind may still change.
+func (q *Queries) TaskWorkedOn(ctx context.Context, taskID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, taskWorkedOn, taskID)
+	var worked_on bool
+	err := row.Scan(&worked_on)
+	return worked_on, err
+}
+
+const updateTaskFields = `-- name: UpdateTaskFields :one
+UPDATE tasks SET title = $2, description = $3, urgency = $4, kind = $5, phase = $6,
+    phase_entered_at = CASE WHEN phase = $6 THEN phase_entered_at ELSE now() END, updated_at = now()
+WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by
+`
+
+type UpdateTaskFieldsParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Title       string      `json:"title"`
+	Description string      `json:"description"`
+	Urgency     int16       `json:"urgency"`
+	Kind        string      `json:"kind"`
+	Phase       string      `json:"phase"`
+}
+
+// What a person may say about a task after creating it. Kind and phase move together and only
+// before any work happened; see process.Edit.
+func (q *Queries) UpdateTaskFields(ctx context.Context, arg UpdateTaskFieldsParams) (Task, error) {
+	row := q.db.QueryRow(ctx, updateTaskFields,
+		arg.ID,
+		arg.Title,
+		arg.Description,
+		arg.Urgency,
+		arg.Kind,
+		arg.Phase,
+	)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Phase,
+		&i.Urgency,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.RequirementsChanged,
+		&i.BlockedReason,
+		&i.SourceTaskID,
+		&i.ExternalRefs,
+		&i.PhaseEnteredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ClosedAt,
+		&i.Description,
+		&i.ComponentID,
+		&i.Origin,
+		&i.OriginSource,
+		&i.AdmittedAt,
+		&i.AdmittedBy,
+	)
+	return i, err
 }
 
 const upsertGate = `-- name: UpsertGate :exec

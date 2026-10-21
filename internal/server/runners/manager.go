@@ -354,7 +354,9 @@ func (m *Manager) RunAutopilot(ctx context.Context) {
 			return
 		case e := <-ch:
 			switch e.Type {
-			case "task.created", "task.phase_changed", "gate.unblocked":
+			// A reopened task, or one whose kind changed before work began, has entered a
+			// phase afresh, just like one that moved.
+			case "task.created", "task.phase_changed", "gate.unblocked", "task.reopened", "task.updated":
 				id, ok := parseUUID(e.AggregateID)
 				if !ok {
 					continue
