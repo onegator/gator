@@ -30,12 +30,23 @@ import (
 var ErrNotConnectable = errors.New("plugin cannot be connected")
 
 // OAuthClient is the server's registration with a provider.
-type OAuthClient struct{ ID, Secret string }
+type OAuthClient struct {
+	ID, Secret string
+	// Scopes replace the manifest's when set: a server whose people are not admins of their
+	// Linear workspace, say, can ask for less and set webhooks up by hand.
+	Scopes []string
+}
 
-// OAuthClientFromEnv reads GATOR_<PROVIDER>_CLIENT_ID and GATOR_<PROVIDER>_CLIENT_SECRET.
+// OAuthClientFromEnv reads GATOR_<PROVIDER>_CLIENT_ID, _CLIENT_SECRET and, optionally, _SCOPES
+// (comma-separated).
 func OAuthClientFromEnv(provider string) (OAuthClient, bool) {
 	p := "GATOR_" + strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))
 	c := OAuthClient{ID: os.Getenv(p + "_CLIENT_ID"), Secret: os.Getenv(p + "_CLIENT_SECRET")}
+	for sc := range strings.SplitSeq(os.Getenv(p+"_SCOPES"), ",") {
+		if sc = strings.TrimSpace(sc); sc != "" {
+			c.Scopes = append(c.Scopes, sc)
+		}
+	}
 	return c, c.ID != "" && c.Secret != ""
 }
 
@@ -145,12 +156,16 @@ func (h *Host) Connect(ctx context.Context, projectID, userID pgtype.UUID, name,
 		return "", err
 	}
 	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier)}
-	if len(m.Connect.Scopes) > 0 {
+	scopes := m.Connect.Scopes
+	if client, _ := h.cfg.OAuthClient(m.Connect.ProviderName(name)); len(client.Scopes) > 0 {
+		scopes = client.Scopes
+	}
+	if len(scopes) > 0 {
 		sep := m.Connect.ScopeSeparator
 		if sep == "" {
 			sep = " "
 		}
-		opts = append(opts, oauth2.SetAuthURLParam("scope", strings.Join(m.Connect.Scopes, sep)))
+		opts = append(opts, oauth2.SetAuthURLParam("scope", strings.Join(scopes, sep)))
 	}
 	for k, v := range m.Connect.Params {
 		opts = append(opts, oauth2.SetAuthURLParam(k, v))
