@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -292,6 +293,60 @@ func (s *Service) Close(ctx context.Context, taskID pgtype.UUID, actor Actor, re
 	if err == nil {
 		s.campaignFollows(ctx, taskID)
 	}
+	return out, err
+}
+
+// Reopen opens a closed task again, in the phase it closed in. It is for the world changing its
+// mind: an issue reopened in the tracker it came from. Reopening an open task changes nothing.
+func (s *Service) Reopen(ctx context.Context, taskID pgtype.UUID, actor Actor, reason string) (db.Task, error) {
+	if reason == "" {
+		return db.Task{}, errors.New("reopening a task requires a reason")
+	}
+	var out db.Task
+	err := s.tx(ctx, func(q *db.Queries) error {
+		task, err := q.GetTaskForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if !task.ClosedAt.Valid {
+			out = task
+			return nil
+		}
+		if out, err = q.ReopenTask(ctx, taskID); err != nil {
+			return err
+		}
+		if err := s.record(ctx, q, taskID, &task.Phase, task.Phase, "reopen", actor, reason, nil); err != nil {
+			return err
+		}
+		return s.emit(ctx, q, "task.reopened", taskID, map[string]any{"phase": task.Phase, "reason": reason})
+	})
+	if err == nil {
+		s.campaignFollows(ctx, taskID)
+	}
+	return out, err
+}
+
+// Edit replaces a task's title or description, whichever is given. Nothing changes, and
+// nothing is announced, when they already read that way: a tracker repeats itself.
+func (s *Service) Edit(ctx context.Context, taskID pgtype.UUID, title, description *string) (db.Task, error) {
+	if title != nil && strings.TrimSpace(*title) == "" {
+		return db.Task{}, errors.New("a task needs a title")
+	}
+	var out db.Task
+	err := s.tx(ctx, func(q *db.Queries) error {
+		task, err := q.GetTaskForUpdate(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if (title == nil || *title == task.Title) && (description == nil || *description == task.Description) {
+			out = task
+			return nil
+		}
+		if out, err = q.EditTask(ctx, db.EditTaskParams{ID: taskID, Title: title, Description: description}); err != nil {
+			return err
+		}
+		return s.emit(ctx, q, "task.updated", taskID, map[string]any{"title": title != nil, "description": description != nil})
+	})
 	return out, err
 }
 

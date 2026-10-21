@@ -247,6 +247,48 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 	return i, err
 }
 
+const editTask = `-- name: EditTask :one
+UPDATE tasks SET title = COALESCE($1, title),
+    description = COALESCE($2, description), updated_at = now()
+WHERE id = $3 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by
+`
+
+type EditTaskParams struct {
+	Title       *string     `json:"title"`
+	Description *string     `json:"description"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) EditTask(ctx context.Context, arg EditTaskParams) (Task, error) {
+	row := q.db.QueryRow(ctx, editTask, arg.Title, arg.Description, arg.ID)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Phase,
+		&i.Urgency,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.RequirementsChanged,
+		&i.BlockedReason,
+		&i.SourceTaskID,
+		&i.ExternalRefs,
+		&i.PhaseEnteredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ClosedAt,
+		&i.Description,
+		&i.ComponentID,
+		&i.Origin,
+		&i.OriginSource,
+		&i.AdmittedAt,
+		&i.AdmittedBy,
+	)
+	return i, err
+}
+
 const findTaskByExternalRef = `-- name: FindTaskByExternalRef :one
 SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by FROM tasks
 WHERE project_id = $1 AND external_refs ->> $2::text = $3::text
@@ -966,6 +1008,42 @@ func (q *Queries) OpenTasksByTitle(ctx context.Context, arg OpenTasksByTitlePara
 		return nil, err
 	}
 	return items, nil
+}
+
+const reopenTask = `-- name: ReopenTask :one
+UPDATE tasks SET closed_at = NULL, phase_entered_at = now(), updated_at = now()
+WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by
+`
+
+// The task opens in the phase it closed in, with the clock for that phase started again.
+func (q *Queries) ReopenTask(ctx context.Context, id pgtype.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, reopenTask, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Kind,
+		&i.Title,
+		&i.Phase,
+		&i.Urgency,
+		&i.OwnerKind,
+		&i.OwnerID,
+		&i.RequirementsChanged,
+		&i.BlockedReason,
+		&i.SourceTaskID,
+		&i.ExternalRefs,
+		&i.PhaseEnteredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ClosedAt,
+		&i.Description,
+		&i.ComponentID,
+		&i.Origin,
+		&i.OriginSource,
+		&i.AdmittedAt,
+		&i.AdmittedBy,
+	)
+	return i, err
 }
 
 const setGateBlocked = `-- name: SetGateBlocked :exec

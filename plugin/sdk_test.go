@@ -45,3 +45,29 @@ func TestDispatchHooks(t *testing.T) {
 		t.Fatalf("unknown method: %v", err)
 	}
 }
+
+// A connection's token lands in a setting; a public one would put it in every API answer.
+func TestConnectStoresOnlyIntoSecrets(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"token":{"type":"string","x-secret":true},"repo":{"type":"string"}}}`)
+	ok := ConnectSpec{AuthorizeURL: "https://example.com/a", TokenURL: "https://example.com/t", Secret: "token"}
+	for name, c := range map[string]ConnectSpec{
+		"public token":    {AuthorizeURL: ok.AuthorizeURL, TokenURL: ok.TokenURL, Secret: "repo"},
+		"no token":        {AuthorizeURL: ok.AuthorizeURL, TokenURL: ok.TokenURL},
+		"plain http":      {AuthorizeURL: "http://example.com/a", TokenURL: ok.TokenURL, Secret: "token"},
+		"public webhook":  {AuthorizeURL: ok.AuthorizeURL, TokenURL: ok.TokenURL, Secret: "token", WebhookSecret: "repo"},
+		"odd provider":    {AuthorizeURL: ok.AuthorizeURL, TokenURL: ok.TokenURL, Secret: "token", Provider: "Git Hub"},
+		"unknown setting": {AuthorizeURL: ok.AuthorizeURL, TokenURL: ok.TokenURL, Secret: "nope"},
+	} {
+		m := Manifest{Name: "x", Version: "1", ConfigSchema: schema, Connect: &c}
+		if m.Validate() == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	m := Manifest{Name: "x", Version: "1", ConfigSchema: schema, Connect: &ok}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if ok.ProviderName("x") != "x" {
+		t.Fatal("the provider defaults to the plugin's name")
+	}
+}

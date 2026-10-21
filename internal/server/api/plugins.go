@@ -24,8 +24,10 @@ func (s *Server) pluginErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, plugins.ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
-	case errors.Is(err, plugins.ErrNoKeyring):
+	case errors.Is(err, plugins.ErrNoKeyring), errors.Is(err, plugins.ErrNotConnectable), errors.Is(err, plugins.ErrNotRunning):
 		writeError(w, http.StatusConflict, err.Error(), "conflict")
+	case errors.Is(err, plugins.ErrTimeout):
+		writeError(w, http.StatusGatewayTimeout, err.Error(), "timeout")
 	default:
 		s.fail(w, err)
 	}
@@ -47,6 +49,31 @@ func toInstalled(p db.Plugin) gen.InstalledPlugin {
 		Hooks: orEmpty(m.Hooks), Enabled: p.Enabled, Manifest: &raw}
 }
 
+func toConnection(c *plugins.ConnectView) *gen.PluginConnection {
+	if c == nil {
+		return nil
+	}
+	return &gen.PluginConnection{Title: c.Title, Available: c.Available, Connected: c.Connected}
+}
+
+func optString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func schemaMap(raw json.RawMessage) *map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	return &m
+}
+
 func toProjectPlugin(v plugins.View) gen.ProjectPlugin {
 	out := gen.ProjectPlugin{Name: v.Name, Version: v.Version, Enabled: v.Enabled, DisabledReason: v.DisabledReason, Running: v.Running,
 		Capabilities: orEmpty(v.Capabilities), Hooks: orEmpty(v.Hooks), Config: v.Config, SecretsSet: orEmpty(v.SecretsSet)}
@@ -57,13 +84,74 @@ func toProjectPlugin(v plugins.View) gen.ProjectPlugin {
 		ui := v.UI
 		out.Ui = &ui
 	}
-	if len(v.ConfigSchema) > 0 {
-		var m map[string]any
-		if json.Unmarshal(v.ConfigSchema, &m) == nil {
-			out.ConfigSchema = &m
-		}
-	}
+	out.ConfigSchema = schemaMap(v.ConfigSchema)
+	out.Description = optString(v.Description)
+	out.Connect = toConnection(v.Connect)
+	out.WebhookUrl = optString(v.WebhookURL)
 	return out
+}
+
+// ListPluginCatalogue lists what the server ships. Anyone signed in may read it: a person
+// starting a project needs to see what they could switch on.
+func (s *Server) ListPluginCatalogue(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.principal(w, r); !ok || s.pluginsOff(w) {
+		return
+	}
+	entries, err := s.Plugins.CatalogueEntries(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]gen.CataloguePlugin, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, gen.CataloguePlugin{Name: e.Name, Version: e.Manifest.Version, Description: optString(e.Manifest.Description),
+			Capabilities: orEmpty(e.Manifest.Capabilities), ConfigSchema: schemaMap(e.Manifest.ConfigSchema), Installed: e.Installed,
+			Connect: toConnection(e.Connect)})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) ConnectProjectPlugin(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, pluginName gen.PluginName) {
+	p, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleAdmin)
+	if !ok || s.pluginsOff(w) {
+		return
+	}
+	var in gen.PluginConnectRequest
+	if r.ContentLength != 0 && !decode(w, r, &in) {
+		return
+	}
+	returnTo := ""
+	if in.ReturnTo != nil {
+		returnTo = *in.ReturnTo
+	}
+	u, err := s.Plugins.Connect(r.Context(), fromUUID(projectId), p.UserID, string(pluginName), returnTo)
+	if err != nil {
+		s.pluginErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gen.PluginConnectStart{Url: u})
+}
+
+func (s *Server) ImportProjectPlugin(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, pluginName gen.PluginName) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleAdmin); !ok || s.pluginsOff(w) {
+		return
+	}
+	res, err := s.Plugins.Import(r.Context(), fromUUID(projectId), string(pluginName))
+	if err != nil {
+		// The plugin's own refusal, such as a repository not chosen yet, is for the person.
+		var pe *plugin.Error
+		if errors.As(err, &pe) && pe.Code != plugin.CodeInternal {
+			writeError(w, http.StatusBadRequest, pe.Message, "invalid")
+			return
+		}
+		s.pluginErr(w, err)
+		return
+	}
+	out := gen.PluginImport{Created: res.Created, Existing: res.Existing, Note: optString(res.Note)}
+	if res.Truncated {
+		out.Truncated = &res.Truncated
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) ListPlugins(w http.ResponseWriter, r *http.Request) {

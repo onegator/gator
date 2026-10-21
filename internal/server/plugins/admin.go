@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -83,12 +84,24 @@ type View struct {
 	Config         map[string]any
 	SecretsSet     []string
 	ConfigSchema   json.RawMessage
+	Description    string
+	Connect        *ConnectView
+	// WebhookURL is where the outside system should deliver, for a person setting it up by hand.
+	WebhookURL string
+}
+
+// connectSecret is the secret a connection fills, or "".
+func connectSecret(m plugin.Manifest) string {
+	if m.Connect == nil {
+		return ""
+	}
+	return m.Connect.Secret
 }
 
 // Configure enables, disables or reconfigures a plugin for a project.
 func (h *Host) Configure(ctx context.Context, projectID pgtype.UUID, name string, s Settings) (View, error) {
 	q := db.New(h.pool)
-	p, err := q.GetPluginByName(ctx, name)
+	p, err := h.ensureInstalled(ctx, name)
 	if err != nil {
 		return View{}, err
 	}
@@ -103,7 +116,10 @@ func (h *Host) Configure(ctx context.Context, projectID pgtype.UUID, name string
 		cfg = map[string]any{}
 	}
 	existing := map[string]string{}
-	if cur, err := q.GetProjectPlugin(ctx, db.GetProjectPluginParams{ProjectID: projectID, Name: name}); err == nil {
+	wasEnabled := false
+	cur, err := q.GetProjectPlugin(ctx, db.GetProjectPluginParams{ProjectID: projectID, Name: name})
+	if err == nil {
+		wasEnabled = cur.Enabled
 		if existing, err = h.decryptSecrets(cur.Secrets); err != nil {
 			return View{}, err
 		}
@@ -116,8 +132,17 @@ func (h *Host) Configure(ctx context.Context, projectID pgtype.UUID, name string
 		return View{}, err
 	}
 	public, sec := schema.Split(cfg)
+	// A token pasted over a connected one is the person's to look after: the server forgets
+	// the connection's refresh token and stops renewing.
+	_, replacedToken := cfg[connectSecret(m)]
 	for k, v := range existing {
-		if _, given := cfg[k]; !given && schema.IsSecret(k) {
+		_, given := cfg[k]
+		switch {
+		case serverOnly(k):
+			if !replacedToken {
+				sec[k] = v
+			}
+		case !given && schema.IsSecret(k):
 			sec[k] = v
 		}
 	}
@@ -140,14 +165,25 @@ func (h *Host) Configure(ctx context.Context, projectID pgtype.UUID, name string
 		}
 	}
 	pb, _ := json.Marshal(public)
-	if _, err := q.UpsertProjectPlugin(ctx, db.UpsertProjectPluginParams{ProjectID: projectID, PluginID: p.ID, Config: pb, Secrets: enc, Enabled: s.Enabled}); err != nil {
+	row, err := q.UpsertProjectPlugin(ctx, db.UpsertProjectPluginParams{ProjectID: projectID, PluginID: p.ID, Config: pb, Secrets: enc, Enabled: s.Enabled})
+	if err != nil {
 		return View{}, err
+	}
+	if replacedToken {
+		if err := q.ClearPluginTokenExpiry(ctx, row.ID); err != nil {
+			return View{}, err
+		}
 	}
 	if s.Enabled {
 		h.clearDisabledAlert(ctx, projectID, name)
 	}
 	if err := h.Sync(ctx); err != nil {
 		return View{}, err
+	}
+	// Switching a tracker on brings in the issues it already holds; a webhook only ever
+	// mentions new ones, and an empty board would look like the plugin did not work.
+	if s.Enabled && !wasEnabled && m.HasHook(plugin.MethodImport) {
+		h.importLater(projectID, name)
 	}
 	return h.ProjectPlugin(ctx, projectID, name)
 }
@@ -180,10 +216,20 @@ func (h *Host) view(r db.GetProjectPluginRow) View {
 	v := View{Name: r.PluginName, Version: m.Version, Enabled: r.Enabled && r.PluginEnabled, DisabledReason: r.DisabledReason,
 		Capabilities: m.Capabilities, Hooks: m.Hooks, UI: m.UI, Config: map[string]any{}, SecretsSet: []string{}, ConfigSchema: m.ConfigSchema}
 	_ = json.Unmarshal(r.Config, &v.Config)
+	set := map[string]bool{}
 	if sec, err := h.decryptSecrets(r.Secrets); err == nil {
 		for k := range sec {
-			v.SecretsSet = append(v.SecretsSet, k)
+			if !serverOnly(k) {
+				v.SecretsSet = append(v.SecretsSet, k)
+				set[k] = true
+			}
 		}
+	}
+	sort.Strings(v.SecretsSet)
+	v.Description = m.Description
+	v.Connect = h.connectView(r.PluginName, m, set)
+	if m.HasHook(plugin.MethodWebhook) {
+		v.WebhookURL = h.webhookURL(r.ProjectSlug, r.PluginName)
 	}
 	if i := h.get(r.ID); i != nil {
 		v.Running = i.running()

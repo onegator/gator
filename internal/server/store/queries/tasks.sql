@@ -158,3 +158,13 @@ LIMIT sqlc.arg(max_rows);
 -- Alerts are deduplicated by what they say: the same plugin switched off twice is one thing to
 -- look at, not two.
 SELECT * FROM tasks WHERE project_id = $1 AND kind = $2 AND title = $3 AND closed_at IS NULL;
+
+-- name: ReopenTask :one
+-- The task opens in the phase it closed in, with the clock for that phase started again.
+UPDATE tasks SET closed_at = NULL, phase_entered_at = now(), updated_at = now()
+WHERE id = $1 RETURNING *;
+
+-- name: EditTask :one
+UPDATE tasks SET title = COALESCE(sqlc.narg(title), title),
+    description = COALESCE(sqlc.narg(description), description), updated_at = now()
+WHERE id = sqlc.arg(id) RETURNING *;

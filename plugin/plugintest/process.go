@@ -20,6 +20,7 @@ type Options struct {
 	Secrets     map[string]string // passed as GATOR_SECRET_<NAME>, as the server does
 	Stderr      io.Writer         // the plugin's log; default os.Stderr
 	Timeout     time.Duration     // per call; default 30s
+	WebhookURL  string            // sent in initialize, as the server does when it knows its address
 }
 
 // Process is a running plugin connected to a Core.
@@ -72,7 +73,7 @@ func Start(ctx context.Context, command []string, core *Core, o Options) (*Proce
 		p.waited <- cmd.Wait()
 	}()
 	err = p.Call(ctx, plugin.MethodInitialize, plugin.InitializeParams{CoreVersion: "plugintest", ProtocolVersion: plugin.ProtocolVersion,
-		ProjectID: core.ProjectID, ProjectSlug: o.ProjectSlug, Config: o.Config}, &p.Manifest)
+		ProjectID: core.ProjectID, ProjectSlug: o.ProjectSlug, Config: o.Config, WebhookURL: o.WebhookURL}, &p.Manifest)
 	if err == nil {
 		err = p.Manifest.Validate()
 	}

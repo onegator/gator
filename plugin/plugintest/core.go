@@ -287,6 +287,26 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 			return nil, notFound(p.TaskID)
 		}
 		maps.Copy(t.ExternalRefs, p.ExternalRefs)
+		if p.Title != nil {
+			if strings.TrimSpace(*p.Title) == "" {
+				return nil, plugin.Errorf(plugin.CodeInvalidParams, "title cannot be empty")
+			}
+			t.Title = *p.Title
+		}
+		if p.Description != nil {
+			t.Description = *p.Description
+		}
+		return t.TaskRef, nil
+	case plugin.CoreTaskClose, plugin.CoreTaskReopen:
+		p, err := decode[plugin.TaskStateParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		t := c.find(p.TaskID)
+		if t == nil {
+			return nil, notFound(p.TaskID)
+		}
+		t.Closed = method == plugin.CoreTaskClose
 		return t.TaskRef, nil
 	case plugin.CoreGateSetCheck:
 		p, err := decode[plugin.SetCheckParams](raw)
