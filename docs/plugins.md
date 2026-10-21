@@ -28,7 +28,7 @@ the other's requests. Serve requests concurrently: a hook may call back into the
 answers.
 
 ```
-→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"core_version":"1.0.0","protocol_version":1,"project_id":"…","project_slug":"app","config":{"repo":"acme/app"}}}
+→ {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"core_version":"1.0.0","protocol_version":1,"project_id":"…","project_slug":"app","config":{"repo":"acme/app"},"webhook_url":"https://hooks.example.com/hooks/app/github"}}
 ← {"jsonrpc":"2.0","id":1,"result":{"name":"github","version":"0.1.0","capabilities":["vcs","ci"],"hooks":["webhook","jobFinish"],…}}
 ```
 
@@ -46,12 +46,17 @@ Errors use JSON-RPC codes plus Gator's own:
 ## Manifest
 
 `initialize` returns the manifest. At install time the server calls it without a project,
-config or secrets, just to read the manifest.
+config or secrets, just to read the manifest. With a project it also carries `webhook_url`,
+where that project's deliveries for the plugin arrive, when the server knows its public
+address (`GATOR_HOOKS_URL`, else `GATOR_PUBLIC_URL`). A plugin that can register its own
+webhook should do it then, and never fail `initialize` over it: an `Init` that returns an error
+stops the process from starting.
 
 ```json
 {
   "name": "github",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Issues become tasks and follow them both ways…",
   "min_core_version": "1.0.0",
   "capabilities": ["vcs", "ci"],
   "hooks": ["webhook", "phaseTransition", "gateEvaluate", "jobFinish", "renderUI"],
@@ -66,7 +71,10 @@ config or secrets, just to read the manifest.
   },
   "ui": ["tab", "chip"],
   "schedule": [{"name": "sync", "every": "10m"}],
-  "webhook": {"delivery_header": "X-GitHub-Delivery"}
+  "webhook": {"delivery_header": "X-GitHub-Delivery"},
+  "connect": {"title": "GitHub", "authorize_url": "https://github.com/login/oauth/authorize",
+              "token_url": "https://github.com/login/oauth/access_token", "scopes": ["repo"],
+              "secret": "token", "webhook_secret": "webhook_secret"}
 }
 ```
 
@@ -79,6 +87,11 @@ config or secrets, just to read the manifest.
   never returns or logs it, and passes it only as an environment variable.
 - **min_core_version**: installing on an older core fails. Development and snapshot builds of
   the core accept any value.
+- **description**: one sentence a person reads before switching the plugin on.
+- **config_schema** extras a client may use: `title` labels a property, and `"x-format":
+  "pairs"` marks a string of `key=value, key=value` that a client edits as rows (Linear's
+  `state_map`).
+- **connect**: see [Connecting](#connecting-instead-of-pasting-a-token).
 
 ## Hooks (core → plugin)
 
@@ -95,6 +108,8 @@ config or secrets, just to read the manifest.
 | `jobPrepare` | before a job is leased to a runner | `{task, job}` → `{instructions}` (runners see it: no secrets) |
 | `turnEnding` | the agent says its turn is over, before the receipt | `{task, job, turn, status, summary, commits, changed_paths, digest}` → `{objection}` |
 | `jobFinish` | after a job's receipt | `{task, job, receipt}` → null |
+| `import` | the plugin is switched on or connected for a project, and `POST …/plugins/{name}/import` | `{}` → `{created, existing, truncated, note}` |
+| `taskClosed` | a task of the project closed, however it closed | `{task, reason}` → null |
 | `release`, `incidentClosed` | M6 | none yet |
 
 `turnEnding` is the one hook that can change what an agent does next. A job ends because the
@@ -110,6 +125,18 @@ thinks: a plugin that is never satisfied would hold an agent in a loop and spend
 money doing it. The count is on the job and in its receipt, and each objection is a row in the
 job's feed with who said it and why. The core makes one objection of its own, on the same
 footing as a plugin's: a task that was planned whose implementation turn committed nothing.
+
+`import` is how a tracker brings in what already exists: a webhook only ever mentions what
+happens after it was set up, and a board that stays empty after switching GitHub on looks
+broken. It must be idempotent — look each issue up with `task.find` before creating it, and
+count it as `existing` — because the core runs it on every switch-on and connection, and a
+person may press **Import issues** as often as they like. It may run for up to 5 minutes. Bound
+it (the bundled trackers stop at 500 and say so in `truncated` and `note`), and answer -32602
+with a sentence for the person when it cannot run yet, such as "connect GitHub first".
+
+`taskClosed` reaches every plugin with the hook, including the one whose `task.close` closed
+the task. Check the outside system before acting — an issue already closed needs nothing —
+and the echo of your own change costs one read.
 
 Every call has a time limit (30 s by default). Hooks are delivered **at least once**: the
 server reads domain events from its outbox with a durable cursor, so a restart can repeat a
@@ -132,7 +159,9 @@ not exist.
 |---|---|
 | `task.create` | `{kind, title, description, urgency, external_refs}` → task |
 | `task.find` | `{key, value}` → the newest task with `external_refs[key] == value`, or null |
-| `task.update` | `{task_id, external_refs}` → task (refs are merged) |
+| `task.update` | `{task_id, external_refs?, title?, description?}` → task (refs are merged; a title or description given replaces the task's, and the same text again changes nothing) |
+| `task.close` | `{task_id, reason?}` → task. Closes it wherever it stands; closing a closed task changes nothing |
+| `task.reopen` | `{task_id, reason?}` → task. Opens a closed task in the phase it closed in; recorded as a `reopen` transition |
 | `gate.setCheck` | `{task_id, name, status, detail}` → null |
 | `artifact.put` | `{task_id, phase?, type, content? , url?}` → `{version}` |
 | `kv.get` / `kv.put` | `{key}` → `{found, value}` / `{key, value}` → null (JSON up to 64 KiB, per project) |
@@ -175,14 +204,88 @@ switch a plugin off by sending bad webhooks. Configuring the plugin again re-ena
 
 ## Managing plugins
 
+- `GET /api/v1/plugins/catalogue` lists the plugins the server ships: every executable in
+  `GATOR_PLUGIN_DIR` (default: `plugins/` next to the `gator-server` binary, which is where
+  `make build plugins` puts them). Anyone signed in may read it. A project admin switches one
+  on with the `PUT` below, and the first project to do so installs it: a bundled binary is
+  trusted like the server itself. On start the server brings the stored manifests of bundled
+  plugins up to date with the binaries, so an upgrade needs no reinstall.
 - `PUT /api/v1/plugins/{name}` with body `{"command": ["/path/to/plugin", "--flag"]}` installs a
   plugin or updates it. Workspace admins only. The command runs as the server's user.
 - `PUT /api/v1/projects/{id}/plugins/{name}` with body `{"enabled": true, "config": {...}}`
   enables, disables or configures a plugin for a project. Project admins only.
   - A secret setting left out keeps its stored value.
   - An empty string removes the secret.
-  - The response lists which secrets are set, never their values.
+  - The response lists which secrets are set, never their values, plus the connection's state
+    (`connect`) and the project's `webhookUrl` for setting a webhook up by hand.
+  - `{"enabled": false, "config": {...}}` saves settings without switching the plugin on.
+  - Switching a plugin with `import` on runs an import in the background.
+- `POST /api/v1/projects/{id}/plugins/{name}/connect` starts a connection (below). Project
+  admins only.
+- `POST /api/v1/projects/{id}/plugins/{name}/import` imports now and answers the counts. 409
+  while the plugin is not running; 400 with the plugin's own sentence when it cannot import
+  yet.
 - `GET /api/v1/tasks/{id}/plugin-ui` returns the tabs and chips for a task.
+
+## Connecting instead of pasting a token
+
+A manifest's `connect` describes an OAuth 2.0 authorization-code flow that the **server** runs,
+so a person presses **Connect GitHub** instead of making a token and choosing its permissions:
+
+1. `POST …/plugins/{name}/connect` with `{"returnTo": "gator://plugins"}` answers `{"url"}`, the
+   provider's sign-in page. The server remembers a single-use state (its hash, for 15 minutes)
+   naming the project, the plugin and a PKCE verifier.
+2. The provider sends the browser to `GATOR_PUBLIC_URL/connect/callback`. The server trades the
+   code (with the verifier and its client secret) for a token and stores it in the secret
+   setting `connect.secret`, leaving the other settings and the on/off switch alone. When
+   `connect.webhook_secret` names a secret that is empty, it fills it with a random value, so
+   the plugin can register a webhook signed with it.
+3. The browser goes on to `returnTo` (only `gator://…` or a loopback address) with `plugin`,
+   `project` and `status=connected` or `error=…`; without one it shows a short page.
+4. The plugin restarts with the token. If it is switched on and has `import`, it imports.
+
+The OAuth client belongs to the server, never to the plugin: `GATOR_<PROVIDER>_CLIENT_ID` and
+`GATOR_<PROVIDER>_CLIENT_SECRET`, where the provider is `connect.provider` or the plugin's name.
+`GATOR_<PROVIDER>_SCOPES` (comma-separated) replaces the manifest's scopes. A plugin without a
+client on this server shows `connect.available: false`, and a person can still paste a token.
+
+A token that comes with a refresh token and an expiry is renewed by the server a quarter of an
+hour before it runs out; the refresh token is stored with the secrets but never reaches the
+plugin's environment. Pasting a token over a connected one stops the renewals. A refresh the
+provider refuses stops them too, and the plugin's failures then say the token stopped working.
+
+### Setting up the bundled connections
+
+These are registrations only the server's owner can make. Without them the plugins still work
+with a pasted token and a webhook made by hand.
+
+Set `GATOR_PUBLIC_URL` to the address people's browsers use for this server (with Tailscale,
+`https://<host>.<tailnet>.ts.net`), and `GATOR_HOOKS_URL` to the public address that forwards
+`/hooks/*` (the Caddy site), if it differs.
+
+**GitHub** — an OAuth app (github.com → Settings → Developer settings → OAuth Apps → New, or the
+organization's own):
+
+- Homepage URL: `GATOR_PUBLIC_URL`
+- Authorization callback URL: `GATOR_PUBLIC_URL/connect/callback`
+- Then `GATOR_GITHUB_CLIENT_ID` and `GATOR_GITHUB_CLIENT_SECRET` (generate a client secret).
+
+The token has the `repo` scope: it acts as the person who connected, on every repository they
+can reach, and the plugin uses it only for the project's `repo`. An organization with OAuth app
+restrictions has to approve the app once. With the token the plugin registers the repository
+webhook (Issues, Pull requests, Check runs) itself, which needs admin rights on the repository.
+A GitHub App, with installation tokens per repository and one app webhook, would narrow this
+and is not built yet.
+
+**Linear** — an OAuth application (Linear → Settings → API → OAuth applications → New):
+
+- Callback URL: `GATOR_PUBLIC_URL/connect/callback`
+- Then `GATOR_LINEAR_CLIENT_ID` and `GATOR_LINEAR_CLIENT_SECRET`.
+
+Connect Linear asks for `read,write,admin`; `admin` is what lets the plugin create its own
+webhook, and only a Linear admin can grant it. Where the people connecting are not Linear
+admins, set `GATOR_LINEAR_SCOPES=read,write` and add the webhook by hand (see
+`plugins/linear/README.md`).
 
 ## Writing a plugin in Go
 
@@ -255,6 +358,9 @@ A scenario seeds a project and calls hooks in order:
 - **Tasks:** steps name tasks by id, either seeded ones or the id of a task a plugin created.
 - **Expectations:** `expect_error` expects the hook to fail, and `expect_core` lists core
   methods the plugin must call in that step.
+- **Import and taskClosed** play like any hook: `{"hook": "import"}`, `{"hook": "taskClosed",
+  "task": "t1", "reason": "done"}`. The fake core answers `task.close` and `task.reopen` and
+  reports `closed` on its tasks.
 
 Go plugins can use the same machinery in their own tests: `plugintest.NewCore`,
 `plugintest.Start` and `plugintest.Run` in `github.com/onegator/gator/plugin/plugintest`.

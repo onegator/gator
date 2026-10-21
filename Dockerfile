@@ -17,7 +17,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
         -X github.com/onegator/gator/internal/version.Version=${VERSION} \
         -X github.com/onegator/gator/internal/version.Commit=${COMMIT} \
         -X github.com/onegator/gator/internal/version.Date=${DATE}" \
-      -o /out/gator-server ./cmd/gator-server
+      -o /out/gator-server ./cmd/gator-server \
+ && for p in github linear sentry honeybadger; do \
+      CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/plugins/$p ./plugins/$p || exit 1; \
+    done
 
 FROM alpine:3 AS server
 # pg_dump/pg_restore/psql power `backup` and `restore`; the client must be at least as new
@@ -27,8 +30,10 @@ ARG PG_CLIENT=postgresql17-client
 RUN apk add --no-cache ca-certificates tzdata git "${PG_CLIENT}" \
  && adduser -D -H -u 10001 gator
 COPY --from=build /out/gator-server /usr/local/bin/gator-server
+# The plugins the server offers by name: switching one on is a click, not a command line.
+COPY --from=build /out/plugins/ /usr/local/lib/gator/plugins/
 USER gator
-ENV GATOR_LISTEN_ADDR=:8080
+ENV GATOR_LISTEN_ADDR=:8080 GATOR_PLUGIN_DIR=/usr/local/lib/gator/plugins
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
   CMD wget -qO- http://127.0.0.1:8080/api/v1/healthz >/dev/null || exit 1

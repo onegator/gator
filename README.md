@@ -214,8 +214,10 @@ reconcile after midnight or a higher limit passes the check and the autopilot re
 ## Plugins
 
 Integrations are plugins: separate processes speaking JSON-RPC 2.0 over stdio, one process
-per project and plugin, started only by gator-server. Install with `PUT /api/v1/plugins/{name}`
-and enable per project with `PUT /api/v1/projects/{id}/plugins/{name}`; webhooks arrive at
+per project and plugin, started only by gator-server. The ones it ships (`GATOR_PLUGIN_DIR`)
+are listed by `GET /api/v1/plugins/catalogue` and switched on per project with
+`PUT /api/v1/projects/{id}/plugins/{name}`; GitHub and Linear connect through OAuth instead of a
+pasted token. Others are installed with `PUT /api/v1/plugins/{name}`; webhooks arrive at
 `POST /hooks/<project-slug>/<plugin>`. The contract and a Go SDK live in the public package
 `plugin/`; the protocol is in [docs/plugins.md](docs/plugins.md).
 
