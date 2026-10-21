@@ -2,11 +2,17 @@ LDFLAGS := -X github.com/onegator/gator/internal/version.Version=$(shell git des
            -X github.com/onegator/gator/internal/version.Commit=$(shell git rev-parse --short HEAD) \
            -X github.com/onegator/gator/internal/version.Date=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: build plugins plugins-dev test lint sqlc openapi generate migrate db-up db-down run-server run-runner
+.PHONY: build cli plugins plugins-dev test lint sqlc openapi generate migrate db-up db-down run-server run-runner
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/gator-server ./cmd/gator-server
 	go build -ldflags "$(LDFLAGS)" -o bin/gator-runner ./cmd/gator-runner
+	go build -ldflags "$(LDFLAGS)" -o bin/gator-cli ./cmd/gator-cli
+	go build -ldflags "$(LDFLAGS)" -o bin/gator ./cmd/gator
+
+# The person's command-line tool alone, for `make cli && cp bin/gator ~/.local/bin/`.
+cli:
+	go build -ldflags "$(LDFLAGS)" -o bin/gator ./cmd/gator
 
 # Plugins live next to the SDK they are written against, so a protocol change and the plugins
 # that use it land in one commit. Each directory under plugins/ is one plugin program.
