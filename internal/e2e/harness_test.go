@@ -53,7 +53,9 @@ const (
 	testStallAfter = 2 * time.Second
 )
 
-func newHarness(t *testing.T) *harness {
+// newHarness starts a server on a fresh database connection. configure adjusts the runner
+// manager before it starts, for tests that need a provisioner or other timing.
+func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	t.Helper()
 	url := os.Getenv("GATOR_DATABASE_URL")
 	if url == "" {
@@ -82,8 +84,12 @@ func newHarness(t *testing.T) *harness {
 	hostDone := make(chan struct{})
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
-	mgr := runners.New(pool, svc, hub, slog.Default(), runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}})
+	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
+		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
+	for _, c := range configure {
+		c(&rcfg)
+	}
+	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}

@@ -186,6 +186,7 @@ type Job struct {
 	ContextBytes      int32              `json:"context_bytes"`
 	ContextDocs       int32              `json:"context_docs"`
 	Objections        int32              `json:"objections"`
+	Placement         string             `json:"placement"`
 }
 
 type JobContext struct {
@@ -423,6 +424,8 @@ type Runner struct {
 	OfflineReason   string             `json:"offline_reason"`
 	OfflineSince    pgtype.Timestamptz `json:"offline_since"`
 	RetiredAt       pgtype.Timestamptz `json:"retired_at"`
+	Placement       string             `json:"placement"`
+	OwnerID         pgtype.UUID        `json:"owner_id"`
 }
 
 type Task struct {

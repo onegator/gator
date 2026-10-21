@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Local runner on a Mac. Gator.app installs and manages this file in M4 (PLQ-230) and keeps the
-  token in the Keychain. Until then, fill the placeholders, copy to ~/Library/LaunchAgents/ and:
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.onegator.gator-runner.plist
+  Local runner on a Mac, by hand. Gator.app installs and manages the same agent under the same
+  label, so the two never run side by side. Fill the placeholders, write the token to a file of
+  mode 0600 outside the work directory, copy this to ~/Library/LaunchAgents/ and:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.onegator.gator.runner.plist
   A sleeping Mac shows as offline in gator; its leases return to the queue.
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.onegator.gator-runner</string>
+  <string>dev.onegator.gator.runner</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/gator-runner</string>
@@ -19,10 +20,13 @@
   <dict>
     <key>GATOR_RUNNER_SERVER_URL</key>
     <string>https://gator.example.ts.net</string>
-    <key>GATOR_RUNNER_TOKEN</key>
-    <string>REPLACE_WITH_RUNNER_TOKEN</string>
+    <!-- Agents run inside a sandbox that cannot open this file; see docs/deploy.md. -->
+    <key>GATOR_RUNNER_TOKEN_FILE</key>
+    <string>/Users/REPLACE_ME/Library/Application Support/Gator/runner-token</string>
     <key>GATOR_RUNNER_LOCATION</key>
     <string>mac</string>
+    <key>GATOR_RUNNER_PLACEMENT</key>
+    <string>local</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>

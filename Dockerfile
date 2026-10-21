@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# gator-server image. The runner is not containerised: it drives agent CLIs and git
-# worktrees as a real user, so it ships as a binary for systemd (VPS) or launchd (Mac).
+# gator-server image. A runner on a Mac or a VPS ships as a binary for launchd or systemd;
+# cloud runners started per job use Dockerfile.runner.
 ARG GO_VERSION=1.27.1
 
 FROM golang:${GO_VERSION}-alpine AS build

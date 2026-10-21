@@ -50,6 +50,13 @@ func ParseProjectConfig(b []byte) (ProjectConfig, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return c, fmt.Errorf("process_config: %w", err)
 	}
+	if c.Policy != nil {
+		switch c.Policy.Placement {
+		case "", "local", "cloud":
+		default:
+			return c, fmt.Errorf("process_config: policy.placement must be local or cloud, not %q", c.Policy.Placement)
+		}
+	}
 	return c, nil
 }
 

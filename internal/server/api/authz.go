@@ -52,8 +52,11 @@ func (s *Server) requireTask(w http.ResponseWriter, r *http.Request, task pgtype
 
 // visibleProjects returns project ids the caller may read; nil means all (workspace admin).
 func (s *Server) visibleProjects(r *http.Request, p auth.Principal) (map[[16]byte]bool, error) {
-	if p.IsWorkspaceAdmin() || p.Kind == auth.KindRunner {
+	if p.IsWorkspaceAdmin() || (p.Kind == auth.KindRunner && !p.JobID.Valid) {
 		return nil, nil
+	}
+	if p.Kind == auth.KindRunner {
+		return map[[16]byte]bool{}, nil // started for one job: sees no project
 	}
 	set := map[[16]byte]bool{}
 	if p.Kind == auth.KindPlugin {
@@ -136,7 +139,9 @@ func (s *Server) CreateToken(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "runner tokens require workspace admin", "forbidden")
 			return
 		}
-		params.Scope = "runner:" + in.Name
+		// The runner is this person's machine: a local job they start may run on it, and one
+		// somebody else starts may not.
+		params.UserID, params.Scope = p.UserID, "runner:"+in.Name
 	case auth.KindPlugin:
 		if in.ProjectId == nil {
 			writeError(w, http.StatusBadRequest, "plugin tokens need projectId", "invalid")

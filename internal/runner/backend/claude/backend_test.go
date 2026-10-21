@@ -24,7 +24,8 @@ func fake(t *testing.T, fixture string) (Backend, string) {
 	args := filepath.Join(t.TempDir(), "args")
 	t.Setenv("FAKE_CLAUDE_FIXTURE", filepath.Join(wd, "testdata", fixture))
 	t.Setenv("FAKE_CLAUDE_ARGS", args)
-	return Backend{Bin: filepath.Join(wd, "testdata", "fake-claude.sh"), GracePeriod: 200 * time.Millisecond}, args
+	return Backend{Bin: filepath.Join(wd, "testdata", "fake-claude.sh"), GracePeriod: 200 * time.Millisecond,
+		AllowEnv: []string{"FAKE_CLAUDE_*"}}, args
 }
 
 func run(t *testing.T, b Backend, ctx context.Context, spec backend.Spec) (backend.Outcome, []string) {
@@ -231,5 +232,42 @@ func TestTheRealKeychainLookupAnswersWithoutPrompting(t *testing.T) {
 	}
 	if code != 0 && code != 44 {
 		t.Logf("keychain answered %d; treated as unknown", code)
+	}
+}
+
+// The agent runs as the runner's user with every permission bypassed. Its environment must not
+// carry the runner's token, and where the platform allows, the token file must not open.
+func TestAgentGetsNeitherTheRunnerTokenNorItsFile(t *testing.T) {
+	b, _ := fake(t, "claude-2.1.270-tool-success.ndjson")
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	token := filepath.Join(dir, "runner-token")
+	if err := os.WriteFile(token, []byte("gtr_runner_secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GATOR_RUNNER_TOKEN", "gtr_runner_secret")
+	t.Setenv("GATOR_RUNNER_TOKEN_FILE", token)
+	t.Setenv("FAKE_CLAUDE_ENV", envFile)
+	t.Setenv("FAKE_CLAUDE_READ", token)
+	out, _ := run(t, b, context.Background(), backend.Spec{Prompt: "x", DenyRead: []string{token},
+		Env: []string{"GATOR_URL=https://gator.example", "GATOR_JOB_TOKEN=gtr_job_x"}})
+	if out.Status != proto.StatusDone {
+		t.Fatalf("outcome: %+v", out)
+	}
+	env, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(env), "gtr_runner_secret") || strings.Contains(string(env), "GATOR_RUNNER_") {
+		t.Fatalf("the runner's configuration reached the agent:\n%s", env)
+	}
+	if !strings.Contains(string(env), "GATOR_JOB_TOKEN=gtr_job_x") || !strings.Contains(string(env), "PATH=") {
+		t.Fatalf("the agent lost what it needs:\n%s", env)
+	}
+	read, _ := os.ReadFile(token + ".out")
+	if runtime.GOOS == "darwin" {
+		if strings.Contains(string(read), "gtr_runner_secret") || !strings.Contains(string(read), "denied") {
+			t.Fatalf("the agent read the token file: %s", read)
+		}
 	}
 }

@@ -66,6 +66,27 @@ type Config struct {
 	// for a plugin to be right about something the agent missed, few enough that a plugin
 	// which is never satisfied cannot spend a person's money in a loop.
 	MaxObjections int
+
+	// Provisioner starts a runner in the cloud for a cloud job no connected runner can take.
+	// Optional: without one, cloud jobs wait for a long-lived cloud runner (a VPS).
+	Provisioner Provisioner
+	// RunnerTokens mints the one-job token a provisioned runner authenticates with.
+	RunnerTokens RunnerTokenIssuer
+	// CloudServerURL is where a provisioned runner reaches this server. It is not always the
+	// address people use: a container on the same host may need host.docker.internal.
+	CloudServerURL string
+	// CloudEnv is passed to every provisioned runner: the backend's credentials, chosen by the
+	// operator (GATOR_CLOUD_RUNNER_ENV names them). Nothing else of the server's reaches it.
+	CloudEnv map[string]string
+	// ProvisionTimeout is how long a started machine may take to pick its job up before it is
+	// written off and another started. Zero takes 5 minutes.
+	ProvisionTimeout time.Duration
+	// MaxProvisions is how many machines one job may get before it is stopped with the reason.
+	// Zero takes 3: a broken image must not start machines forever.
+	MaxProvisions int
+	// ProvisionDelay is the pause between queueing a cloud job and looking for a machine for
+	// it, which gives connected runners the first chance. Zero takes 2 seconds.
+	ProvisionDelay time.Duration
 }
 
 // AgentTokenIssuer mints and revokes the per-job identity. The interface keeps this package
@@ -111,6 +132,10 @@ func (c *Config) defaults() {
 	if c.DefaultBackend == "" {
 		c.DefaultBackend = "claude"
 	}
+	if c.ProvisionDelay == 0 {
+		c.ProvisionDelay = 2 * time.Second
+	}
+	c.cloudDefaults()
 }
 
 // Default job bounds, borrowed from limen: one job is one short turn.
@@ -131,12 +156,19 @@ type Manager struct {
 
 	mu       sync.Mutex
 	sessions map[[16]byte]*session
+
+	// cloudMu serialises Provision; machines are the cloud runners started and not yet
+	// stopped, provisions how many each queued job has had.
+	cloudMu    sync.Mutex
+	machines   map[[16]byte]*machine
+	provisions map[[16]byte]int
 }
 
 // New builds a manager.
 func New(pool *pgxpool.Pool, proc *process.Service, hub *events.Hub, log *slog.Logger, cfg Config) *Manager {
 	cfg.defaults()
-	return &Manager{pool: pool, process: proc, hub: hub, log: log, cfg: cfg, now: time.Now, sessions: map[[16]byte]*session{}}
+	return &Manager{pool: pool, process: proc, hub: hub, log: log, cfg: cfg, now: time.Now, sessions: map[[16]byte]*session{},
+		machines: map[[16]byte]*machine{}, provisions: map[[16]byte]int{}}
 }
 
 // Connected reports whether a runner has a live session.
@@ -185,6 +217,9 @@ type NewJob struct {
 	Bounds       proto.Bounds
 	CreatedBy    process.Actor
 	TaskOverride pgtype.UUID // unused; reserved
+	// Placement is proto.PlacementLocal or proto.PlacementCloud. Empty takes the project's
+	// policy, which is local unless the project says otherwise.
+	Placement string
 }
 
 // CreateJob queues a job for the task's current phase and offers it to connected runners.
@@ -203,6 +238,9 @@ func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) 
 		return db.Job{}, err
 	}
 	m.Offer()
+	if job.Placement == proto.PlacementCloud {
+		m.provisionSoon()
+	}
 	return job, nil
 }
 
@@ -239,6 +277,14 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	} else if over != "" {
 		return db.Job{}, fmt.Errorf("%w: %s", ErrBudgetExceeded, over)
 	}
+	if in.Placement == "" {
+		if in.Placement, err = m.process.JobPlacement(ctx, d.Task.ProjectID); err != nil {
+			return db.Job{}, err
+		}
+	}
+	if !proto.ValidPlacement(in.Placement) {
+		return db.Job{}, fmt.Errorf("%w: placement must be local or cloud, not %q", ErrInvalidJob, in.Placement)
+	}
 	if in.MaxAttempts <= 0 {
 		in.MaxAttempts = DefaultMaxAttempts
 	}
@@ -252,7 +298,7 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	job, err := q.CreateJob(ctx, db.CreateJobParams{
 		TaskID: d.Task.ID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
 		Backend: in.Backend, Instruction: in.Instruction, Bounds: bounds, MaxAttempts: int32(in.MaxAttempts),
-		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID, Model: in.Model,
+		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID, Model: in.Model, Placement: in.Placement,
 	})
 	if err != nil {
 		return db.Job{}, err
@@ -318,8 +364,12 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 		return db.Job{}, false, err
 	}
 	if created {
-		m.log.Info("autopilot queued a job", "task", uuidString(taskID), "phase", job.Phase, "role", job.Role, "backend", job.Backend)
+		m.log.Info("autopilot queued a job", "task", uuidString(taskID), "phase", job.Phase, "role", job.Role,
+			"backend", job.Backend, "placement", job.Placement)
 		m.Offer()
+		if job.Placement == proto.PlacementCloud {
+			m.provisionSoon()
+		}
 	}
 	return job, created, nil
 }
@@ -511,7 +561,8 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepResult, error)
 	}
 	// A job no runner can take used to wait in silence: the inbox hides tasks whose job is
 	// queued, on the grounds that an agent is on it. Nobody is.
-	orphans, err := q.MarkUnassignableJobs(ctx, ts(now.Add(-m.cfg.UnassignableAfter)))
+	orphans, err := q.MarkUnassignableJobs(ctx, db.MarkUnassignableJobsParams{
+		Before: ts(now.Add(-m.cfg.UnassignableAfter)), SkipCloud: m.cfg.Provisioner != nil})
 	if err != nil {
 		return res, err
 	}
@@ -519,11 +570,11 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepResult, error)
 		res.Unassignable++
 		_ = m.tx(ctx, func(q *db.Queries) error {
 			if err := emit(ctx, q, "job.no_runner", "job", j.ID, map[string]any{
-				"task_id": uuidString(j.TaskID), "backend": j.Backend}); err != nil {
+				"task_id": uuidString(j.TaskID), "backend": j.Backend, "placement": j.Placement}); err != nil {
 				return err
 			}
 			return emit(ctx, q, "task.job_no_runner", "task", j.TaskID, map[string]any{
-				"job_id": uuidString(j.ID), "backend": j.Backend})
+				"job_id": uuidString(j.ID), "backend": j.Backend, "placement": j.Placement})
 		})
 	}
 	if res.Requeued > 0 {
@@ -567,7 +618,8 @@ func (m *Manager) tx(ctx context.Context, fn func(q *db.Queries) error) error {
 
 // emitJob writes a job event plus its task-level mirror so task and inbox views update.
 func (m *Manager) emitJob(ctx context.Context, q *db.Queries, typ string, job db.Job, extra map[string]any) error {
-	payload := map[string]any{"task_id": uuidString(job.TaskID), "status": job.Status, "phase": job.Phase, "role": job.Role, "backend": job.Backend}
+	payload := map[string]any{"task_id": uuidString(job.TaskID), "status": job.Status, "phase": job.Phase, "role": job.Role,
+		"backend": job.Backend, "placement": job.Placement}
 	maps.Copy(payload, extra)
 	if err := emit(ctx, q, typ, "job", job.ID, payload); err != nil {
 		return err

@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1.7
+# gator-runner image, for cloud runners: one container per job, started by the server's
+# provisioner (GATOR_CLOUD_PROVISIONER) with GATOR_RUNNER_ONCE=1, or one long-lived container
+# on a VPS. It carries the runner, gator-cli for the agent, git and the Claude Code CLI.
+ARG GO_VERSION=1.27.1
+ARG NODE_VERSION=22
+
+FROM golang:${GO_VERSION}-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    for cmd in gator-runner gator-cli; do \
+      CGO_ENABLED=0 go build -trimpath \
+        -ldflags "-s -w \
+          -X github.com/onegator/gator/internal/version.Version=${VERSION} \
+          -X github.com/onegator/gator/internal/version.Commit=${COMMIT} \
+          -X github.com/onegator/gator/internal/version.Date=${DATE}" \
+        -o /out/$cmd ./cmd/$cmd || exit 1; \
+    done
+
+FROM node:${NODE_VERSION}-bookworm-slim AS runner
+# Pin the agent CLI for reproducible images: --build-arg CLAUDE_CODE_VERSION=2.1.270.
+ARG CLAUDE_CODE_VERSION=latest
+# Commits made in a job need an author; the runner's push needs a credential. The helper
+# answers from GITHUB_TOKEN, which the runner has and the agent's filtered environment does
+# not, so only the runner can push.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates git openssh-client tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && npm cache clean --force \
+ && useradd --create-home --uid 10001 gator \
+ && git config --system user.name "Gator agent" \
+ && git config --system user.email "agent@gator.invalid" \
+ && git config --system credential.https://github.com.helper \
+      '!f() { test -n "$GITHUB_TOKEN" || exit 0; echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
+COPY --from=build /out/gator-runner /out/gator-cli /usr/local/bin/
+USER gator
+WORKDIR /home/gator
+# The runner looks for gator-cli next to itself; claude is on PATH from npm. The rest comes
+# from the provisioner: server URL, the one-job token, backend credentials.
+ENV GATOR_RUNNER_WORKDIR=/home/gator/work \
+    GATOR_RUNNER_LOCATION=other \
+    GATOR_RUNNER_PLACEMENT=cloud \
+    GATOR_RUNNER_BACKENDS=claude
+ENTRYPOINT ["gator-runner"]
+CMD ["run"]

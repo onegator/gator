@@ -198,9 +198,13 @@ daily budget for the project:
 {"policy": {
   "default": {"backend": "claude", "model": "claude-opus-5", "max_cost_usd": 5},
   "roles": {"reviewer": {"model": "claude-sonnet-5", "max_cost_usd": 1}},
-  "daily_budget_usd": 25
+  "daily_budget_usd": 25,
+  "placement": "local"
 }}
 ```
+
+`placement` is where the autopilot's jobs run, `local` (the default) or `cloud`; a person starting
+a job chooses for that job. See [Where a job runs](docs/deploy.md#where-a-job-runs).
 
 A role's entry overrides the default; a role that switches backend drops the default model.
 Jobs created without a backend or model take them from the policy. The cost cap travels in the

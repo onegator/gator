@@ -100,13 +100,15 @@ func (f *fixture) session(t *testing.T) *session {
 	tok := rec.ID
 	caps := proto.Capabilities{Backends: []string{f.backend}, MaxParallel: 2}
 	capsJSON, _ := json.Marshal(caps)
-	row, err := f.q.UpsertRunner(ctx, db.UpsertRunnerParams{TokenID: tok, Name: name, Location: "other", Capabilities: capsJSON, ProtocolVersion: 1})
+	row, err := f.q.UpsertRunner(ctx, db.UpsertRunnerParams{TokenID: tok, Name: name, Location: "other", Capabilities: capsJSON, ProtocolVersion: 1,
+		Placement: proto.PlacementLocal})
 	if err != nil {
 		t.Fatal(err)
 	}
 	sctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
-	return &session{m: f.m, ctx: sctx, cancel: cancel, runnerID: row.ID, tokenID: tok, name: name, caps: caps, projects: []pgtype.UUID{f.project}}
+	return &session{m: f.m, ctx: sctx, cancel: cancel, runnerID: row.ID, tokenID: tok, name: name, caps: caps, projects: []pgtype.UUID{f.project},
+		placement: proto.PlacementLocal}
 }
 
 // queuedJob queues a job in the fixture's project, for the fixture's backend.
@@ -130,7 +132,7 @@ func (f *fixture) leasedJob(t *testing.T, s *session) db.Job {
 	ctx := context.Background()
 	job := f.queuedJob(t)
 	leased, err := f.q.LeaseJobs(ctx, db.LeaseJobsParams{RunnerID: s.runnerID, LeaseUntil: ts(time.Now().Add(time.Minute)),
-		Backends: []string{f.backend}, Projects: []pgtype.UUID{f.project}, Slots: 1})
+		Backends: []string{f.backend}, Projects: []pgtype.UUID{f.project}, Slots: 1, Placement: job.Placement})
 	if err != nil || len(leased) != 1 || leased[0].ID != job.ID {
 		t.Fatalf("lease: %v %v", leased, err)
 	}

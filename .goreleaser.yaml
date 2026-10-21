@@ -79,7 +79,7 @@ archives:
       - deploy/install.sh
       - deploy/runner.env.example
       - deploy/systemd/gator-runner.service
-      - deploy/launchd/dev.onegator.gator-runner.plist
+      - deploy/launchd/dev.onegator.gator.runner.plist
       - docs/deploy.md
   - id: plugins
     ids: [plugin-github, plugin-sentry, plugin-honeybadger, plugin-linear]

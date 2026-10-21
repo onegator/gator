@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/agentenv"
 	"github.com/onegator/gator/internal/runner/backend"
 )
 
@@ -33,6 +34,9 @@ type Backend struct {
 	MCPConfig   string
 	GracePeriod time.Duration
 	Log         *slog.Logger
+	// AllowEnv names variables the agent gets beyond agentenv's allow-list; a trailing *
+	// matches a prefix. The runner's own GATOR_* never pass.
+	AllowEnv []string
 }
 
 // noMCP is the default: a job session gets no MCP servers.
@@ -140,9 +144,12 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", spec.MaxCostUSD))
 	}
 
-	cmd := exec.Command(b.bin(), args...)
+	bin, args := agentenv.Command(b.bin(), args, spec.DenyRead)
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = spec.Dir
-	cmd.Env = append(cleanEnv(os.Environ()), spec.Env...)
+	// An allow-list, not a deny-list: the runner's environment holds its token and whatever its
+	// operator exported, and an agent that can run any command can print all of it.
+	cmd.Env = append(agentenv.Filter(os.Environ(), b.AllowEnv), spec.Env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Stdout goes through our own pipe: a background process that inherits it must not be
 	// able to keep this run alive after claude itself exits.
@@ -279,20 +286,6 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 
 func failed(reason string) backend.Outcome {
 	return backend.Outcome{Status: proto.StatusFailed, Reason: reason}
-}
-
-// cleanEnv drops variables that make Claude Code think it runs nested inside another session.
-func cleanEnv(env []string) []string {
-	out := env[:0:0]
-	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
-		switch k {
-		case "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT":
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 func exitText(err error) string {

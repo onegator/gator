@@ -23,6 +23,27 @@ type Policy struct {
 	Default        RolePolicy            `json:"default"`
 	Roles          map[string]RolePolicy `json:"roles"`
 	DailyBudgetUSD float64               `json:"daily_budget_usd"`
+	// Placement is where the autopilot's jobs run: "local" (a machine of the person who
+	// started the task, or any shared one) or "cloud". Empty is local. A person starting a
+	// job by hand chooses for themselves.
+	Placement string `json:"placement,omitempty"`
+}
+
+// Placement is where the project's autopilot jobs run: "local" unless its policy says "cloud".
+func (c ProjectConfig) Placement() string {
+	if c.Policy != nil && c.Policy.Placement == "cloud" {
+		return "cloud"
+	}
+	return "local"
+}
+
+// JobPlacement is the project's placement for jobs nobody chose one for.
+func (s *Service) JobPlacement(ctx context.Context, projectID pgtype.UUID) (string, error) {
+	c, err := s.projectConfig(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	return c.Placement(), nil
 }
 
 // PolicyFor resolves a role: the role's entry over the policy default, over the autopilot

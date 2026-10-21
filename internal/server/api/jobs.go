@@ -47,7 +47,14 @@ func (s *Server) CreateTaskJob(w http.ResponseWriter, r *http.Request, taskId ge
 	if !decode(w, r, &in) {
 		return
 	}
-	nj := runners.NewJob{Backend: deref(in.Backend), Model: deref(in.Model), Instruction: deref(in.Instruction), Role: deref(in.Role), CreatedBy: ActorFromContext(r.Context())}
+	// A job someone starts runs where they say, and on their own machine unless they say
+	// otherwise. The project's placement is for the autopilot, which has nobody to ask.
+	placement := proto.PlacementLocal
+	if in.Placement != nil {
+		placement = string(*in.Placement)
+	}
+	nj := runners.NewJob{Backend: deref(in.Backend), Model: deref(in.Model), Instruction: deref(in.Instruction), Role: deref(in.Role),
+		CreatedBy: ActorFromContext(r.Context()), Placement: placement}
 	if in.MaxAttempts != nil {
 		nj.MaxAttempts = *in.MaxAttempts
 	}
@@ -281,6 +288,7 @@ func toJob(j db.Job) gen.Job {
 		Id: toUUID(j.ID), TaskId: toUUID(j.TaskID), ProjectId: toUUID(j.ProjectID), Phase: j.Phase, Role: j.Role,
 		Backend: j.Backend, Instruction: j.Instruction, Status: gen.JobStatus(j.Status), RunnerId: toUUIDPtr(j.RunnerID),
 		Attempts: int(j.Attempts), MaxAttempts: int(j.MaxAttempts), StopReason: j.StopReason, CreatedAt: j.CreatedAt.Time,
+		Placement: gen.JobPlacement(j.Placement),
 	}
 	if j.Model != "" {
 		out.Model = &j.Model
@@ -325,7 +333,8 @@ func toRunner(r db.Runner, connected bool) gen.RunnerInfo {
 	authState := map[string]string{}
 	_ = json.Unmarshal(r.AuthState, &authState)
 	out := gen.RunnerInfo{
-		Id: toUUID(r.ID), Name: r.Name, Location: r.Location, Status: gen.RunnerInfoStatus(r.Status), Connected: connected,
+		Id: toUUID(r.ID), Name: r.Name, Location: r.Location, Placement: gen.RunnerInfoPlacement(r.Placement),
+		OwnerId: toUUIDPtr(r.OwnerID), Status: gen.RunnerInfoStatus(r.Status), Connected: connected,
 		Capabilities: gen.RunnerCapabilities{Backends: caps.Backends, MaxParallel: caps.MaxParallel, Projects: caps.Projects,
 			CanLogin: &caps.CanLogin},
 		AuthState: authState, ProtocolVersion: int(r.ProtocolVersion), BinaryVersion: r.BinaryVersion,
