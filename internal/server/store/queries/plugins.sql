@@ -88,3 +88,33 @@ WHERE name = sqlc.arg(name) AND last_event_id < sqlc.arg(event_id);
 SELECT id, type, aggregate, aggregate_id, payload FROM events
 WHERE id > sqlc.arg(after) AND type = ANY(sqlc.arg(types)::text[])
 ORDER BY id LIMIT sqlc.arg(max_rows);
+
+-- name: SetProjectPluginSecrets :one
+-- A connection stores its token without touching the settings or the switch: a person may
+-- connect before choosing a repository, and connecting is not switching the plugin on.
+INSERT INTO project_plugins (project_id, plugin_id, secrets, enabled, token_expires_at)
+VALUES (sqlc.arg(project_id), sqlc.arg(plugin_id), sqlc.arg(secrets), false, sqlc.narg(token_expires_at))
+ON CONFLICT (project_id, plugin_id) DO UPDATE SET secrets = EXCLUDED.secrets,
+    token_expires_at = EXCLUDED.token_expires_at, updated_at = now()
+RETURNING *;
+
+-- name: ListExpiringPluginTokens :many
+SELECT pp.id, pp.project_id, pp.secrets, p.name AS plugin_name, p.manifest
+FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id
+WHERE pp.token_expires_at IS NOT NULL AND pp.token_expires_at < sqlc.arg(before)
+ORDER BY pp.token_expires_at LIMIT 50;
+
+-- name: InsertPluginConnectState :exec
+INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: TakePluginConnectState :one
+-- Single use: the row goes as it is read, so a replayed callback finds nothing.
+DELETE FROM plugin_connect_states WHERE hash = $1 AND expires_at > now() RETURNING *;
+
+-- name: DeleteExpiredPluginConnectStates :exec
+DELETE FROM plugin_connect_states WHERE expires_at < now();
+
+-- name: ClearPluginTokenExpiry :exec
+-- A token a person pasted over a connected one is theirs to replace; the server stops refreshing.
+UPDATE project_plugins SET token_expires_at = NULL WHERE id = $1;

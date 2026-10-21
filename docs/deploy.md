@@ -22,6 +22,14 @@ sudo /usr/local/lib/gator/install.sh migrate
 sudo systemctl start gator-server
 ```
 
+Plugins ship as their own archive. Unpack it where the server looks for the plugins it offers
+by name (`GATOR_PLUGIN_DIR`, see `server.env.example`):
+
+```sh
+sudo mkdir -p /usr/local/lib/gator/plugins
+sudo tar -xzf gator-plugins_<version>_linux_amd64.tar.gz -C /usr/local/lib/gator/plugins github linear sentry honeybadger
+```
+
 `install` generates `GATOR_SECRETS_KEY` on first run. Store a copy outside the host: without
 it encrypted secrets cannot be read after a restore.
 

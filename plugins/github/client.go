@@ -175,3 +175,77 @@ func (c *Client) CheckRuns(ctx context.Context, sha string) ([]CheckRun, error) 
 	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/commits/%s/check-runs?per_page=100", c.repo(), url.PathEscape(sha)), nil, &r)
 	return r.CheckRuns, err
 }
+
+// Issue is an issue as the plugin reads it. Pull requests come back from the issues API too,
+// with PullRequest set.
+type Issue struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	State       string `json:"state"`
+	StateReason string `json:"state_reason"`
+	HTMLURL     string `json:"html_url"`
+	Labels      []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+	PullRequest *struct{} `json:"pull_request"`
+}
+
+// OpenIssues lists one page of open issues, newest first, with label if it is set.
+func (c *Client) OpenIssues(ctx context.Context, label string, page int) ([]Issue, error) {
+	q := url.Values{"state": {"open"}, "per_page": {"100"}, "page": {fmt.Sprint(page)}, "sort": {"created"}, "direction": {"desc"}}
+	if label != "" {
+		q.Set("labels", label)
+	}
+	var out []Issue
+	err := c.do(ctx, http.MethodGet, c.repo()+"/issues?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// GetIssue reads one issue.
+func (c *Client) GetIssue(ctx context.Context, number int) (Issue, error) {
+	var out Issue
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues/%d", c.repo(), number), nil, &out)
+	return out, err
+}
+
+// CloseIssue closes an issue as completed.
+func (c *Client) CloseIssue(ctx context.Context, number int) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/issues/%d", c.repo(), number),
+		map[string]string{"state": "closed", "state_reason": "completed"}, nil)
+}
+
+// Hook is a repository webhook.
+type Hook struct {
+	ID     int64    `json:"id"`
+	Active bool     `json:"active"`
+	Events []string `json:"events"`
+	Config struct {
+		URL string `json:"url"`
+	} `json:"config"`
+}
+
+// Hooks lists the repository's webhooks.
+func (c *Client) Hooks(ctx context.Context) ([]Hook, error) {
+	var out []Hook
+	err := c.do(ctx, http.MethodGet, c.repo()+"/hooks?per_page=100", nil, &out)
+	return out, err
+}
+
+func hookBody(hookURL, secret string, events []string) map[string]any {
+	return map[string]any{"active": true, "events": events,
+		"config": map[string]string{"url": hookURL, "content_type": "json", "secret": secret, "insecure_ssl": "0"}}
+}
+
+// CreateHook adds a webhook.
+func (c *Client) CreateHook(ctx context.Context, hookURL, secret string, events []string) error {
+	b := hookBody(hookURL, secret, events)
+	b["name"] = "web"
+	return c.do(ctx, http.MethodPost, c.repo()+"/hooks", b, nil)
+}
+
+// UpdateHook sets a webhook's secret and events; GitHub never shows the secret, so the only
+// way to be sure it matches is to write it.
+func (c *Client) UpdateHook(ctx context.Context, id int64, hookURL, secret string, events []string) error {
+	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/hooks/%d", c.repo(), id), hookBody(hookURL, secret, events), nil)
+}

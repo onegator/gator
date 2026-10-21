@@ -7,6 +7,7 @@ ALTER TABLE phase_transitions ADD CONSTRAINT phase_transitions_kind_check
     CHECK (kind IN ('create', 'advance', 'rollback', 'handoff', 'auto_block', 'unblock', 'close', 'edit', 'reopen'));
 
 -- +goose Down
+DELETE FROM phase_transitions WHERE kind IN ('edit', 'reopen');
 ALTER TABLE phase_transitions DROP CONSTRAINT phase_transitions_kind_check;
 ALTER TABLE phase_transitions ADD CONSTRAINT phase_transitions_kind_check
     CHECK (kind IN ('create', 'advance', 'rollback', 'handoff', 'auto_block', 'unblock', 'close'));

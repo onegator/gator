@@ -1,0 +1,24 @@
+{
+  "project": {"slug": "demo"},
+  "config": {"repo": "acme/app"},
+  "secrets": {"token": "unused-in-this-scenario", "webhook_secret": "dev-secret"},
+  "tasks": [{"id": "t7", "kind": "feature", "title": "Search", "phase": "verification",
+             "external_refs": {"github_issue": "acme/app#7", "github_pr": "acme/app#1"}}],
+  "steps": [
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-opened.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.create"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-edited.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.update"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-closed.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.close"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-reopened.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.reopen"]},
+    {"hook": "webhook", "body_file": "../testdata/payloads/issues-closed-with-pr.json", "headers": {"X-GitHub-Event": "issues"},
+     "sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="},
+     "expect_core": ["task.find"]}
+  ]
+}

@@ -33,6 +33,11 @@ type Handlers struct {
 	// IncidentClosed says the fix landed, so the plugin can resolve the alert in whatever
 	// tool raised it.
 	IncidentClosed func(ctx context.Context, core *Core, p IncidentClosedParams) error
+	// Import brings in what the outside system already holds, idempotently. The core calls it
+	// when the plugin is switched on for a project and when a person asks again.
+	Import func(ctx context.Context, core *Core, p ImportParams) (ImportResult, error)
+	// TaskClosed says a task finished, so the issue it came from can be closed too.
+	TaskClosed func(ctx context.Context, core *Core, p TaskClosedParams) error
 }
 
 func (h *Handlers) hooks() []string {
@@ -54,6 +59,8 @@ func (h *Handlers) hooks() []string {
 	add(h.IncidentClosed != nil, MethodIncidentClosed)
 	add(h.QualityEvaluate != nil, MethodQualityEvaluate)
 	add(h.TurnEnding != nil, MethodTurnEnding)
+	add(h.Import != nil, MethodImport)
+	add(h.TaskClosed != nil, MethodTaskClosed)
 	return out
 }
 
@@ -131,6 +138,10 @@ func dispatch(ctx context.Context, h *Handlers, core *Core, method string, raw j
 		return tell(ctx, core, method, raw, h.IncidentClosed)
 	case MethodQualityEvaluate:
 		return ask(ctx, core, method, raw, h.QualityEvaluate)
+	case MethodImport:
+		return ask(ctx, core, method, raw, h.Import)
+	case MethodTaskClosed:
+		return tell(ctx, core, method, raw, h.TaskClosed)
 	}
 	return nil, Errorf(CodeMethodNotFound, "method %q not found", method)
 }
@@ -192,6 +203,14 @@ func (c *Core) Setting(key string) string {
 	return s
 }
 
+// WebhookURL is where the project's deliveries for this plugin arrive, or "" when the server
+// does not know its public address.
+func (c *Core) WebhookURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.init.WebhookURL
+}
+
 // Secret returns a secret setting from the process environment.
 func (c *Core) Secret(key string) string { return os.Getenv(SecretEnv(key)) }
 
@@ -209,7 +228,22 @@ func (c *Core) FindTask(ctx context.Context, key, value string) (*TaskRef, error
 	return t, err
 }
 
-// UpdateTask merges external references into a task.
+// CloseTask closes a task wherever it stands; closing a closed task changes nothing.
+func (c *Core) CloseTask(ctx context.Context, taskID, reason string) (TaskRef, error) {
+	var t TaskRef
+	err := c.conn.Call(ctx, CoreTaskClose, TaskStateParams{TaskID: taskID, Reason: reason}, &t)
+	return t, err
+}
+
+// ReopenTask opens a closed task again in the phase it closed in.
+func (c *Core) ReopenTask(ctx context.Context, taskID, reason string) (TaskRef, error) {
+	var t TaskRef
+	err := c.conn.Call(ctx, CoreTaskReopen, TaskStateParams{TaskID: taskID, Reason: reason}, &t)
+	return t, err
+}
+
+// UpdateTask merges external references into a task, and replaces its title or description
+// when they are set.
 func (c *Core) UpdateTask(ctx context.Context, p TaskUpdateParams) (TaskRef, error) {
 	var t TaskRef
 	err := c.conn.Call(ctx, CoreTaskUpdate, p, &t)
@@ -246,7 +280,6 @@ func (c *Core) KVPut(ctx context.Context, key string, value any) error {
 	return c.conn.Call(ctx, CoreKVPut, KVPutParams{Key: key, Value: b}, nil)
 }
 
-// Log writes to the core's log.
 // RecordRelease tells the core what reached an environment, and how long to watch it before
 // the task is called finished.
 func (c *Core) RecordRelease(ctx context.Context, p ReleaseRecordParams) (ReleaseRecordResult, error) {
@@ -269,6 +302,7 @@ func (c *Core) CloseIncident(ctx context.Context, p IncidentCloseParams) error {
 	return c.conn.Call(ctx, CoreIncidentClose, p, nil)
 }
 
+// Log writes to the core's log.
 func (c *Core) Log(ctx context.Context, level, message string, fields map[string]any) error {
 	return c.conn.Call(ctx, CoreLog, LogParams{Level: level, Message: message, Fields: fields}, nil)
 }

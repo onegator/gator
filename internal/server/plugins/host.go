@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -53,6 +54,28 @@ type Config struct {
 	WebhookMaxBytes  int64         // default 1 MiB
 	WebhookPerSecond float64       // per project and plugin; default 10
 	WebhookBurst     int           // default 20
+	ImportTimeout    time.Duration // how long an import may take; default 5m
+	RefreshEvery     time.Duration // how often to look for connected tokens about to expire; default 5m
+
+	// CatalogueDir holds the plugins the server ships; empty: none.
+	CatalogueDir string
+	// PublicURL is where people's browsers reach this server; a connection's OAuth redirect
+	// comes back to PublicURL/connect/callback. Empty: plugins cannot be connected.
+	PublicURL string
+	// HooksURL is where outside systems reach /hooks; default PublicURL. It may differ when
+	// only /hooks is published to the internet.
+	HooksURL string
+	// OAuthClient returns the server's OAuth client for a provider; default: the environment.
+	OAuthClient func(provider string) (OAuthClient, bool)
+	// HTTP makes the server's own calls to OAuth providers; default: 20s timeout.
+	HTTP *http.Client
+}
+
+// LoadEnv fills the settings that come from the server's environment and are the plugins'
+// alone. PublicURL is the server's (GATOR_PUBLIC_URL, read by config.Load) and is passed in.
+func (c *Config) LoadEnv() {
+	c.CatalogueDir = DefaultCatalogueDir()
+	c.HooksURL = strings.TrimRight(os.Getenv("GATOR_HOOKS_URL"), "/")
 }
 
 func (c *Config) defaults() {
@@ -83,6 +106,21 @@ func (c *Config) defaults() {
 	if c.WebhookBurst == 0 {
 		c.WebhookBurst = 20
 	}
+	if c.ImportTimeout == 0 {
+		c.ImportTimeout = 5 * time.Minute
+	}
+	if c.RefreshEvery == 0 {
+		c.RefreshEvery = 5 * time.Minute
+	}
+	if c.HooksURL == "" {
+		c.HooksURL = c.PublicURL
+	}
+	if c.OAuthClient == nil {
+		c.OAuthClient = OAuthClientFromEnv
+	}
+	if c.HTTP == nil {
+		c.HTTP = &http.Client{Timeout: 20 * time.Second}
+	}
 }
 
 // Host supervises plugin processes.
@@ -97,13 +135,16 @@ type Host struct {
 
 	mu   sync.Mutex
 	inst map[[16]byte]*instance
+
+	catMu sync.Mutex
+	cat   map[string]probed // bundled manifests by path
 }
 
 // New creates a host; Run starts it.
 func New(pool *pgxpool.Pool, proc *process.Service, keys *secrets.Keyring, hub *events.Hub, log *slog.Logger, cfg Config) *Host {
 	cfg.defaults()
 	return &Host{pool: pool, proc: proc, keys: keys, hub: hub, log: log, cfg: cfg,
-		lim: limits.NewLimiter(cfg.WebhookPerSecond, cfg.WebhookBurst), inst: map[[16]byte]*instance{}}
+		lim: limits.NewLimiter(cfg.WebhookPerSecond, cfg.WebhookBurst), inst: map[[16]byte]*instance{}, cat: map[string]probed{}}
 }
 
 // Capabilities answers process.CapabilityResolver from the database, so it works before the
@@ -153,6 +194,7 @@ func (h *Host) Run(ctx context.Context) {
 	wake, unsub := h.hub.Subscribe("*")
 	defer unsub()
 	defer h.stopAll()
+	h.refreshBundled(ctx)
 	h.syncLogged(ctx)
 	if err := db.New(h.pool).InitEventCursor(ctx, cursorName); err != nil && ctx.Err() == nil {
 		h.log.Warn("plugin event cursor", "err", err)
@@ -161,12 +203,16 @@ func (h *Host) Run(ctx context.Context) {
 	defer syncT.Stop()
 	poll := time.NewTicker(h.cfg.PollEvery)
 	defer poll.Stop()
+	refresh := time.NewTicker(h.cfg.RefreshEvery)
+	defer refresh.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-syncT.C:
 			h.syncLogged(ctx)
+		case <-refresh.C:
+			h.RefreshTokens(ctx)
 		case <-wake:
 			h.drain(ctx)
 		case <-poll.C:
@@ -344,8 +390,11 @@ func (i *instance) env() ([]string, []string, error) {
 	}
 	var vals []string
 	for k, v := range sec {
-		env = append(env, plugin.SecretEnv(k)+"="+v)
 		vals = append(vals, v)
+		if serverOnly(k) {
+			continue
+		}
+		env = append(env, plugin.SecretEnv(k)+"="+v)
 	}
 	return env, vals, nil
 }
@@ -414,6 +463,7 @@ func (i *instance) session(ctx context.Context) error {
 	err = conn.Call(initCtx, plugin.MethodInitialize, plugin.InitializeParams{
 		CoreVersion: version.Version, ProtocolVersion: plugin.ProtocolVersion,
 		ProjectID: uuidString(i.b.projectID), ProjectSlug: i.b.slug, Config: i.b.config,
+		WebhookURL: i.h.webhookURL(i.b.slug, i.b.name),
 	}, &m)
 	cancel()
 	if err == nil && m.Name != i.b.name {
@@ -507,7 +557,11 @@ func (i *instance) schedules(ctx context.Context) {
 
 // call invokes a hook with the timeout, audit and failure accounting.
 func (h *Host) call(ctx context.Context, i *instance, method string, params, out any) error {
-	cctx, cancel := context.WithTimeout(ctx, h.cfg.CallTimeout)
+	return h.callFor(ctx, i, method, params, out, h.cfg.CallTimeout)
+}
+
+func (h *Host) callFor(ctx context.Context, i *instance, method string, params, out any, timeout time.Duration) error {
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
 	var raw json.RawMessage
@@ -515,7 +569,7 @@ func (h *Host) call(ctx context.Context, i *instance, method string, params, out
 	if err == nil {
 		err = conn.Call(cctx, method, params, &raw)
 		if errors.Is(err, context.DeadlineExceeded) {
-			err = fmt.Errorf("%w: %s after %s", ErrTimeout, method, h.cfg.CallTimeout)
+			err = fmt.Errorf("%w: %s after %s", ErrTimeout, method, timeout)
 		}
 	}
 	i.audit("core_to_plugin", method, params, raw, err, time.Since(start))
@@ -717,3 +771,15 @@ func parseUUID(s string) (pgtype.UUID, bool) {
 }
 
 func envPath() string { return os.Getenv("PATH") }
+
+// serverOnly marks a stored secret the plugin never sees, such as a connection's refresh token:
+// the server refreshes, the plugin only ever holds the access token.
+func serverOnly(key string) bool { return strings.HasPrefix(key, "_") }
+
+// webhookURL is where a project's deliveries for a plugin arrive, when the server knows.
+func (h *Host) webhookURL(slug, name string) string {
+	if h.cfg.HooksURL == "" {
+		return ""
+	}
+	return h.cfg.HooksURL + "/hooks/" + slug + "/" + name
+}

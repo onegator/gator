@@ -25,6 +25,11 @@ type SchemaProp struct {
 	Secret      bool   `json:"x-secret,omitempty"`
 	WriteOnly   bool   `json:"writeOnly,omitempty"`
 	Enum        []any  `json:"enum,omitempty"`
+	// Format tells a client how to edit a string. "pairs" is "key=value, key=value", which a
+	// client can show as rows instead of asking a person to type the syntax.
+	Format string `json:"x-format,omitempty"`
+	// Title is the label a client shows instead of the key.
+	Title string `json:"title,omitempty"`
 }
 
 // ParseConfigSchema reads a manifest's config_schema; empty means no configuration.

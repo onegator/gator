@@ -58,15 +58,22 @@ func (h *Host) onEvent(ctx context.Context, e events.Event) {
 		if !ok {
 			return
 		}
+		t, err := q.GetTask(ctx, id)
+		if err != nil {
+			return
+		}
+		// A tracker hears about every task that finishes, so the issue it came from does not
+		// sit open in a list people still read. The plugin knows which tasks are its own.
+		var p struct{ Reason string }
+		_ = json.Unmarshal(e.Payload, &p)
+		h.each(h.forProject(t.ProjectID, plugin.MethodTaskClosed), func(i *instance) {
+			h.callLogged(ctx, i, plugin.MethodTaskClosed, plugin.TaskClosedParams{Task: taskRef(t), Reason: p.Reason})
+		})
 		// An incident task finishing is the fix landing. The tool that raised the fault has no
 		// way of knowing that unless we say so, and an alert nobody closed goes on shouting.
 		inc, err := q.CloseIncidentByTask(ctx, id)
 		if err != nil {
 			return // not an incident task, or already closed
-		}
-		t, err := q.GetTask(ctx, id)
-		if err != nil {
-			return
 		}
 		h.each(h.forProject(t.ProjectID, plugin.MethodIncidentClosed), func(i *instance) {
 			h.callLogged(ctx, i, plugin.MethodIncidentClosed, plugin.IncidentClosedParams{

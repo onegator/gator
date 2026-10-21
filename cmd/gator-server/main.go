@@ -134,7 +134,9 @@ func serve(ctx context.Context) error {
 	hub := events.NewHub()
 	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
 	go relay.Run(ctx)
-	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, plugins.Config{})
+	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL}
+	pluginCfg.LoadEnv()
+	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
 	// Push notifications: without an APNs key the sender is disabled and nothing leaves here.
 	var sender notify.Sender = notify.Disabled{}
@@ -207,6 +209,8 @@ func serve(ctx context.Context) error {
 	root.Mount("/", apiServer.Router())
 	// The only public endpoint: plugin webhooks. Plugins verify the sender's signature.
 	root.Mount("/hooks", pluginHost.Hooks())
+	// Where a provider sends the browser back after "Connect GitHub"; the state is the proof.
+	root.Mount("/connect", pluginHost.ConnectHandler())
 	adminRouter := chi.NewRouter()
 	adminRouter.Use(auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log), auth.RequireAuth, auth.RequireWorkspaceAdmin)
 	adminRouter.Mount("/", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())

@@ -262,6 +262,12 @@ paths:
       description: Installed plugins. Workspace admins only.
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/InstalledPlugin" } } } } }
+  /plugins/catalogue:
+    get:
+      operationId: listPluginCatalogue
+      description: The plugins this server ships. A project admin switches one on with configureProjectPlugin; the first project to do so installs it, with no command line.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CataloguePlugin" } } } } }
   /plugins/{pluginName}:
     put:
       operationId: installPlugin
@@ -601,6 +607,33 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPlugin" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/plugins/{pluginName}/connect:
+    post:
+      operationId: connectProjectPlugin
+      description: >-
+        Starts "Connect GitHub" and the like: answers the provider's sign-in page for the person's
+        browser. The provider sends the browser back to the server's /connect/callback, which stores
+        the token as the plugin's secret for this project and then goes on to returnTo, if given
+        (gator://… or a loopback address), with plugin, project and status=connected or error.
+        Connecting does not switch the plugin on. 409 when this server has no OAuth app for it.
+        Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/pluginName" } ]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectRequest" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectStart" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/plugins/{pluginName}/import:
+    post:
+      operationId: importProjectPlugin
+      description: Brings in what the outside system already holds, such as open issues, as tasks. Safe to repeat; switching a tracker on does it once by itself. 409 while the plugin is not running. Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/pluginName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PluginImport" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/plugins/{pluginName}/calls:
     get:
       operationId: listPluginCalls
@@ -1708,6 +1741,45 @@ components:
         config: { type: object, additionalProperties: true, description: non-secret settings }
         secretsSet: { type: array, items: { type: string }, description: secret settings that hold a value }
         configSchema: { type: object, additionalProperties: true }
+        description: { type: string }
+        connect: { $ref: "#/components/schemas/PluginConnection" }
+        webhookUrl: { type: string, description: "where the outside system should deliver webhooks, for setting one up by hand; absent when the server does not know its public address" }
+    PluginConnection:
+      type: object
+      description: A plugin a person can connect by signing in at the provider, instead of pasting a token.
+      required: [title, available, connected]
+      properties:
+        title: { type: string, description: 'the provider, for "Connect GitHub"' }
+        available: { type: boolean, description: "this server has an OAuth app for the provider" }
+        connected: { type: boolean, description: "the project holds a token from a connection or a pasted one" }
+    CataloguePlugin:
+      type: object
+      required: [name, version, capabilities, installed]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        configSchema: { type: object, additionalProperties: true }
+        installed: { type: boolean }
+        connect: { $ref: "#/components/schemas/PluginConnection" }
+    PluginConnectRequest:
+      type: object
+      properties:
+        returnTo: { type: string, description: "gator://… or a loopback address to send the browser to afterwards" }
+    PluginConnectStart:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, description: "the provider's sign-in page; open it in a browser" }
+    PluginImport:
+      type: object
+      required: [created, existing]
+      properties:
+        created: { type: integer }
+        existing: { type: integer, description: already on the board }
+        truncated: { type: boolean, description: there was more than one import brings in }
+        note: { type: string }
     PluginCall:
       type: object
       required: [id, direction, method, durationMs, createdAt]

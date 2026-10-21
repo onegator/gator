@@ -46,6 +46,8 @@ type harness struct {
 	svc     *process.Service
 	admin   string // user bearer
 	runner  string // runner bearer
+	oauth   *fakeProvider
+	bundled string // the catalogue's one plugin, not installed until a test asks for it
 }
 
 const (
@@ -75,9 +77,13 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	oauth := newFakeProvider(t)
+	catalogue, bundled := catalogueDir(t)
 	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{CallTimeout: 2 * time.Second,
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
-		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond})
+		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
+		CatalogueDir: catalogue, PublicURL: fakePublicURL, HooksURL: fakeHooksURL,
+		OAuthClient: oauth.client, HTTP: oauth.httpClient()})
 	hostCtx, stopHost := context.WithCancel(context.Background())
 	hostDone := make(chan struct{})
 	go func() { host.Run(hostCtx); close(hostDone) }()
@@ -90,6 +96,7 @@ func newHarness(t *testing.T) *harness {
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
+	root.Mount("/connect", host.ConnectHandler())
 	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)
 
@@ -101,7 +108,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, admin: admin, runner: runner}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, admin: admin, runner: runner, oauth: oauth, bundled: bundled}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.

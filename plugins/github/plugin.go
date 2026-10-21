@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/onegator/gator/plugin"
 )
@@ -25,24 +26,38 @@ const (
 )
 
 const configSchema = `{"type":"object","properties":{
-	"repo":{"type":"string","description":"owner/name of the repository"},
-	"token":{"type":"string","x-secret":true,"description":"fine-grained token for this repository: Contents, Issues and Pull requests read and write; Checks and Metadata read. Without Checks this plugin cannot read CI results, and a gate waiting on one never learns it finished"},
-	"webhook_secret":{"type":"string","x-secret":true,"description":"the secret set on the repository webhook"},
-	"api_url":{"type":"string","description":"API base; default https://api.github.com"},
-	"base_branch":{"type":"string","description":"branch pull requests target; default: the repository's default branch"},
-	"trigger_label":{"type":"string","description":"only issues with this label become tasks; empty: every opened issue"},
-	"label_prefix":{"type":"string","description":"prefix of phase labels; default gator:"},
-	"check_phase":{"type":"string","description":"phase whose gate gets CI checks; default implementation"}
-	},"required":["repo","token","webhook_secret"]}`
+	"repo":{"type":"string","title":"Repository","description":"owner/name of the repository"},
+	"token":{"type":"string","x-secret":true,"title":"Token","description":"set by Connect GitHub; or a fine-grained token for this repository: Contents, Issues, Pull requests and Webhooks read and write; Checks and Metadata read. Without Checks this plugin cannot read CI results, and a gate waiting on one never learns it finished"},
+	"webhook_secret":{"type":"string","x-secret":true,"title":"Webhook secret","description":"set by Connect GitHub; or the secret on a webhook you made by hand"},
+	"api_url":{"type":"string","title":"API address","description":"API base; default https://api.github.com"},
+	"base_branch":{"type":"string","title":"Base branch","description":"branch pull requests target; default: the repository's default branch"},
+	"trigger_label":{"type":"string","title":"Only issues labelled","description":"only issues with this label become tasks; empty: every open issue"},
+	"label_prefix":{"type":"string","title":"Phase label prefix","description":"prefix of phase labels; default gator:"},
+	"check_phase":{"type":"string","title":"CI phase","description":"phase whose gate gets CI checks; default implementation"}
+	},"required":["repo"]}`
 
 var manifest = plugin.Manifest{
-	Name:         "github",
-	Version:      "0.1.0",
+	Name:    "github",
+	Version: "0.2.0",
+	Description: "Issues become tasks and follow them both ways, finished work opens a pull request, " +
+		"and CI results gate the phase.",
 	Capabilities: []string{"tracker", "vcs", "ci"},
 	UI:           []string{"tab", "chip"},
 	ConfigSchema: json.RawMessage(configSchema),
 	Webhook:      &plugin.WebhookSpec{DeliveryHeader: "X-GitHub-Delivery"},
+	// An OAuth app's token with the repo scope reads and writes issues, pull requests, checks
+	// and the repository's webhooks: everything this plugin does, in one sign-in.
+	Connect: &plugin.ConnectSpec{Title: "GitHub", AuthorizeURL: "https://github.com/login/oauth/authorize",
+		TokenURL: "https://github.com/login/oauth/access_token", Scopes: []string{"repo"},
+		Secret: "token", WebhookSecret: "webhook_secret"},
 }
+
+// webhookEvents are the deliveries this plugin reads.
+var webhookEvents = []string{"issues", "pull_request", "check_run"}
+
+// maxImport bounds one import. A repository with thousands of open issues is a backlog, not a
+// queue of work, and a board flooded with it would be worse than one that asks to filter.
+const maxImport = 500
 
 // prInfo is what the plugin remembers about a pull request, for the gate and the UI.
 type prInfo struct {
@@ -56,8 +71,9 @@ type prInfo struct {
 type gh struct{ http *http.Client }
 
 func (g *gh) handlers() plugin.Handlers {
-	return plugin.Handlers{Manifest: manifest, Webhook: g.webhook, PhaseTransition: g.phaseTransition,
-		GateEvaluate: g.gateEvaluate, RenderUI: g.renderUI, JobFinish: g.jobFinish}
+	return plugin.Handlers{Manifest: manifest, Init: g.init, Webhook: g.webhook, PhaseTransition: g.phaseTransition,
+		GateEvaluate: g.gateEvaluate, RenderUI: g.renderUI, JobFinish: g.jobFinish, Import: g.importIssues,
+		TaskClosed: g.taskClosed}
 }
 
 func setting(core *plugin.Core, key, def string) string {
@@ -85,7 +101,7 @@ func asPluginErr(err error) error {
 	// appears where the plugin is configured.
 	if ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden {
 		return plugin.Errorf(plugin.CodeInternal,
-			"GitHub refused the token (%v). It needs Contents, Issues and Pull requests: read and write, and Checks: read — Checks is the one usually missed", ae)
+			"GitHub refused the token (%v). Connect GitHub again, or give the token Contents, Issues and Pull requests: read and write, and Checks: read — Checks is the one usually missed", ae)
 	}
 	if ae.Status < 500 && ae.Status != http.StatusTooManyRequests {
 		return plugin.Errorf(plugin.CodeInvalidParams, "%v", ae)
@@ -162,20 +178,8 @@ func (g *gh) webhook(ctx context.Context, core *plugin.Core, p plugin.WebhookPar
 }
 
 func (g *gh) onIssue(ctx context.Context, core *plugin.Core, repo, action string, body []byte) error {
-	if action != "opened" && action != "reopened" && action != "labeled" {
-		return nil
-	}
 	var ev struct {
-		Issue struct {
-			Number  int    `json:"number"`
-			Title   string `json:"title"`
-			Body    string `json:"body"`
-			HTMLURL string `json:"html_url"`
-			Labels  []struct {
-				Name string `json:"name"`
-			} `json:"labels"`
-			PullRequest *struct{} `json:"pull_request"`
-		} `json:"issue"`
+		Issue Issue `json:"issue"`
 	}
 	if err := json.Unmarshal(body, &ev); err != nil {
 		return plugin.Errorf(plugin.CodeInvalidParams, "issue: %v", err)
@@ -184,30 +188,172 @@ func (g *gh) onIssue(ctx context.Context, core *plugin.Core, repo, action string
 	if is.PullRequest != nil || is.Number == 0 {
 		return nil
 	}
-	has := func(name string) bool {
-		for _, l := range is.Labels {
-			if strings.EqualFold(l.Name, name) {
-				return true
-			}
+	switch action {
+	case "opened", "reopened", "labeled":
+		t, _, err := g.ensureTask(ctx, core, repo, is)
+		if err != nil || t == nil || action != "reopened" || !t.Closed {
+			return err
 		}
-		return false
-	}
-	if t := core.Setting("trigger_label"); t != "" && !has(t) {
-		return nil
-	}
-	ref := refFor(repo, is.Number)
-	// Deliveries repeat and labels fire again: one issue, one task.
-	if t, err := core.FindTask(ctx, refIssue, ref); err != nil || t != nil {
+		_, err = core.ReopenTask(ctx, t.ID, "the issue was reopened on GitHub")
+		return err
+	case "edited":
+		t, err := core.FindTask(ctx, refIssue, refFor(repo, is.Number))
+		if err != nil || t == nil {
+			return err
+		}
+		title, desc := is.Title, issueDescription(is)
+		_, err = core.UpdateTask(ctx, plugin.TaskUpdateParams{TaskID: t.ID, Title: &title, Description: &desc})
+		return err
+	case "closed":
+		t, err := core.FindTask(ctx, refIssue, refFor(repo, is.Number))
+		if err != nil || t == nil || t.Closed {
+			return err
+		}
+		// A task with a pull request is Gator's own work, and its pull request says "Closes
+		// #n": merging it closes the issue while the task may still have a release ahead. Gator
+		// finishes that task by its own process. Any other close is a person deciding the issue
+		// is done or will not be done, and the board should agree.
+		if t.ExternalRefs[refPR] != "" {
+			return nil
+		}
+		reason := "the issue was closed on GitHub"
+		if is.StateReason == "not_planned" {
+			reason = "the issue was closed on GitHub as not planned"
+		}
+		_, err = core.CloseTask(ctx, t.ID, reason)
 		return err
 	}
+	return nil
+}
+
+func (is Issue) has(name string) bool {
+	for _, l := range is.Labels {
+		if strings.EqualFold(l.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func issueDescription(is Issue) string { return strings.TrimSpace(is.Body + "\n\n" + is.HTMLURL) }
+
+// ensureTask makes one task per issue: deliveries repeat, labels fire again and an import may
+// meet an issue a webhook already brought. It answers the task and whether it made it; no
+// task when the issue does not carry the trigger label.
+func (g *gh) ensureTask(ctx context.Context, core *plugin.Core, repo string, is Issue) (*plugin.TaskRef, bool, error) {
+	if t := core.Setting("trigger_label"); t != "" && !is.has(t) {
+		return nil, false, nil
+	}
+	ref := refFor(repo, is.Number)
+	if t, err := core.FindTask(ctx, refIssue, ref); err != nil || t != nil {
+		return t, false, err
+	}
 	kind := "feature"
-	if has("bug") {
+	if is.has("bug") {
 		kind = "bug"
 	}
-	_, err := core.CreateTask(ctx, plugin.TaskCreateParams{Kind: kind, Title: is.Title,
-		Description:  strings.TrimSpace(is.Body + "\n\n" + is.HTMLURL),
+	t, err := core.CreateTask(ctx, plugin.TaskCreateParams{Kind: kind, Title: is.Title, Description: issueDescription(is),
 		ExternalRefs: map[string]string{refIssue: ref, refIssueURL: is.HTMLURL}})
-	return err
+	if err != nil {
+		return nil, false, err
+	}
+	return &t, true, nil
+}
+
+// importIssues brings the repository's open issues onto the board, newest first. Issues the
+// board already has are counted, not repeated.
+func (g *gh) importIssues(ctx context.Context, core *plugin.Core, _ plugin.ImportParams) (plugin.ImportResult, error) {
+	var out plugin.ImportResult
+	repo := core.Setting("repo")
+	if repo == "" || core.Secret("token") == "" {
+		return out, plugin.Errorf(plugin.CodeInvalidParams, "connect GitHub and choose the repository first")
+	}
+	c, label := g.client(core), core.Setting("trigger_label")
+	for page := 1; ; page++ {
+		issues, err := c.OpenIssues(ctx, label, page)
+		if err != nil {
+			return out, asPluginErr(err)
+		}
+		for _, is := range issues {
+			if is.PullRequest != nil {
+				continue
+			}
+			if out.Created+out.Existing >= maxImport {
+				out.Truncated = true
+				out.Note = fmt.Sprintf("brought in the newest %d open issues; set trigger_label to choose which", maxImport)
+				return out, nil
+			}
+			t, made, err := g.ensureTask(ctx, core, repo, is)
+			switch {
+			case err != nil:
+				return out, err
+			case t == nil:
+				// Not labelled: not on the board, and not counted.
+			case made:
+				out.Created++
+			default:
+				out.Existing++
+			}
+		}
+		if len(issues) < 100 {
+			return out, nil
+		}
+	}
+}
+
+// taskClosed closes the issue a finished task came from, so the list people read on GitHub
+// does not keep work Gator has done. An issue already closed is left alone, which is also
+// what happens when the task closed because the issue did.
+func (g *gh) taskClosed(ctx context.Context, core *plugin.Core, p plugin.TaskClosedParams) error {
+	n, ok := refNumber(p.Task.ExternalRefs[refIssue], core.Setting("repo"))
+	if !ok || core.Secret("token") == "" {
+		return nil
+	}
+	c := g.client(core)
+	is, err := c.GetIssue(ctx, n)
+	if err != nil {
+		return asPluginErr(err)
+	}
+	if is.State == "closed" {
+		return nil
+	}
+	return asPluginErr(c.CloseIssue(ctx, n))
+}
+
+// init registers the repository webhook when the server knows where deliveries arrive, so
+// nobody has to copy a URL and a secret into GitHub's settings. It runs on every start, which
+// also mends a webhook someone deleted. It never fails the start: a plugin that cannot manage
+// webhooks still does everything else, and the log says why.
+func (g *gh) init(_ context.Context, core *plugin.Core) error {
+	hookURL, secret, token, repo := core.WebhookURL(), core.Secret("webhook_secret"), core.Secret("token"), core.Setting("repo")
+	if hookURL == "" || secret == "" || token == "" || repo == "" {
+		return nil
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := g.ensureWebhook(ctx, core, hookURL, secret); err != nil {
+			_ = core.Log(ctx, "warn", "could not set up the repository webhook; add it by hand", map[string]any{"url": hookURL, "err": err.Error()})
+		}
+	}()
+	return nil
+}
+
+func (g *gh) ensureWebhook(ctx context.Context, core *plugin.Core, hookURL, secret string) error {
+	c := g.client(core)
+	hooks, err := c.Hooks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, h := range hooks {
+		if h.Config.URL == hookURL {
+			return c.UpdateHook(ctx, h.ID, hookURL, secret, webhookEvents)
+		}
+	}
+	if err := c.CreateHook(ctx, hookURL, secret, webhookEvents); err != nil {
+		return err
+	}
+	return core.Log(ctx, "info", "created the repository webhook", map[string]any{"url": hookURL})
 }
 
 func prState(pr PR) string {

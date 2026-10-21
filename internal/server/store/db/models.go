@@ -284,6 +284,17 @@ type PluginCall struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
+type PluginConnectState struct {
+	Hash       []byte             `json:"hash"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	PluginName string             `json:"plugin_name"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Verifier   string             `json:"verifier"`
+	ReturnTo   string             `json:"return_to"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type PluginKv struct {
 	ProjectPluginID pgtype.UUID        `json:"project_plugin_id"`
 	Key             string             `json:"key"`
@@ -350,6 +361,7 @@ type ProjectPlugin struct {
 	DisabledReason *string            `json:"disabled_reason"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
 }
 
 type ProjectRepo struct {
