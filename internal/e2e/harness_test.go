@@ -46,6 +46,8 @@ type harness struct {
 	svc     *process.Service
 	admin   string // user bearer
 	runner  string // runner bearer
+	oauth   *fakeProvider
+	bundled string // the catalogue's one plugin, not installed until a test asks for it
 }
 
 const (
@@ -53,7 +55,9 @@ const (
 	testStallAfter = 2 * time.Second
 )
 
-func newHarness(t *testing.T) *harness {
+// newHarness starts a server on a fresh database connection. configure adjusts the runner
+// manager before it starts, for tests that need a provisioner or other timing.
+func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	t.Helper()
 	url := os.Getenv("GATOR_DATABASE_URL")
 	if url == "" {
@@ -75,21 +79,30 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	oauth := newFakeProvider(t)
+	catalogue, bundled := catalogueDir(t)
 	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{CallTimeout: 2 * time.Second,
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
-		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond})
+		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
+		CatalogueDir: catalogue, PublicURL: fakePublicURL, HooksURL: fakeHooksURL,
+		OAuthClient: oauth.client, HTTP: oauth.httpClient()})
 	hostCtx, stopHost := context.WithCancel(context.Background())
 	hostDone := make(chan struct{})
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
-	mgr := runners.New(pool, svc, hub, slog.Default(), runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}})
+	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
+		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
+	for _, c := range configure {
+		c(&rcfg)
+	}
+	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
+	root.Mount("/connect", host.ConnectHandler())
 	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)
 
@@ -101,7 +114,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, admin: admin, runner: runner}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, admin: admin, runner: runner, oauth: oauth, bundled: bundled}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.

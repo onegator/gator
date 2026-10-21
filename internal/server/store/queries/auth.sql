@@ -64,3 +64,24 @@ SELECT project_id FROM tasks WHERE id = $1;
 -- name: InsertAudit :exec
 INSERT INTO audit_log (actor_kind, actor_id, action, target, payload)
 VALUES ($1, $2, $3, $4, $5);
+
+-- name: PromoteIfNoAdmin :one
+-- The first person in becomes workspace admin, decided in one statement so two first logins
+-- cannot both see an empty workspace.
+UPDATE users SET workspace_role = 'admin'
+WHERE users.id = $1 AND NOT EXISTS (SELECT 1 FROM users a WHERE a.workspace_role = 'admin')
+RETURNING *;
+
+-- name: InsertLoginCode :exec
+INSERT INTO login_codes (hash, user_id, code_challenge, redirect_uri, expires_at)
+VALUES ($1, $2, $3, $4, $5);
+
+-- name: TakeLoginCode :one
+-- A code is spent by reading it: whoever presents it second finds nothing.
+DELETE FROM login_codes WHERE hash = $1 RETURNING *;
+
+-- name: DeleteExpiredLoginCodes :exec
+DELETE FROM login_codes WHERE expires_at < now();
+
+-- name: GetUserByEmail :one
+SELECT * FROM users WHERE email = $1;

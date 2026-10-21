@@ -4,7 +4,9 @@ info:
   version: 0.1.0
   description: >
     HTTP surface of gator-server. Every route lives under /api/v1. Live updates are delivered
-    over the WebSocket at /api/v1/ws (topics: inbox, task:<id>, job:<id>).
+    over the WebSocket at /api/v1/ws (topics: inbox, task:<id>, job:<id>, project:<id>). On
+    every topic, an event that belongs to a project reaches only callers who may read that
+    project; subscribing to project:<id> without that right closes the socket.
 servers:
   - url: /api/v1
 paths:
@@ -84,7 +86,7 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectMember" } } } } }
     put:
       operationId: setMember
-      description: Set a user's role in a project. Requires project admin.
+      description: "Set a user's role in a project. Requires project admin. Refused (409) when it would leave the project without an admin."
       parameters: [ { $ref: "#/components/parameters/projectId" } ]
       requestBody:
         required: true
@@ -92,6 +94,84 @@ paths:
       responses:
         "204": { description: ok }
         "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/members/{userId}:
+    delete:
+      operationId: removeMember
+      description: "Take a person out of a project. Requires project admin, except that anyone may leave. Refused (409) for the last admin."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/candidates:
+    get:
+      operationId: listProjectCandidates
+      description: "People already in the workspace, not yet in this project, whose name or email contains q. At most ten, with nothing but name and email. Requires project admin."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectCandidate" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/invitations:
+    get:
+      operationId: listInvitations
+      description: "Invitations nobody has accepted or revoked yet, expired ones included. Requires project admin."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Invitation" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createInvitation
+      description: "Invite a person by email. The answer carries the link to pass on; it is shown once. Inviting the same address again replaces its open invitation. Requires project admin."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInvitation" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/IssuedInvitation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/invitations/{invitationId}:
+    delete:
+      operationId: revokeInvitation
+      description: The invitation's link stops working. Requires project admin.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/invitationId" }
+      responses:
+        "204": { description: revoked }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/invitations/{invitationId}/renew:
+    post:
+      operationId: renewInvitation
+      description: "A fresh link and a fresh expiry for an open invitation; the old link stops working. Only the token's hash is stored, so this is how an admin gets a link to copy again. Requires project admin."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/invitationId" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/IssuedInvitation" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /invitations/accept:
+    post:
+      operationId: acceptInvitation
+      description: "The signed-in person joins the project they were invited to. The invitation must have been sent to their email (403 otherwise); an unknown, revoked or expired one answers 404. Signing in with the invited address accepts it too, without this call."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AcceptInvitation" } } }
+      responses:
+        "200": { description: joined, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /projects:
     get:
       operationId: listProjects
@@ -99,12 +179,15 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Project" } } } } }
     post:
       operationId: createProject
+      description: "Any signed-in person may create a project; they become its admin. A repository given here becomes the primary one, over any the preset carries."
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/NewProject" } } }
       responses:
         "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
         "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /projects/{projectId}:
     get:
       operationId: getProject
@@ -124,7 +207,7 @@ paths:
   /projects/{projectId}/archive:
     post:
       operationId: archiveProject
-      description: "Hides a project without losing anything: its tasks, receipts and metrics stay readable, its plugins stop. Send archived=false to bring it back."
+      description: "Hides a project without losing anything: its tasks, receipts and metrics stay readable, its plugins stop. Send archived=false to bring it back. Requires project admin."
       parameters: [ { $ref: "#/components/parameters/projectId" } ]
       requestBody:
         required: true
@@ -149,6 +232,16 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectRepo" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/repos/{repoName}:
+    delete:
+      operationId: deleteProjectRepo
+      description: Forget a repository. The primary one can go only when it is the last, or once another is made primary. Requires project admin.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { name: repoName, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "204": { description: removed }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/tasks:
     get:
@@ -171,6 +264,12 @@ paths:
       description: Installed plugins. Workspace admins only.
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/InstalledPlugin" } } } } }
+  /plugins/catalogue:
+    get:
+      operationId: listPluginCatalogue
+      description: The plugins this server ships. A project admin switches one on with configureProjectPlugin; the first project to do so installs it, with no command line.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CataloguePlugin" } } } } }
   /plugins/{pluginName}:
     put:
       operationId: installPlugin
@@ -510,6 +609,33 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPlugin" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/plugins/{pluginName}/connect:
+    post:
+      operationId: connectProjectPlugin
+      description: >-
+        Starts "Connect GitHub" and the like: answers the provider's sign-in page for the person's
+        browser. The provider sends the browser back to the server's /connect/callback, which stores
+        the token as the plugin's secret for this project and then goes on to returnTo, if given
+        (gator://… or a loopback address), with plugin, project and status=connected or error.
+        Connecting does not switch the plugin on. 409 when this server has no OAuth app for it.
+        Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/pluginName" } ]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectRequest" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectStart" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/plugins/{pluginName}/import:
+    post:
+      operationId: importProjectPlugin
+      description: Brings in what the outside system already holds, such as open issues, as tasks. Safe to repeat; switching a tracker on does it once by itself. 409 while the plugin is not running. Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/pluginName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/PluginImport" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/plugins/{pluginName}/calls:
     get:
       operationId: listPluginCalls
@@ -550,6 +676,51 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TaskDetail" } } } }
         "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateTask
+      description: >-
+        Changes what a person said about an open task. Title, description and urgency may change
+        while it is open; kind only before any work happened on it, and the task then starts over
+        in the first phase of the new kind's process. Every change goes into the task's
+        transitions as kind "edit". Emits task.updated.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TaskPatch" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/close:
+    post:
+      operationId: closeTask
+      description: >-
+        Closes a task wherever it stands, with a reason; its history stays. Jobs still queued or
+        running on it are stopped. Closing a closed task changes nothing. Emits task.closed.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TaskStateChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/reopen:
+    post:
+      operationId: reopenTask
+      description: >-
+        Brings a closed task back in the phase it was closed in, with a reason. The phase is
+        entered afresh, so its earlier approval no longer counts. Reopening an open task changes
+        nothing. Emits task.reopened.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TaskStateChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/approve:
     post:
       operationId: approveTask
@@ -722,7 +893,7 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Job" } } } } }
     post:
       operationId: createTaskJob
-      description: Queue an agent job for the task's current phase. Role defaults to the phase's runner role.
+      description: "Queue an agent job for the task's current phase. Role defaults to the phase's runner role. placement says where it runs: local (a machine of the caller's, or a shared one; the default) or cloud (a cloud runner, started on demand when the server has a provisioner)."
       parameters: [ { $ref: "#/components/parameters/taskId" } ]
       requestBody:
         required: true
@@ -831,6 +1002,7 @@ components:
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
     pluginName: { name: pluginName, in: path, required: true, schema: { type: string } }
+    invitationId: { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error:
       description: error
@@ -863,7 +1035,7 @@ components:
       required: [name, url]
       properties:
         name: { type: string }
-        url: { type: string, description: "https://, ssh (git@host:path), file:// or an absolute path" }
+        url: { type: string, description: "https://, ssh (git@host:path), file://, an absolute path, or GitHub shorthand owner/repo" }
         defaultBranch: { type: string }
         primary: { type: boolean }
     NewJob:
@@ -877,9 +1049,10 @@ components:
         maxAttempts: { type: integer, minimum: 1, maximum: 10 }
         timeoutSeconds: { type: integer, minimum: 60 }
         maxToolCalls: { type: integer, minimum: 1 }
+        placement: { type: string, enum: [local, cloud], default: local, description: "local runs on a machine of the person starting the job (or a shared one); cloud on a cloud runner" }
     Job:
       type: object
-      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt]
+      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt, placement]
       properties:
         id: { type: string, format: uuid }
         taskId: { type: string, format: uuid }
@@ -887,6 +1060,7 @@ components:
         phase: { type: string }
         role: { type: string }
         backend: { type: string }
+        placement: { type: string, enum: [local, cloud], description: "where the job runs" }
         model: { type: string }
         instruction: { type: string }
         status: { type: string, enum: [queued, leased, running, stalled, done, failed, stopped] }
@@ -959,11 +1133,13 @@ components:
         canLogin: { type: boolean, description: "this runner can drive an interactive backend login; when false, asking it to is refused" }
     RunnerInfo:
       type: object
-      required: [id, name, location, status, connected, capabilities, authState, protocolVersion, binaryVersion]
+      required: [id, name, location, placement, status, connected, capabilities, authState, protocolVersion, binaryVersion]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         location: { type: string }
+        placement: { type: string, enum: [local, cloud], description: "which jobs it takes: local ones (a person's own machine) or cloud ones" }
+        ownerId: { type: string, format: uuid, description: "the person whose machine it is; absent for a shared runner" }
         status: { type: string, enum: [online, busy, offline] }
         connected: { type: boolean }
         capabilities: { $ref: "#/components/schemas/RunnerCapabilities" }
@@ -1134,6 +1310,8 @@ components:
         name: { type: string }
         tags: { type: array, items: { type: string } }
         preset: { type: string, description: "name of a project preset to start from; its vision, principles, process, packs and repository are copied, never shared" }
+        repoUrl: { type: string, description: "the project's repository; same forms as ProjectRepo.url" }
+        defaultBranch: { type: string, description: "branch work starts from; main when omitted" }
     # A saved starting point for a new project. Named "preset" because "template" already
     # means the process template per kind of task, and two meanings for one word in an API is
     # a bug waiting to be written.
@@ -1178,6 +1356,7 @@ components:
         tags: { type: array, items: { type: string } }
         createdAt: { type: string, format: date-time }
         archivedAt: { type: string, format: date-time, description: "set while the project is archived" }
+        role: { type: string, enum: [admin, member, viewer], description: "the caller's role in the project; absent for runners and plugins" }
     NewDevice:
       type: object
       required: [token, platform]
@@ -1271,6 +1450,44 @@ components:
         name: { type: string }
         email: { type: string }
         role: { type: string, enum: [admin, member, viewer] }
+    ProjectCandidate:
+      type: object
+      required: [userId, name, email]
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string }
+    NewInvitation:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string }
+        role: { type: string, enum: [admin, member, viewer] }
+    Invitation:
+      type: object
+      required: [id, projectId, email, role, createdAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        email: { type: string }
+        role: { type: string, enum: [admin, member, viewer] }
+        invitedBy: { type: string, format: uuid }
+        invitedByName: { type: string }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    IssuedInvitation:
+      type: object
+      required: [invitation, link, appLink, emailed]
+      properties:
+        invitation: { $ref: "#/components/schemas/Invitation" }
+        link: { type: string, description: "https address on this server that opens Gator.app with the invitation" }
+        appLink: { type: string, description: "gator://invite/<token>, for someone who already has Gator.app" }
+        emailed: { type: boolean, description: "whether the server sent the link itself; when false, the inviter passes it on" }
+    AcceptInvitation:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string }
     ProjectConfig:
       type: object
       required: [config]
@@ -1530,6 +1747,45 @@ components:
         config: { type: object, additionalProperties: true, description: non-secret settings }
         secretsSet: { type: array, items: { type: string }, description: secret settings that hold a value }
         configSchema: { type: object, additionalProperties: true }
+        description: { type: string }
+        connect: { $ref: "#/components/schemas/PluginConnection" }
+        webhookUrl: { type: string, description: "where the outside system should deliver webhooks, for setting one up by hand; absent when the server does not know its public address" }
+    PluginConnection:
+      type: object
+      description: A plugin a person can connect by signing in at the provider, instead of pasting a token.
+      required: [title, available, connected]
+      properties:
+        title: { type: string, description: 'the provider, for "Connect GitHub"' }
+        available: { type: boolean, description: "this server has an OAuth app for the provider" }
+        connected: { type: boolean, description: "the project holds a token from a connection or a pasted one" }
+    CataloguePlugin:
+      type: object
+      required: [name, version, capabilities, installed]
+      properties:
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        capabilities: { type: array, items: { type: string } }
+        configSchema: { type: object, additionalProperties: true }
+        installed: { type: boolean }
+        connect: { $ref: "#/components/schemas/PluginConnection" }
+    PluginConnectRequest:
+      type: object
+      properties:
+        returnTo: { type: string, description: "gator://… or a loopback address to send the browser to afterwards" }
+    PluginConnectStart:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, description: "the provider's sign-in page; open it in a browser" }
+    PluginImport:
+      type: object
+      required: [created, existing]
+      properties:
+        created: { type: integer }
+        existing: { type: integer, description: already on the board }
+        truncated: { type: boolean, description: there was more than one import brings in }
+        note: { type: string }
     PluginCall:
       type: object
       required: [id, direction, method, durationMs, createdAt]
@@ -1571,6 +1827,19 @@ components:
         title: { type: string }
         description: { type: string, description: "what the person wants, in their words; jobs get it in their prompt" }
         urgency: { type: integer, minimum: 1, maximum: 4 }
+    TaskPatch:
+      type: object
+      description: fields left out stay as they are
+      properties:
+        title: { type: string }
+        description: { type: string }
+        kind: { type: string, enum: [feature, bug, incident, chore], description: "only before work on the task has started" }
+        urgency: { type: integer, minimum: 1, maximum: 4 }
+    TaskStateChange:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string }
     Artifact:
       type: object
       required: [id, phase, type, version, approved, createdAt]

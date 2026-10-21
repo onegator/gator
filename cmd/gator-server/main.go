@@ -27,6 +27,7 @@ import (
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/product"
+	"github.com/onegator/gator/internal/server/provision"
 	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
@@ -134,7 +135,9 @@ func serve(ctx context.Context) error {
 	hub := events.NewHub()
 	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
 	go relay.Run(ctx)
-	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, plugins.Config{})
+	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL}
+	pluginCfg.LoadEnv()
+	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
 	// Push notifications: without an APNs key the sender is disabled and nothing leaves here.
 	var sender notify.Sender = notify.Disabled{}
@@ -169,6 +172,13 @@ func serve(ctx context.Context) error {
 		log.Warn("backups not configured (GATOR_BACKUP_S3_*)")
 	}
 
+	cloud, err := provision.FromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if cloud.Provisioner != nil {
+		log.Info("cloud runners start on demand", "provisioner", cloud.Provisioner.Name(), "server_url", cloud.ServerURL)
+	}
 	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
 		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
@@ -176,6 +186,9 @@ func serve(ctx context.Context) error {
 		Judge:          pluginHost,
 		// Every job gets an identity of its own to talk back with, revoked when it ends.
 		AgentTokens: auth.Tokens{Pool: db.Pool},
+		// A cloud job no connected runner can take gets a machine of its own, when configured.
+		Provisioner: cloud.Provisioner, RunnerTokens: auth.Tokens{Pool: db.Pool},
+		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
 	go runnerMgr.Run(ctx)
 	if os.Getenv("GATOR_AUTOPILOT") != "0" {
@@ -188,6 +201,7 @@ func serve(ctx context.Context) error {
 		Quality: scorecards,
 		Tokens:  auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
+		PublicURL: cfg.PublicURL,
 	}
 	if oc := auth.LoadOIDCConfig(); oc.Enabled() {
 		o, err := auth.NewOIDC(ctx, oc, db.Pool)
@@ -206,6 +220,8 @@ func serve(ctx context.Context) error {
 	root.Mount("/", apiServer.Router())
 	// The only public endpoint: plugin webhooks. Plugins verify the sender's signature.
 	root.Mount("/hooks", pluginHost.Hooks())
+	// Where a provider sends the browser back after "Connect GitHub"; the state is the proof.
+	root.Mount("/connect", pluginHost.ConnectHandler())
 	adminRouter := chi.NewRouter()
 	adminRouter.Use(auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log), auth.RequireAuth, auth.RequireWorkspaceAdmin)
 	adminRouter.Mount("/", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())

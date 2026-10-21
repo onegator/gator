@@ -1,0 +1,21 @@
+{
+  "project": {"slug": "demo"},
+  "config": {"state_map": "implementation=In Progress, approved=Done"},
+  "secrets": {"webhook_secret": "dev-secret"},
+  "tasks": [{"id": "t1", "kind": "feature", "title": "Search", "phase": "approved",
+             "external_refs": {"linear_issue": "ENG-7", "linear_issue_id": "uuid-7", "linear_issue_url": "https://linear.app/acme/issue/ENG-7"}}],
+  "steps": [
+    {"hook": "webhook",
+     "body": {"action": "update", "type": "Issue", "data": {"id": "uuid-7", "identifier": "ENG-7", "title": "Search, faster", "url": "https://linear.app/acme/issue/ENG-7", "team": {"key": "ENG"}, "state": {"type": "completed", "name": "Done"}}},
+     "sign": {"header": "Linear-Signature", "secret": "webhook_secret"},
+     "expect_core": ["task.find", "task.update"]},
+    {"hook": "webhook",
+     "body": {"action": "update", "type": "Issue", "data": {"id": "uuid-7", "identifier": "ENG-7", "title": "Search, faster", "url": "https://linear.app/acme/issue/ENG-7", "team": {"key": "ENG"}, "state": {"type": "canceled", "name": "Canceled"}}},
+     "sign": {"header": "Linear-Signature", "secret": "webhook_secret"},
+     "expect_core": ["task.close"]},
+    {"hook": "webhook",
+     "body": {"action": "update", "type": "Issue", "data": {"id": "uuid-7", "identifier": "ENG-7", "title": "Search, faster", "url": "https://linear.app/acme/issue/ENG-7", "team": {"key": "ENG"}, "state": {"type": "started", "name": "In Progress"}}},
+     "sign": {"header": "Linear-Signature", "secret": "webhook_secret"},
+     "expect_core": ["task.reopen"]}
+  ]
+}

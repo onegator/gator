@@ -28,6 +28,25 @@ func (q *Queries) ClaimWebhookDelivery(ctx context.Context, arg ClaimWebhookDeli
 	return result.RowsAffected(), nil
 }
 
+const clearPluginTokenExpiry = `-- name: ClearPluginTokenExpiry :exec
+UPDATE project_plugins SET token_expires_at = NULL WHERE id = $1
+`
+
+// A token a person pasted over a connected one is theirs to replace; the server stops refreshing.
+func (q *Queries) ClearPluginTokenExpiry(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearPluginTokenExpiry, id)
+	return err
+}
+
+const deleteExpiredPluginConnectStates = `-- name: DeleteExpiredPluginConnectStates :exec
+DELETE FROM plugin_connect_states WHERE expires_at < now()
+`
+
+func (q *Queries) DeleteExpiredPluginConnectStates(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredPluginConnectStates)
+	return err
+}
+
 const disableProjectPlugin = `-- name: DisableProjectPlugin :exec
 UPDATE project_plugins SET enabled = false, disabled_reason = $2, updated_at = now() WHERE id = $1
 `
@@ -249,6 +268,34 @@ func (q *Queries) InsertPluginCall(ctx context.Context, arg InsertPluginCallPara
 	return err
 }
 
+const insertPluginConnectState = `-- name: InsertPluginConnectState :exec
+INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertPluginConnectStateParams struct {
+	Hash       []byte             `json:"hash"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	PluginName string             `json:"plugin_name"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Verifier   string             `json:"verifier"`
+	ReturnTo   string             `json:"return_to"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertPluginConnectState(ctx context.Context, arg InsertPluginConnectStateParams) error {
+	_, err := q.db.Exec(ctx, insertPluginConnectState,
+		arg.Hash,
+		arg.ProjectID,
+		arg.PluginName,
+		arg.UserID,
+		arg.Verifier,
+		arg.ReturnTo,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const listActiveProjectPlugins = `-- name: ListActiveProjectPlugins :many
 SELECT pp.id, pp.project_id, pp.config, pp.secrets, pp.enabled, pp.disabled_reason,
        p.name AS plugin_name, p.command, p.manifest, p.enabled AS plugin_enabled, pr.slug AS project_slug
@@ -292,6 +339,47 @@ func (q *Queries) ListActiveProjectPlugins(ctx context.Context) ([]ListActivePro
 			&i.Manifest,
 			&i.PluginEnabled,
 			&i.ProjectSlug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiringPluginTokens = `-- name: ListExpiringPluginTokens :many
+SELECT pp.id, pp.project_id, pp.secrets, p.name AS plugin_name, p.manifest
+FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id
+WHERE pp.token_expires_at IS NOT NULL AND pp.token_expires_at < $1
+ORDER BY pp.token_expires_at LIMIT 50
+`
+
+type ListExpiringPluginTokensRow struct {
+	ID         pgtype.UUID `json:"id"`
+	ProjectID  pgtype.UUID `json:"project_id"`
+	Secrets    string      `json:"secrets"`
+	PluginName string      `json:"plugin_name"`
+	Manifest   []byte      `json:"manifest"`
+}
+
+func (q *Queries) ListExpiringPluginTokens(ctx context.Context, before pgtype.Timestamptz) ([]ListExpiringPluginTokensRow, error) {
+	rows, err := q.db.Query(ctx, listExpiringPluginTokens, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListExpiringPluginTokensRow
+	for rows.Next() {
+		var i ListExpiringPluginTokensRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Secrets,
+			&i.PluginName,
+			&i.Manifest,
 		); err != nil {
 			return nil, err
 		}
@@ -517,6 +605,67 @@ func (q *Queries) SetEventCursor(ctx context.Context, arg SetEventCursorParams) 
 	return err
 }
 
+const setProjectPluginSecrets = `-- name: SetProjectPluginSecrets :one
+INSERT INTO project_plugins (project_id, plugin_id, secrets, enabled, token_expires_at)
+VALUES ($1, $2, $3, false, $4)
+ON CONFLICT (project_id, plugin_id) DO UPDATE SET secrets = EXCLUDED.secrets,
+    token_expires_at = EXCLUDED.token_expires_at, updated_at = now()
+RETURNING id, project_id, plugin_id, config, secrets, enabled, disabled_reason, created_at, updated_at, token_expires_at
+`
+
+type SetProjectPluginSecretsParams struct {
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	PluginID       pgtype.UUID        `json:"plugin_id"`
+	Secrets        string             `json:"secrets"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
+}
+
+// A connection stores its token without touching the settings or the switch: a person may
+// connect before choosing a repository, and connecting is not switching the plugin on.
+func (q *Queries) SetProjectPluginSecrets(ctx context.Context, arg SetProjectPluginSecretsParams) (ProjectPlugin, error) {
+	row := q.db.QueryRow(ctx, setProjectPluginSecrets,
+		arg.ProjectID,
+		arg.PluginID,
+		arg.Secrets,
+		arg.TokenExpiresAt,
+	)
+	var i ProjectPlugin
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.PluginID,
+		&i.Config,
+		&i.Secrets,
+		&i.Enabled,
+		&i.DisabledReason,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenExpiresAt,
+	)
+	return i, err
+}
+
+const takePluginConnectState = `-- name: TakePluginConnectState :one
+DELETE FROM plugin_connect_states WHERE hash = $1 AND expires_at > now() RETURNING hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, created_at
+`
+
+// Single use: the row goes as it is read, so a replayed callback finds nothing.
+func (q *Queries) TakePluginConnectState(ctx context.Context, hash []byte) (PluginConnectState, error) {
+	row := q.db.QueryRow(ctx, takePluginConnectState, hash)
+	var i PluginConnectState
+	err := row.Scan(
+		&i.Hash,
+		&i.ProjectID,
+		&i.PluginName,
+		&i.UserID,
+		&i.Verifier,
+		&i.ReturnTo,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const upsertPlugin = `-- name: UpsertPlugin :one
 INSERT INTO plugins (name, command, version, manifest) VALUES ($1, $2, $3, $4)
 ON CONFLICT (name) DO UPDATE SET command = EXCLUDED.command, version = EXCLUDED.version,
@@ -556,7 +705,7 @@ const upsertProjectPlugin = `-- name: UpsertProjectPlugin :one
 INSERT INTO project_plugins (project_id, plugin_id, config, secrets, enabled) VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (project_id, plugin_id) DO UPDATE SET config = EXCLUDED.config, secrets = EXCLUDED.secrets,
     enabled = EXCLUDED.enabled, disabled_reason = NULL, updated_at = now()
-RETURNING id, project_id, plugin_id, config, secrets, enabled, disabled_reason, created_at, updated_at
+RETURNING id, project_id, plugin_id, config, secrets, enabled, disabled_reason, created_at, updated_at, token_expires_at
 `
 
 type UpsertProjectPluginParams struct {
@@ -586,6 +735,7 @@ func (q *Queries) UpsertProjectPlugin(ctx context.Context, arg UpsertProjectPlug
 		&i.DisabledReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TokenExpiresAt,
 	)
 	return i, err
 }

@@ -21,13 +21,20 @@ func Authenticate(tokens Tokens, devHeader bool, log *slog.Logger) func(http.Han
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var plaintext string
+			fromCookie := false
 			if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 				plaintext = strings.TrimPrefix(h, "Bearer ")
 			} else if c, err := r.Cookie(SessionCookie); err == nil {
-				plaintext = c.Value
+				plaintext, fromCookie = c.Value, true
 			}
 			if plaintext != "" {
 				p, err := tokens.Verify(r.Context(), plaintext)
+				// A stale session cookie is not a claim to be anyone: the browser keeps
+				// sending it, and refusing it would lock the person out of /auth/login too.
+				if err != nil && fromCookie {
+					next.ServeHTTP(w, r)
+					return
+				}
 				if err != nil {
 					writeErr(w, http.StatusUnauthorized, "invalid or expired token")
 					return

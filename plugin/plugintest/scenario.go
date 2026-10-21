@@ -248,6 +248,10 @@ func (p *Process) params(n int, st Step, secrets map[string]string) (any, string
 		return plugin.RenderUIParams{Task: task}, needTask()
 	case plugin.MethodJobPrepare:
 		return plugin.JobPrepareParams{Task: task, Job: job}, needTask()
+	case plugin.MethodImport:
+		return plugin.ImportParams{}, ""
+	case plugin.MethodTaskClosed:
+		return plugin.TaskClosedParams{Task: task, Reason: st.Reason}, needTask()
 	case plugin.MethodJobFinish:
 		receipt := st.Receipt
 		if len(receipt) == 0 {

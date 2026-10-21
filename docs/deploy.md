@@ -22,6 +22,14 @@ sudo /usr/local/lib/gator/install.sh migrate
 sudo systemctl start gator-server
 ```
 
+Plugins ship as their own archive. Unpack it where the server looks for the plugins it offers
+by name (`GATOR_PLUGIN_DIR`, see `server.env.example`):
+
+```sh
+sudo mkdir -p /usr/local/lib/gator/plugins
+sudo tar -xzf gator-plugins_<version>_linux_amd64.tar.gz -C /usr/local/lib/gator/plugins github linear sentry honeybadger
+```
+
 `install` generates `GATOR_SECRETS_KEY` on first run. Store a copy outside the host: without
 it encrypted secrets cannot be read after a restore.
 
@@ -100,7 +108,7 @@ example a deploy key with write access or a fine-grained token in its git creden
 `GATOR_RUNNER_PUSH=0` keeps branches in the runner's cache instead.
 
 The runner user is what agents run as. A worktree is isolation, not a sandbox: give that user
-no credentials beyond what its jobs need.
+no credentials beyond what its jobs need. See [What an agent can reach](#what-an-agent-can-reach).
 
 ### Push notifications
 
@@ -163,9 +171,122 @@ that is gone leaves no credentials behind. Any runner can also be forgotten from
 screen once it is disconnected: it leaves the list and its token stops working, while the jobs
 it ran keep pointing at it.
 
-`deploy/launchd/dev.onegator.gator-runner.plist` is the same agent by hand, for a Mac without
+`deploy/launchd/dev.onegator.gator.runner.plist` is the same agent by hand, for a Mac without
 the app. Either way a sleeping Mac or a logged-out user shows as offline and its leases return
 to the queue — a state, not a fault.
+
+## Where a job runs
+
+Every job has a **placement**: `local` or `cloud`. A runner takes only jobs of its own
+placement; it says which with `GATOR_RUNNER_PLACEMENT`, or leaves it to its location (`vps` is
+cloud, `mac` and `other` are local). The Runners screen shows each runner's placement.
+
+- **local** (the default) runs on a machine of the person who started the job. A runner's owner
+  is whoever minted its token — Gator.app mints one per Mac — and a local job someone starts
+  goes to their own runner or to a shared one (a token minted on the host has no owner), never
+  to another person's Mac, which is logged in as that person. Jobs the autopilot queues have
+  nobody behind them and go to any local runner.
+- **cloud** runs on a cloud runner: a long-lived one (a VPS with `GATOR_RUNNER_PLACEMENT=cloud`)
+  or one the server starts for the job (below).
+
+A person chooses per job — "On this Mac" or "In the cloud" in the task, or `placement` on
+`POST /tasks/{id}/jobs`, which defaults to `local`. The autopilot uses the project's
+`policy.placement` in its process configuration (`PUT /projects/{id}/config`), `local` unless
+set to `cloud`.
+
+Upgrading from a release without placements: a VPS runner that names no placement becomes a
+cloud runner, and every job — the autopilot's included — is local unless chosen otherwise. If the
+VPS is your only runner, either set `GATOR_RUNNER_PLACEMENT=local` on it to keep things as they
+were, or set `policy.placement` to `cloud` on the projects it serves.
+
+## Cloud runners on demand
+
+With a provisioner configured, a cloud job that no connected cloud runner can take gets a
+machine of its own. The server mints a runner token for that one job — it leases that job and
+nothing else, reads nothing through the API and is revoked when the job ends — and starts the
+runner image with `GATOR_RUNNER_ONCE=1`: the runner takes its job, delivers the receipt and
+exits, and the machine goes with it. The server stops it as well once the job is over, replaces
+a machine that has not taken its job within five minutes, and after three machines stops the
+job with the reason. Without a provisioner, cloud jobs wait for a long-lived cloud runner and
+show up as having no runner after two minutes.
+
+Build the image from the repository root:
+
+```sh
+docker build -f Dockerfile.runner -t gator-runner:latest .
+# pin the agent CLI: --build-arg CLAUDE_CODE_VERSION=2.1.270
+```
+
+It carries `gator-runner`, `gator-cli`, git, ssh and Claude Code, and runs as an unprivileged
+user. Configure the server:
+
+| Variable | |
+|---|---|
+| `GATOR_CLOUD_PROVISIONER` | `docker` or `fly`; empty starts nothing |
+| `GATOR_CLOUD_RUNNER_IMAGE` | the image above, as the provisioner can pull it |
+| `GATOR_CLOUD_SERVER_URL` | how a machine reaches this server, e.g. `http://host.docker.internal:8080` for a container next to a dev server, or the tailnet URL |
+| `GATOR_CLOUD_RUNNER_ENV` | comma-separated names of server variables every machine gets — the backend's credentials. Nothing else of the server's environment leaves it, and `GATOR_*` names are refused |
+| `GATOR_CLOUD_DOCKER_NETWORK`, `GATOR_CLOUD_DOCKER_ARGS` | docker only: the network to join, extra `docker run` arguments (`--cpus 2 --memory 4g`, `--add-host host.docker.internal:host-gateway` on Linux) |
+| `FLY_API_TOKEN`, `FLY_APP`, `GATOR_CLOUD_FLY_REGION` | fly only |
+
+**Docker** runs each machine with the docker CLI on the server's host, so `DOCKER_HOST` and
+docker contexts apply: the local engine in development, or a VPS's engine over
+`DOCKER_HOST=ssh://user@vps`. Values reach `docker run` through its environment and only their
+names through `--env NAME`, so they never appear in a process list. The server needs the docker
+CLI and access to the engine, which the server image does not have; run the server on the host
+or give it a docker client and socket deliberately.
+
+**Fly Machines** creates one machine per job through the Machines API (`auto_destroy`, no
+restart, 2 shared CPUs and 2 GB) in an app you create once (`fly apps create gator-runners`) and
+push the image to (`registry.fly.io/gator-runners:<tag>`). `FLY_API_TOKEN` should be a token
+scoped to that app (`fly tokens create deploy -a gator-runners`). Machines start and bill per
+second; nothing runs between jobs.
+
+**Backend login.** A cloud machine has no keychain and nobody to log in interactively. Give it
+a credential through the environment and name it in `GATOR_CLOUD_RUNNER_ENV`:
+
+- `CLAUDE_CODE_OAUTH_TOKEN` — a long-lived token from `claude setup-token`, run once by the
+  account the cloud jobs should bill to (a subscription), or
+- `ANTHROPIC_API_KEY` — an API key from the Console (pay per use).
+
+Set it in the server's environment like any other secret (`/etc/gator/server.env`, mode 600).
+With Fly you may instead set it as an app secret (`fly secrets set -a gator-runners
+CLAUDE_CODE_OAUTH_TOKEN=...`) and leave `GATOR_CLOUD_RUNNER_ENV` empty, so it never passes
+through the server at all. Either way the agent sees it — it needs it to work — so use a
+credential dedicated to runners, never a personal one.
+
+**Git.** A machine starts empty and clones the project's repository over https. To push job
+branches give it a token with write access to those repositories in `GITHUB_TOKEN` (named in
+`GATOR_CLOUD_RUNNER_ENV`): the image's git credential helper hands it to the runner's own push.
+The agent's environment does not carry `GITHUB_TOKEN`, so the agent cannot push by itself.
+Without it, set `GATOR_RUNNER_PUSH=0` on the machines through the same mechanism and read the
+results from the receipt.
+
+## What an agent can reach
+
+An agent runs as the runner's user with every permission bypassed, so whatever is in its
+environment or readable by that user is the agent's to print and send. The runner's token must
+be neither: it leases any job the runner may run.
+
+- **Environment.** The agent gets an allow-list of the runner's environment — `PATH`, `HOME`,
+  locale, the ssh agent, proxies, CA bundles and the backend's own login variables
+  (`ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR`) — plus the job's own `GATOR_URL`
+  and `GATOR_JOB_TOKEN`. No `GATOR_*` variable of the runner reaches it, including
+  `GATOR_RUNNER_TOKEN`. Name anything else it needs in `GATOR_RUNNER_AGENT_ENV`.
+- **Token file on a Mac.** The agent runs under `sandbox-exec` with a profile that allows
+  everything except opening the runner's token file (`GATOR_RUNNER_TOKEN_FILE`). The rest of the
+  machine is as open to it as to the user — this protects the token, not the Mac.
+  `GATOR_RUNNER_SANDBOX=0` turns it off for a backend that refuses to run inside a sandbox.
+- **Token in the environment.** A runner given `GATOR_RUNNER_TOKEN` re-executes itself at
+  start without it and takes the token over a pipe, because the environment a process starts
+  with stays readable in `/proc/<pid>/environ` by every process of the same user. After that
+  neither its environment nor the disk holds the token — this is how the runner image gets its
+  one-job token. On Linux there is no file sandbox: a token *file* the runner user can read, the
+  agent can read too, so on a VPS keep the token in `/etc/gator/runner.env` (root's, read by
+  systemd) rather than in `GATOR_RUNNER_TOKEN_FILE`. What remains is the runner's memory, which
+  another process can read only with ptrace rights over it; with the usual
+  `kernel.yama.ptrace_scope=1` an agent, the runner's child, has none.
+- **Keep the token file outside `GATOR_RUNNER_WORKDIR`**; the runner warns when it is not.
 
 ## Backups and restore
 

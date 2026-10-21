@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -31,18 +32,22 @@ const (
 	MethodJobFinish        = "jobFinish"
 	MethodQualityEvaluate  = "qualityEvaluate" // M8
 	MethodTurnEnding       = "turnEnding"      // M9
+	MethodImport           = "import"
+	MethodTaskClosed       = "taskClosed"
 )
 
 // Hooks are the core → plugin methods a manifest may declare.
 var Hooks = []string{MethodWebhook, MethodPhaseTransition, MethodGateEvaluate, MethodArtifactApproved,
 	MethodRelease, MethodIncidentClosed, MethodSchedule, MethodRenderUI, MethodJobPrepare, MethodJobFinish,
-	MethodQualityEvaluate, MethodTurnEnding}
+	MethodQualityEvaluate, MethodTurnEnding, MethodImport, MethodTaskClosed}
 
 // Plugin → core methods.
 const (
 	CoreTaskCreate     = "task.create"
 	CoreTaskFind       = "task.find"
 	CoreTaskUpdate     = "task.update"
+	CoreTaskClose      = "task.close"
+	CoreTaskReopen     = "task.reopen"
 	CoreGateSetCheck   = "gate.setCheck"
 	CoreArtifactPut    = "artifact.put"
 	CoreIncidentUpsert = "incident.upsert" // M6
@@ -58,8 +63,10 @@ var Capabilities = []string{"tracker", "vcs", "ci", "monitoring", "deploy", "not
 
 // Manifest describes a plugin. The plugin returns it from initialize.
 type Manifest struct {
-	Name           string          `json:"name"`
-	Version        string          `json:"version"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	// Description is one sentence a person reads before switching the plugin on.
+	Description    string          `json:"description,omitempty"`
 	MinCoreVersion string          `json:"min_core_version,omitempty"`
 	Capabilities   []string        `json:"capabilities"`
 	Hooks          []string        `json:"hooks"`
@@ -67,6 +74,8 @@ type Manifest struct {
 	UI             []string        `json:"ui,omitempty"` // "tab", "chip"
 	Schedule       []Schedule      `json:"schedule,omitempty"`
 	Webhook        *WebhookSpec    `json:"webhook,omitempty"`
+	// Connect lets a person sign in to the outside system instead of pasting a token.
+	Connect *ConnectSpec `json:"connect,omitempty"`
 }
 
 // Schedule asks the core to call the schedule hook every Every (a Go duration, at least 1s).
@@ -80,7 +89,43 @@ type WebhookSpec struct {
 	DeliveryHeader string `json:"delivery_header,omitempty"` // e.g. "X-GitHub-Delivery"
 }
 
+// ConnectSpec describes an OAuth 2.0 authorization-code flow the server runs for the plugin.
+// The server owns the OAuth client (GATOR_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET in its own
+// environment, never the plugin's), sends the person to AuthorizeURL with state and PKCE, trades
+// the code at TokenURL, and stores the access token as the project's secret setting Secret. A
+// token that expires is refreshed by the server before it does, and the plugin restarts with
+// the new one, so a plugin only ever reads core.Secret(Secret).
+type ConnectSpec struct {
+	// Provider names the OAuth client in the server's environment: GATOR_<PROVIDER>_CLIENT_ID.
+	// Default: the plugin's name.
+	Provider     string   `json:"provider,omitempty"`
+	Title        string   `json:"title,omitempty"` // "GitHub", for "Connect GitHub"
+	AuthorizeURL string   `json:"authorize_url"`
+	TokenURL     string   `json:"token_url"`
+	Scopes       []string `json:"scopes,omitempty"`
+	// ScopeSeparator joins Scopes; default a space. Linear wants a comma.
+	ScopeSeparator string `json:"scope_separator,omitempty"`
+	// Secret is the secret setting that receives the access token.
+	Secret string `json:"secret"`
+	// WebhookSecret, when set, is a secret setting the server fills with a random value on the
+	// first connection, so a plugin that registers its own webhook has something to sign with.
+	WebhookSecret string `json:"webhook_secret,omitempty"`
+	// Params are added to the authorization URL, such as Linear's prompt=consent.
+	Params map[string]string `json:"params,omitempty"`
+}
+
+// ProviderName is the provider the server looks up in its environment.
+func (c ConnectSpec) ProviderName(plugin string) string {
+	if c.Provider != "" {
+		return c.Provider
+	}
+	return plugin
+}
+
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+
+// ValidName reports whether s can name a plugin.
+func ValidName(s string) bool { return nameRe.MatchString(s) }
 
 // Validate checks a manifest before the core accepts it.
 func (m Manifest) Validate() error {
@@ -106,9 +151,29 @@ func (m Manifest) Validate() error {
 			return fmt.Errorf("manifest: schedule %q needs a name and every >= 1s", s.Name)
 		}
 	}
+	var schema ConfigSchema
 	if len(m.ConfigSchema) > 0 {
-		if _, err := ParseConfigSchema(m.ConfigSchema); err != nil {
+		var err error
+		if schema, err = ParseConfigSchema(m.ConfigSchema); err != nil {
 			return err
+		}
+	}
+	if c := m.Connect; c != nil {
+		if !strings.HasPrefix(c.AuthorizeURL, "https://") || !strings.HasPrefix(c.TokenURL, "https://") {
+			return fmt.Errorf("manifest: connect needs https authorize_url and token_url")
+		}
+		if !nameRe.MatchString(c.ProviderName(m.Name)) {
+			return fmt.Errorf("manifest: connect provider %q must be lowercase letters, digits and dashes", c.Provider)
+		}
+		// The token and the webhook secret land in secret settings; a public one would put
+		// them in the clear in the database and in every API answer.
+		for _, k := range []string{c.Secret, c.WebhookSecret} {
+			if k != "" && !schema.IsSecret(k) {
+				return fmt.Errorf("manifest: connect stores into %q, which must be a secret setting", k)
+			}
+		}
+		if c.Secret == "" {
+			return fmt.Errorf("manifest: connect needs the secret setting that receives the token")
 		}
 	}
 	return nil
@@ -130,6 +195,10 @@ type InitializeParams struct {
 	ProjectID       string         `json:"project_id,omitempty"`
 	ProjectSlug     string         `json:"project_slug,omitempty"`
 	Config          map[string]any `json:"config,omitempty"`
+	// WebhookURL is where this project's deliveries for the plugin arrive from the internet,
+	// when the server knows its public address (GATOR_HOOKS_URL). A plugin that can register its
+	// own webhook uses it; empty means a person has to set the webhook up by hand.
+	WebhookURL string `json:"webhook_url,omitempty"`
 }
 
 // TaskRef is a task as plugins see it.
@@ -140,6 +209,7 @@ type TaskRef struct {
 	Title        string            `json:"title"`
 	Phase        string            `json:"phase"`
 	ExternalRefs map[string]string `json:"external_refs,omitempty"`
+	Closed       bool              `json:"closed,omitempty"`
 }
 
 // JobRef is a runner job as plugins see it.
@@ -357,10 +427,42 @@ type TaskFindParams struct {
 	Value string `json:"value"`
 }
 
-// TaskUpdateParams merges external references into a task.
+// TaskUpdateParams merges external references into a task and, when given, replaces its title
+// or description: an issue edited where it lives should read the same on the board.
 type TaskUpdateParams struct {
 	TaskID       string            `json:"task_id"`
-	ExternalRefs map[string]string `json:"external_refs"`
+	ExternalRefs map[string]string `json:"external_refs,omitempty"`
+	Title        *string           `json:"title,omitempty"`
+	Description  *string           `json:"description,omitempty"`
+}
+
+// TaskStateParams closes or reopens a task. Either is a no-op when the task is already there,
+// because the outside system tells us about its own echo of our change too.
+type TaskStateParams struct {
+	TaskID string `json:"task_id"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// ImportParams asks a tracker plugin to bring in what already exists: the open issues a webhook
+// will never mention, because they were opened before the plugin was switched on.
+type ImportParams struct{}
+
+// ImportResult says what an import did. It must be idempotent: the core runs it when the
+// plugin is switched on and whenever a person asks, so an issue already on the board counts
+// as Existing, not as a second task.
+type ImportResult struct {
+	Created  int `json:"created"`
+	Existing int `json:"existing"`
+	// Truncated is true when there was more than the plugin was willing to bring in at once.
+	Truncated bool   `json:"truncated,omitempty"`
+	Note      string `json:"note,omitempty"`
+}
+
+// TaskClosedParams says a task of the project finished or was closed, so a tracker can close
+// the issue it came from. A plugin that closed the task itself hears about it too.
+type TaskClosedParams struct {
+	Task   TaskRef `json:"task"`
+	Reason string  `json:"reason,omitempty"`
 }
 
 // SetCheckParams sets one check on the task's current gate.

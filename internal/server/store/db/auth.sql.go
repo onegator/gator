@@ -22,6 +22,15 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const deleteExpiredLoginCodes = `-- name: DeleteExpiredLoginCodes :exec
+DELETE FROM login_codes WHERE expires_at < now()
+`
+
+func (q *Queries) DeleteExpiredLoginCodes(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredLoginCodes)
+	return err
+}
+
 const getMembership = `-- name: GetMembership :one
 SELECT project_id, user_id, role FROM memberships WHERE project_id = $1 AND user_id = $2
 `
@@ -92,6 +101,24 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 	return i, err
 }
 
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id, email, name, oidc_subject, created_at, workspace_role FROM users WHERE email = $1
+`
+
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByEmail, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.OidcSubject,
+		&i.CreatedAt,
+		&i.WorkspaceRole,
+	)
+	return i, err
+}
+
 const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
 SELECT id, email, name, oidc_subject, created_at, workspace_role FROM users WHERE oidc_subject = $1
 `
@@ -130,6 +157,30 @@ func (q *Queries) InsertAudit(ctx context.Context, arg InsertAuditParams) error 
 		arg.Action,
 		arg.Target,
 		arg.Payload,
+	)
+	return err
+}
+
+const insertLoginCode = `-- name: InsertLoginCode :exec
+INSERT INTO login_codes (hash, user_id, code_challenge, redirect_uri, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertLoginCodeParams struct {
+	Hash          []byte             `json:"hash"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	CodeChallenge string             `json:"code_challenge"`
+	RedirectUri   string             `json:"redirect_uri"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertLoginCode(ctx context.Context, arg InsertLoginCodeParams) error {
+	_, err := q.db.Exec(ctx, insertLoginCode,
+		arg.Hash,
+		arg.UserID,
+		arg.CodeChallenge,
+		arg.RedirectUri,
+		arg.ExpiresAt,
 	)
 	return err
 }
@@ -278,6 +329,28 @@ func (q *Queries) ListTokensForUser(ctx context.Context, userID pgtype.UUID) ([]
 	return items, nil
 }
 
+const promoteIfNoAdmin = `-- name: PromoteIfNoAdmin :one
+UPDATE users SET workspace_role = 'admin'
+WHERE users.id = $1 AND NOT EXISTS (SELECT 1 FROM users a WHERE a.workspace_role = 'admin')
+RETURNING id, email, name, oidc_subject, created_at, workspace_role
+`
+
+// The first person in becomes workspace admin, decided in one statement so two first logins
+// cannot both see an empty workspace.
+func (q *Queries) PromoteIfNoAdmin(ctx context.Context, id pgtype.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, promoteIfNoAdmin, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.OidcSubject,
+		&i.CreatedAt,
+		&i.WorkspaceRole,
+	)
+	return i, err
+}
+
 const revokeToken = `-- name: RevokeToken :exec
 UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL
 `
@@ -309,6 +382,25 @@ type SetWorkspaceRoleParams struct {
 func (q *Queries) SetWorkspaceRole(ctx context.Context, arg SetWorkspaceRoleParams) error {
 	_, err := q.db.Exec(ctx, setWorkspaceRole, arg.ID, arg.WorkspaceRole)
 	return err
+}
+
+const takeLoginCode = `-- name: TakeLoginCode :one
+DELETE FROM login_codes WHERE hash = $1 RETURNING hash, user_id, code_challenge, redirect_uri, expires_at, created_at
+`
+
+// A code is spent by reading it: whoever presents it second finds nothing.
+func (q *Queries) TakeLoginCode(ctx context.Context, hash []byte) (LoginCode, error) {
+	row := q.db.QueryRow(ctx, takeLoginCode, hash)
+	var i LoginCode
+	err := row.Scan(
+		&i.Hash,
+		&i.UserID,
+		&i.CodeChallenge,
+		&i.RedirectUri,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const touchToken = `-- name: TouchToken :exec

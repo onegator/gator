@@ -211,12 +211,9 @@ func (s *Server) applyPreset(ctx context.Context, name string, project db.Projec
 // stay readable by id; its plugins stop at the next sync, because an archived project should
 // not be answering webhooks or spending anyone's budget.
 func (s *Server) ArchiveProject(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
-	p, ok := s.principal(w, r)
+	// Whoever runs a project may put it away; deleting stays with workspace admins.
+	p, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleAdmin)
 	if !ok {
-		return
-	}
-	if !p.IsWorkspaceAdmin() {
-		writeError(w, http.StatusForbidden, "archiving a project requires workspace admin", "forbidden")
 		return
 	}
 	var in gen.ArchiveProject
@@ -233,7 +230,7 @@ func (s *Server) ArchiveProject(w http.ResponseWriter, r *http.Request, projectI
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toProject(updated))
+	writeJSON(w, http.StatusOK, withRole(toProject(updated), s.roleIn(r, p, updated.ID)))
 }
 
 // DeleteProject removes an empty one for good. A project that ever held a task is archived

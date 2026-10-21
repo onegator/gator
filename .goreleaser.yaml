@@ -30,6 +30,19 @@ builds:
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     ldflags: [-s -w]
+  # The person's tool. It carries the version so `gator --version` can be compared with the
+  # server's when something does not line up.
+  - id: gator
+    main: ./cmd/gator
+    binary: gator
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/onegator/gator/internal/version.Version={{.Version}}
+      - -X github.com/onegator/gator/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/onegator/gator/internal/version.Date={{.Date}}
   # Plugins ship with the server they talk to, so a release never pairs a plugin with a
   # protocol it was not built against. The binary name is what the install command points at.
   - id: plugin-github
@@ -79,8 +92,13 @@ archives:
       - deploy/install.sh
       - deploy/runner.env.example
       - deploy/systemd/gator-runner.service
-      - deploy/launchd/dev.onegator.gator-runner.plist
+      - deploy/launchd/dev.onegator.gator.runner.plist
       - docs/deploy.md
+  - id: cli
+    ids: [gator]
+    name_template: "gator_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - docs/cli.md
   - id: plugins
     ids: [plugin-github, plugin-sentry, plugin-honeybadger, plugin-linear]
     name_template: "gator-plugins_{{ .Version }}_{{ .Os }}_{{ .Arch }}"

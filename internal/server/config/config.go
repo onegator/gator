@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/onegator/gator/internal/server/limits"
 )
@@ -22,6 +23,11 @@ type Config struct {
 	// TrustedProxies may name the client in X-Forwarded-For (GATOR_TRUSTED_PROXIES, a comma-
 	// separated list of addresses and CIDRs, default loopback). Nobody else can.
 	TrustedProxies limits.Proxies
+	// PublicURL is the address people's browsers reach the server at (GATOR_PUBLIC_URL), without
+	// a trailing slash. It is the base of the invitation links people pass on (empty: the address
+	// the inviter used) and of the OAuth callback a plugin connection comes back to,
+	// PublicURL/connect/callback (empty: plugins cannot be connected).
+	PublicURL string
 }
 
 // DefaultTrustedProxies is loopback: Caddy and tailscale serve both proxy from this host.
@@ -36,6 +42,7 @@ func Load() (Config, error) {
 		DevAuth:            os.Getenv("GATOR_DEV_AUTH") == "1",
 		RateLimitPerSecond: envFloat("GATOR_RATE_LIMIT_RPS", 20),
 		RateLimitBurst:     EnvInt("GATOR_RATE_LIMIT_BURST", 40),
+		PublicURL:          strings.TrimRight(os.Getenv("GATOR_PUBLIC_URL"), "/"),
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("GATOR_DATABASE_URL is required")

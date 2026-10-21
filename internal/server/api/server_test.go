@@ -30,6 +30,7 @@ type harness struct {
 	pool  *pgxpool.Pool
 	token string // bearer of the current caller
 	relay *events.Relay
+	api   *Server
 }
 
 // login creates a user with the given workspace role and returns a bearer token.
@@ -83,7 +84,7 @@ func newHarness(t *testing.T) *harness {
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
 	srv := httptest.NewServer(s.Router())
 	t.Cleanup(srv.Close)
-	h := &harness{t: t, srv: srv, pool: pool, relay: relay}
+	h := &harness{t: t, srv: srv, pool: pool, relay: relay, api: s}
 	_, h.token = h.login("admin")
 	return h
 }
@@ -223,9 +224,6 @@ func TestRBACOverHTTP(t *testing.T) {
 	// stranger: no membership
 	strangerID, stranger := h.login("member")
 	h.token = stranger
-	if code := h.do("POST", "/projects", gen.NewProject{Slug: "nope", Name: "n"}, nil); code != 403 {
-		t.Fatalf("member creating project: %d", code)
-	}
 	if code := h.do("GET", "/tasks/"+task.Id.String(), nil, nil); code != 403 {
 		t.Fatalf("stranger reading task: %d", code)
 	}

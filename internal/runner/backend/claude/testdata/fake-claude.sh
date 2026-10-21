@@ -6,6 +6,12 @@
 #   FAKE_CLAUDE_CHILD    start a background process that inherits stdout; write its pid here
 #   FAKE_CLAUDE_SLEEP    sleep this many seconds after printing
 #   FAKE_CLAUDE_EXIT     exit code (default 0)
+#   FAKE_CLAUDE_ENV      write the environment it was given here
+#   FAKE_CLAUDE_READ     try to read this file; write what happened to FAKE_CLAUDE_READ.out
+if [ -n "$FAKE_CLAUDE_ENV" ]; then env > "$FAKE_CLAUDE_ENV"; fi
+if [ -n "$FAKE_CLAUDE_READ" ]; then
+	if cat "$FAKE_CLAUDE_READ" > "$FAKE_CLAUDE_READ.out" 2>&1; then echo "read" >> "$FAKE_CLAUDE_READ.out"; else echo "denied" >> "$FAKE_CLAUDE_READ.out"; fi
+fi
 if [ -n "$FAKE_CLAUDE_ARGS" ]; then
 	for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_CLAUDE_ARGS"; done
 	echo "---" >> "$FAKE_CLAUDE_ARGS"

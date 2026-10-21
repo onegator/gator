@@ -8,22 +8,59 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/onegator/gator/plugin"
 )
 
 func main() {
+	// Named after its binary, so a copy in a catalogue directory is a plugin of its own.
+	name := "echo"
+	if base := filepath.Base(os.Args[0]); strings.HasPrefix(base, "echo-") {
+		name = base
+	}
 	err := plugin.Serve(plugin.Handlers{
 		Manifest: plugin.Manifest{
-			Name: "echo", Version: "1.0.0", Capabilities: []string{"ci", "deploy"}, UI: []string{"tab", "chip"},
+			Name: name, Version: "1.0.0", Capabilities: []string{"ci", "deploy"}, UI: []string{"tab", "chip"},
+			Description: "Says what it hears.",
 			ConfigSchema: json.RawMessage(`{"type":"object","properties":{
 				"greeting":{"type":"string"},
 				"object":{"type":"string"},
 				"object_turns":{"type":"string"},
-				"token":{"type":"string","x-secret":true}},"required":["greeting"]}`),
+				"import":{"type":"string"},
+				"token":{"type":"string","x-secret":true},
+				"hook_secret":{"type":"string","x-secret":true}},"required":["greeting"]}`),
 			Webhook: &plugin.WebhookSpec{DeliveryHeader: "X-Echo-Delivery"},
+			Connect: &plugin.ConnectSpec{Title: "Echo", AuthorizeURL: "https://auth.echo.test/authorize",
+				TokenURL: "https://auth.echo.test/token", Scopes: []string{"read", "write"}, Secret: "token", WebhookSecret: "hook_secret"},
+		},
+		Init: func(ctx context.Context, core *plugin.Core) error {
+			return core.KVPut(ctx, "webhook_url", core.WebhookURL())
+		},
+		Import: func(ctx context.Context, core *plugin.Core, _ plugin.ImportParams) (plugin.ImportResult, error) {
+			var r plugin.ImportResult
+			if core.Setting("import") == "" {
+				return r, plugin.Errorf(plugin.CodeInvalidParams, "nothing to import")
+			}
+			for title := range strings.SplitSeq(core.Setting("import"), ",") {
+				if t, err := core.FindTask(ctx, "echo_import", title); err != nil {
+					return r, err
+				} else if t != nil {
+					r.Existing++
+					continue
+				}
+				if _, err := core.CreateTask(ctx, plugin.TaskCreateParams{Kind: "chore", Title: title, ExternalRefs: map[string]string{"echo_import": title}}); err != nil {
+					return r, err
+				}
+				r.Created++
+			}
+			return r, nil
+		},
+		TaskClosed: func(ctx context.Context, core *plugin.Core, p plugin.TaskClosedParams) error {
+			return core.KVPut(ctx, "closed_upstream", p.Task.ID+" "+p.Reason)
 		},
 		Webhook: func(ctx context.Context, core *plugin.Core, p plugin.WebhookParams) error {
 			var b struct {
@@ -45,6 +82,11 @@ func main() {
 					Version     string `json:"version"`
 				} `json:"incident"`
 				Resolve string `json:"resolve"` // fingerprint of a fault that has stopped
+				Close   string `json:"close"`   // task ids
+				Reopen  string `json:"reopen"`
+				Retitle *struct {
+					Task, Title, Description string
+				} `json:"retitle"`
 			}
 			_ = json.Unmarshal(p.Body, &b)
 			switch {
@@ -62,6 +104,15 @@ func main() {
 			case b.Release != nil:
 				_, err := core.RecordRelease(ctx, plugin.ReleaseRecordParams{
 					Version: b.Release.Version, TaskID: b.Release.TaskID, ObserveMinutes: b.Release.ObserveMinutes})
+				return err
+			case b.Close != "":
+				_, err := core.CloseTask(ctx, b.Close, "closed upstream")
+				return err
+			case b.Reopen != "":
+				_, err := core.ReopenTask(ctx, b.Reopen, "")
+				return err
+			case b.Retitle != nil:
+				_, err := core.UpdateTask(ctx, plugin.TaskUpdateParams{TaskID: b.Retitle.Task, Title: &b.Retitle.Title, Description: &b.Retitle.Description})
 				return err
 			case b.Resolve != "":
 				return core.CloseIncident(ctx, plugin.IncidentCloseParams{Fingerprint: b.Resolve})

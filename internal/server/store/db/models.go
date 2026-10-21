@@ -186,6 +186,7 @@ type Job struct {
 	ContextBytes      int32              `json:"context_bytes"`
 	ContextDocs       int32              `json:"context_docs"`
 	Objections        int32              `json:"objections"`
+	Placement         string             `json:"placement"`
 }
 
 type JobContext struct {
@@ -233,6 +234,15 @@ type KnowledgePack struct {
 	FetchedAt pgtype.Timestamptz `json:"fetched_at"`
 }
 
+type LoginCode struct {
+	Hash          []byte             `json:"hash"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	CodeChallenge string             `json:"code_challenge"`
+	RedirectUri   string             `json:"redirect_uri"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type Membership struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	UserID    pgtype.UUID `json:"user_id"`
@@ -275,6 +285,17 @@ type PluginCall struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
+type PluginConnectState struct {
+	Hash       []byte             `json:"hash"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	PluginName string             `json:"plugin_name"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Verifier   string             `json:"verifier"`
+	ReturnTo   string             `json:"return_to"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type PluginKv struct {
 	ProjectPluginID pgtype.UUID        `json:"project_plugin_id"`
 	Key             string             `json:"key"`
@@ -311,6 +332,20 @@ type Project struct {
 	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
 }
 
+type ProjectInvitation struct {
+	ID         pgtype.UUID        `json:"id"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	Email      string             `json:"email"`
+	Role       string             `json:"role"`
+	TokenHash  []byte             `json:"token_hash"`
+	InvitedBy  pgtype.UUID        `json:"invited_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	AcceptedAt pgtype.Timestamptz `json:"accepted_at"`
+	AcceptedBy pgtype.UUID        `json:"accepted_by"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type ProjectPack struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	PackID    pgtype.UUID `json:"pack_id"`
@@ -327,6 +362,7 @@ type ProjectPlugin struct {
 	DisabledReason *string            `json:"disabled_reason"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
 }
 
 type ProjectRepo struct {
@@ -414,6 +450,8 @@ type Runner struct {
 	OfflineReason   string             `json:"offline_reason"`
 	OfflineSince    pgtype.Timestamptz `json:"offline_since"`
 	RetiredAt       pgtype.Timestamptz `json:"retired_at"`
+	Placement       string             `json:"placement"`
+	OwnerID         pgtype.UUID        `json:"owner_id"`
 }
 
 type Task struct {

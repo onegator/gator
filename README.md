@@ -3,11 +3,12 @@
 Decision tool that maps the whole software delivery cycle, from idea to production monitoring.
 Humans see only what depends on them; agents do the work; integrations are plugins.
 
-This repository holds the Go side, three binaries from one module:
+This repository holds the Go side, four binaries from one module:
 
 - `gator-server`: the brain. Owns process state, talks to runners and plugins, serves the API used by Gator.app.
 - `gator-runner`: the worker. Executes jobs in git worktrees. The same binary runs on a VPS (systemd) and on a Mac (launchd).
 - `gator-cli`: how an agent talks back while it works — blocked, a question, a document, a lesson. It travels with the runner and speaks with the job's own identity; see [docs/agent-tools.md](docs/agent-tools.md).
+- `gator`: how a person works from a terminal — `gator login` with Google, projects, tasks, `gator task run --cloud`, `gator task logs -f`. Its token sits in the macOS keychain; see [docs/cli.md](docs/cli.md).
 
 The only package shared by both is `internal/proto`. `internal/boundary_test.go` enforces that
 `internal/server` and `internal/runner` never import each other.
@@ -41,17 +42,39 @@ and are embedded too; a project replaces one with `process_config.roles.<role>`.
 (`internal/server/api/gen`) and the sqlc queries. Live updates: WebSocket at `/api/v1/ws`,
 first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is written to the
 `events` outbox in the same transaction as the change and relayed to subscribers.
+`"project:<id>"` follows everything that happens in one project (a board uses it) and is
+refused to anyone who may not read that project.
 
 `/admin` is a minimal HTML panel for M1 and debugging; it goes away once Gator.app covers it.
 
 ## Identity and access
 
-- Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`); the callback sets an httpOnly
-  `gator_session` cookie. The first user to log in becomes workspace admin.
+- Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`, e.g. Google) with PKCE and a
+  nonce; the callback sets an httpOnly `gator_session` cookie. An account is created on first
+  sign-in. `GATOR_ADMIN_EMAILS` names the workspace admins; unset, the first person in is admin.
+  `GATOR_OIDC_ALLOWED_DOMAINS` limits who may create an account.
+- Native login (Gator.app, CLI): `GET /auth/login?redirect_uri=…&state=…&code_challenge=…&code_challenge_method=S256`
+  runs the same flow and sends the browser back to `gator://auth/…` or a loopback address with a
+  one-time code; `POST /auth/token {code, code_verifier, redirect_uri, client_name}` trades it for
+  a user token that lives 90 days. `GET /auth/config` says whether OIDC is on and the provider's name.
 - Native clients and automation: `Authorization: Bearer gtr_<kind>_…`. Mint with `POST /api/v1/tokens`
   (user tokens for yourself; runner and plugin tokens require workspace admin). Only a SHA-256 hash is stored.
-- Roles: workspace `admin` | `member`; per project `admin` | `member` | `viewer`. Runners act as members
+- Roles: workspace `admin` | `member`; per project `admin` | `member` | `viewer`. Any signed-in
+  person may create a project and becomes its admin; a project admin manages its repositories and
+  may archive it, while deleting an (empty) project stays with workspace admins. Each project in
+  `GET /projects` carries the caller's `role`. Runners act as members
   everywhere but cannot approve; plugin tokens are members of their own project only.
+- People: a project admin invites by email (`POST /projects/{id}/invitations`) and gets a link to
+  pass on, `gator://invite/<token>` and its https form `/invite/<token>` (`GATOR_PUBLIC_URL` names
+  the server); the server mails nothing yet. Signing in with the invited address joins the project,
+  whatever `GATOR_OIDC_ALLOWED_DOMAINS` says, and so does `POST /invitations/accept` from someone
+  already signed in with it. Links last 14 days and only their hash is stored. A project admin finds
+  people already in the workspace with `GET /projects/{id}/candidates?q=`, changes roles and
+  removes people; anyone may leave; the last admin can neither leave nor step down.
+- `GATOR_PUBLIC_URL` is the address people's browsers use for this server (with Tailscale,
+  `https://<host>.<tailnet>.ts.net`). It is the base of invitation links and of the OAuth callback
+  plugin connections come back to (`GATOR_PUBLIC_URL/connect/callback`); unset, invitation links
+  use the inviter's address and plugins cannot be connected.
 - Every non-GET request is written to `audit_log` with actor, route pattern and status.
 - Local development only: `GATOR_DEV_AUTH=1` trusts `X-Gator-User: <user uuid>`.
 
@@ -189,9 +212,13 @@ daily budget for the project:
 {"policy": {
   "default": {"backend": "claude", "model": "claude-opus-5", "max_cost_usd": 5},
   "roles": {"reviewer": {"model": "claude-sonnet-5", "max_cost_usd": 1}},
-  "daily_budget_usd": 25
+  "daily_budget_usd": 25,
+  "placement": "local"
 }}
 ```
+
+`placement` is where the autopilot's jobs run, `local` (the default) or `cloud`; a person starting
+a job chooses for that job. See [Where a job runs](docs/deploy.md#where-a-job-runs).
 
 A role's entry overrides the default; a role that switches backend drops the default model.
 Jobs created without a backend or model take them from the policy. The cost cap travels in the
@@ -205,8 +232,10 @@ reconcile after midnight or a higher limit passes the check and the autopilot re
 ## Plugins
 
 Integrations are plugins: separate processes speaking JSON-RPC 2.0 over stdio, one process
-per project and plugin, started only by gator-server. Install with `PUT /api/v1/plugins/{name}`
-and enable per project with `PUT /api/v1/projects/{id}/plugins/{name}`; webhooks arrive at
+per project and plugin, started only by gator-server. The ones it ships (`GATOR_PLUGIN_DIR`)
+are listed by `GET /api/v1/plugins/catalogue` and switched on per project with
+`PUT /api/v1/projects/{id}/plugins/{name}`; GitHub and Linear connect through OAuth instead of a
+pasted token (callback: `GATOR_PUBLIC_URL/connect/callback`). Others are installed with `PUT /api/v1/plugins/{name}`; webhooks arrive at
 `POST /hooks/<project-slug>/<plugin>`. The contract and a Go SDK live in the public package
 `plugin/`; the protocol is in [docs/plugins.md](docs/plugins.md).
 

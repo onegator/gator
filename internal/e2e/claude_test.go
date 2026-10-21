@@ -63,7 +63,7 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	t.Setenv("FAKE_CLAUDE_RESUME_FIXTURE", filepath.Join(td, "synthetic-digest-reply.ndjson"))
 	ex := &executor.Executor{
 		WS:       &workspace.Manager{Root: t.TempDir()},
-		Backends: map[string]backend.Backend{"claude": claude.Backend{Bin: filepath.Join(td, "fake-claude.sh")}},
+		Backends: map[string]backend.Backend{"claude": claude.Backend{Bin: filepath.Join(td, "fake-claude.sh"), AllowEnv: []string{"FAKE_CLAUDE_*"}}},
 		Push:     true,
 	}
 	c := client.New(client.Config{ServerURL: h.srv.URL, Token: h.runner, Name: "e2e-claude", Location: "other",

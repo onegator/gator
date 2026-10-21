@@ -1,8 +1,12 @@
 -- name: UpsertRunner :one
-INSERT INTO runners (token_id, name, location, status, capabilities, protocol_version, binary_version, connected_at, last_heartbeat_at)
-VALUES ($1, $2, $3, 'online', $4, $5, $6, now(), now())
+-- The owner is whoever minted the token; a token minted on the host has none.
+INSERT INTO runners (token_id, name, location, status, capabilities, protocol_version, binary_version, connected_at, last_heartbeat_at,
+                     placement, owner_id)
+VALUES ($1, $2, $3, 'online', $4, $5, $6, now(), now(),
+        sqlc.arg(placement), (SELECT t.user_id FROM api_tokens t WHERE t.id = $1))
 ON CONFLICT (token_id) DO UPDATE
-SET name = EXCLUDED.name, location = EXCLUDED.location, status = 'online',
+SET name = EXCLUDED.name, location = EXCLUDED.location, status = 'online', placement = EXCLUDED.placement,
+    owner_id = EXCLUDED.owner_id,
     capabilities = EXCLUDED.capabilities, protocol_version = EXCLUDED.protocol_version,
     binary_version = EXCLUDED.binary_version, connected_at = now(), last_heartbeat_at = now(), updated_at = now(),
     offline_reason = '', offline_since = NULL
@@ -36,8 +40,9 @@ RETURNING *;
 SELECT * FROM runners WHERE id = $1;
 
 -- name: CreateJob :one
-INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement)
+-- An empty placement is local, which is what every job was before it had one.
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF(sqlc.arg(placement)::text, ''), 'local'))
 RETURNING *;
 
 -- name: GetJob :one
@@ -52,6 +57,11 @@ SELECT * FROM jobs WHERE task_id = $1 ORDER BY created_at;
 -- name: LeaseJobs :many
 -- Hands up to `slots` queued jobs to a runner. SKIP LOCKED lets concurrent runners lease
 -- disjoint jobs without waiting on each other.
+--
+-- Placement must match. A local job someone started goes to a machine of theirs or to a shared
+-- one (no owner), never to another person's Mac, which is logged in as somebody else. A job the
+-- autopilot queued has no person behind it and takes any local runner. A runner started for one
+-- job (only_job) takes that job and nothing else.
 UPDATE jobs
 SET status = 'leased', runner_id = sqlc.arg(runner_id), lease_expires_at = sqlc.arg(lease_until),
     attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
@@ -60,6 +70,10 @@ WHERE id IN (
     WHERE j.status = 'queued'
       AND j.backend = ANY(sqlc.arg(backends)::text[])
       AND (cardinality(sqlc.arg(projects)::uuid[]) = 0 OR j.project_id = ANY(sqlc.arg(projects)::uuid[]))
+      AND j.placement = sqlc.arg(placement)::text
+      AND (sqlc.narg(only_job)::uuid IS NULL OR j.id = sqlc.narg(only_job)::uuid)
+      AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
+           OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
     ORDER BY j.created_at
     LIMIT sqlc.arg(slots)
     FOR UPDATE SKIP LOCKED
@@ -105,22 +119,31 @@ RETURNING id, task_id, status;
 -- A queued job no connected runner can take. Matching mirrors LeaseJobs and the session's own
 -- filter: the backend must be offered, the project allowed, and the backend's login must work,
 -- because a runner with an expired login is online and still takes nothing. Jobs already marked
--- are skipped, so the event fires once per episode rather than on every sweep.
+-- are skipped, so the event fires once per episode rather than on every sweep. Placement and
+-- ownership match as in LeaseJobs. A cloud job a provisioner will start a runner for is left
+-- alone (skip_cloud): nobody is missing, the runner is on its way.
 UPDATE jobs SET unassignable_since = now(), updated_at = now()
 WHERE id IN (
     SELECT j.id FROM jobs j
     WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < sqlc.arg(before)
+      AND NOT (sqlc.arg(skip_cloud)::boolean AND j.placement = 'cloud')
       AND NOT EXISTS (
           SELECT 1 FROM runners r
           WHERE r.status <> 'offline'
+            AND r.placement = j.placement
+            AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
+                 OR r.owner_id IS NULL OR r.owner_id = j.created_by)
             AND r.capabilities->'backends' @> to_jsonb(j.backend)
-            AND (COALESCE(jsonb_array_length(r.capabilities->'projects'), 0) = 0
+            -- A runner that sent "projects": null takes any project; jsonb_array_length of that
+            -- null is an error, not zero, and used to fail the whole sweep.
+            AND (COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(r.capabilities->'projects') = 'array'
+                                                  THEN r.capabilities->'projects' END), 0) = 0
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
       )
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, task_id, project_id, backend;
+RETURNING id, task_id, project_id, backend, placement;
 
 -- name: ListUnassignableTaskIDs :many
 -- Tasks whose current phase has a job nobody can take, for the inbox.
@@ -151,7 +174,7 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
 -- name: ListActiveJobsOnRunners :many
 -- What each runner is doing now, so a person can stop or steer it from wherever they are —
 -- including a phone, which has no task detail open.
-SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, t.title AS task_title
+SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, j.placement, t.title AS task_title
 FROM jobs j JOIN tasks t ON t.id = j.task_id
 WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
 ORDER BY j.started_at NULLS LAST;
@@ -174,3 +197,7 @@ SELECT * FROM job_context WHERE job_id = $1 ORDER BY position;
 
 -- name: BumpJobObjections :one
 UPDATE jobs SET objections = objections + 1, updated_at = now() WHERE id = $1 RETURNING objections;
+
+-- name: ListQueuedCloudJobs :many
+-- Cloud jobs waiting for a runner, oldest first: what a provisioner may start machines for.
+SELECT * FROM jobs WHERE status = 'queued' AND placement = 'cloud' ORDER BY created_at LIMIT sqlc.arg(max);

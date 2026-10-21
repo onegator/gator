@@ -25,12 +25,49 @@ func (q *Queries) ClearOtherPrimaryRepos(ctx context.Context, arg ClearOtherPrim
 	return err
 }
 
+const deleteProjectRepo = `-- name: DeleteProjectRepo :exec
+DELETE FROM project_repos WHERE project_id = $1 AND name = $2
+`
+
+type DeleteProjectRepoParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Name      string      `json:"name"`
+}
+
+func (q *Queries) DeleteProjectRepo(ctx context.Context, arg DeleteProjectRepoParams) error {
+	_, err := q.db.Exec(ctx, deleteProjectRepo, arg.ProjectID, arg.Name)
+	return err
+}
+
 const getPrimaryRepo = `-- name: GetPrimaryRepo :one
 SELECT id, project_id, name, url, default_branch, is_primary FROM project_repos WHERE project_id = $1 ORDER BY is_primary DESC, name LIMIT 1
 `
 
 func (q *Queries) GetPrimaryRepo(ctx context.Context, projectID pgtype.UUID) (ProjectRepo, error) {
 	row := q.db.QueryRow(ctx, getPrimaryRepo, projectID)
+	var i ProjectRepo
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Url,
+		&i.DefaultBranch,
+		&i.IsPrimary,
+	)
+	return i, err
+}
+
+const getProjectRepo = `-- name: GetProjectRepo :one
+SELECT id, project_id, name, url, default_branch, is_primary FROM project_repos WHERE project_id = $1 AND name = $2
+`
+
+type GetProjectRepoParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Name      string      `json:"name"`
+}
+
+func (q *Queries) GetProjectRepo(ctx context.Context, arg GetProjectRepoParams) (ProjectRepo, error) {
+	row := q.db.QueryRow(ctx, getProjectRepo, arg.ProjectID, arg.Name)
 	var i ProjectRepo
 	err := row.Scan(
 		&i.ID,

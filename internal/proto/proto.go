@@ -112,11 +112,33 @@ func Negotiate(runner int) (int, error) {
 // Register is the first message a runner sends. The runner authenticates with its token
 // in the WebSocket handshake (Authorization: Bearer), never inside a message.
 type Register struct {
-	Name          string       `json:"name"`
-	Location      string       `json:"location"` // "vps" | "mac" | "other"
+	Name     string `json:"name"`
+	Location string `json:"location"` // "vps" | "mac" | "other"
+	// Placement is where this runner takes work from: PlacementLocal or PlacementCloud. Empty
+	// lets the server derive it from Location, which is what a runner older than the field gets.
+	Placement     string       `json:"placement,omitempty"`
 	BinaryVersion string       `json:"binary_version"`
 	Capabilities  Capabilities `json:"capabilities"`
 }
+
+// Placements. A local job runs on a machine of the person who started it; a cloud job on a
+// runner the server keeps or starts for it. A runner takes only jobs of its own placement.
+const (
+	PlacementLocal = "local"
+	PlacementCloud = "cloud"
+)
+
+// PlacementFor is the placement a runner gets when it does not name one: a VPS is the cloud,
+// a Mac or anything else is somebody's own machine.
+func PlacementFor(location string) string {
+	if location == "vps" {
+		return PlacementCloud
+	}
+	return PlacementLocal
+}
+
+// ValidPlacement reports whether p names a placement.
+func ValidPlacement(p string) bool { return p == PlacementLocal || p == PlacementCloud }
 
 // Capabilities describes what a runner can execute.
 type Capabilities struct {

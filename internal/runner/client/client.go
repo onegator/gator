@@ -55,6 +55,7 @@ type Config struct {
 	Token         string
 	Name          string
 	Location      string
+	Placement     string // "local" | "cloud"; empty lets the server derive it from Location
 	BinaryVersion string
 	Backends      []string
 	Projects      []string
@@ -67,6 +68,13 @@ type Config struct {
 	HeartbeatInterval time.Duration
 	MinBackoff        time.Duration
 	MaxBackoff        time.Duration
+
+	// Once makes the runner take one job and stop: Run returns when the server has acked that
+	// job's receipt. It is how a machine started for one job ends, and with it the bill.
+	Once bool
+	// OnceIdle is how long a Once runner waits for its job before giving up, so a machine whose
+	// job went elsewhere does not sit there. Zero takes 10 minutes.
+	OnceIdle time.Duration
 }
 
 // WebSocketURL turns the configured server URL into the runner endpoint.
@@ -118,6 +126,12 @@ type Client struct {
 	jobs     map[string]*runningJob
 	journal  *fileJournal
 	loaded   sync.Once
+
+	// took is set once a Once runner has started its job; finished closes when that job's
+	// receipt is acked.
+	took         bool
+	finished     chan struct{}
+	finishedOnce sync.Once
 }
 
 // New builds a client.
@@ -134,7 +148,14 @@ func New(cfg Config, exec Executor, log *slog.Logger) *Client {
 	if cfg.MaxBackoff == 0 {
 		cfg.MaxBackoff = 30 * time.Second
 	}
-	c := &Client{cfg: cfg, exec: exec, log: log, jobs: map[string]*runningJob{}, inflight: map[uint64]*outMsg{}}
+	if cfg.Once {
+		cfg.MaxParallel = 1
+		if cfg.OnceIdle == 0 {
+			cfg.OnceIdle = 10 * time.Minute
+		}
+	}
+	c := &Client{cfg: cfg, exec: exec, log: log, jobs: map[string]*runningJob{}, inflight: map[uint64]*outMsg{},
+		finished: make(chan struct{})}
 	if cfg.JournalPath != "" {
 		c.journal = &fileJournal{path: cfg.JournalPath}
 	}
@@ -195,6 +216,12 @@ var errWrongAddress = errors.New("wrong server address")
 // retrying cannot help.
 func (c *Client) Run(ctx context.Context) error {
 	c.loaded.Do(c.restore)
+	if c.cfg.Once {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		go c.endOnce(ctx, cancel)
+	}
 	backoff := c.cfg.MinBackoff
 	for {
 		registered, err := c.session(ctx)
@@ -222,6 +249,31 @@ func (c *Client) Run(ctx context.Context) error {
 		backoff *= 2
 		if backoff > c.cfg.MaxBackoff {
 			backoff = c.cfg.MaxBackoff
+		}
+	}
+}
+
+// endOnce ends a Once runner: after its job's receipt is acked, or when no job came.
+func (c *Client) endOnce(ctx context.Context, cancel context.CancelFunc) {
+	idle := time.NewTimer(c.cfg.OnceIdle)
+	defer idle.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.finished:
+			c.log.Info("the job is done and its receipt delivered; exiting")
+			cancel()
+			return
+		case <-idle.C:
+			c.mu.Lock()
+			took := c.took
+			c.mu.Unlock()
+			if !took {
+				c.log.Warn("no job came; exiting", "waited", c.cfg.OnceIdle)
+				cancel()
+				return
+			}
 		}
 	}
 }
@@ -273,7 +325,7 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 	defer cancel()
 	defer conn.CloseNow()
 
-	reg := proto.Register{Name: c.cfg.Name, Location: c.cfg.Location, BinaryVersion: c.cfg.BinaryVersion,
+	reg := proto.Register{Name: c.cfg.Name, Location: c.cfg.Location, Placement: c.cfg.Placement, BinaryVersion: c.cfg.BinaryVersion,
 		Capabilities: proto.Capabilities{Backends: c.cfg.Backends, MaxParallel: c.cfg.MaxParallel, Projects: c.cfg.Projects,
 			CanLogin: c.canLogin()}}
 	if err := write(sctx, conn, proto.TypeRegister, 1, reg); err != nil {
@@ -372,6 +424,9 @@ func (c *Client) ack(seq uint64) {
 	c.persistLocked()
 	if m.typ == proto.TypeFinish {
 		delete(c.jobs, m.jobID) // only now may the heartbeat stop listing it
+		if c.cfg.Once && c.took && len(c.jobs) == 0 {
+			c.finishedOnce.Do(func() { close(c.finished) })
+		}
 	}
 }
 
@@ -396,6 +451,9 @@ func (c *Client) beat() {
 	c.mu.Lock()
 	active := c.activeLocked()
 	free := c.cfg.MaxParallel - len(c.jobs)
+	if c.cfg.Once && c.took {
+		free = 0 // its one job is taken; the machine ends with it
+	}
 	c.mu.Unlock()
 	c.sendBestEffort(proto.TypeHeartbeat, proto.Heartbeat{Load: len(active), AuthState: authState, ActiveJobs: active})
 	if free > 0 && len(c.cfg.Backends) > 0 {
@@ -505,6 +563,16 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 	if _, dup := c.jobs[job.JobID]; dup {
 		c.mu.Unlock()
 		return
+	}
+	if c.cfg.Once {
+		if c.took {
+			// The server leases one job to a one-job token; a second would be a bug there, and
+			// its lease expires back to the queue rather than keeping this machine alive.
+			c.mu.Unlock()
+			c.log.Warn("a second job offered to a one-job runner; ignoring it", "job", job.JobID)
+			return
+		}
+		c.took = true
 	}
 	// Jobs outlive a single connection: base them on a background context, not the session.
 	jctx, cancel := context.WithCancelCause(context.WithoutCancel(parent))

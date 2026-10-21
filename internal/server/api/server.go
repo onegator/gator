@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -20,6 +23,7 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -52,6 +56,11 @@ type Server struct {
 	// TrustedProxies may name the client in X-Forwarded-For; everyone else is who they
 	// connect from.
 	TrustedProxies limits.Proxies
+	// PublicURL is where people reach this server, for the invitation links they pass on.
+	// Empty: the address the inviter used.
+	PublicURL string
+	// Mailer delivers invitations; nil leaves that to the inviter, who gets the link.
+	Mailer invites.Mailer
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -79,9 +88,11 @@ func (s *Server) Router() http.Handler {
 	r.Use(auth.Authenticate(s.Tokens, s.DevAuth, s.Log))
 	r.Use(auth.AuditWith(db.New(s.Pool), s.Log))
 	r.Route("/auth", func(r chi.Router) {
+		r.Get("/config", s.authConfig)
 		if s.OIDC != nil {
 			r.Get("/login", s.OIDC.Login)
 			r.Get("/callback", s.OIDC.Callback)
+			r.Post("/token", s.OIDC.Token)
 		} else {
 			r.Get("/login", func(w http.ResponseWriter, _ *http.Request) {
 				writeError(w, http.StatusNotImplemented, "OIDC is not configured (GATOR_OIDC_*)", "oidc_disabled")
@@ -89,6 +100,7 @@ func (s *Server) Router() http.Handler {
 		}
 		r.Post("/logout", auth.Logout(s.Tokens))
 	})
+	r.Get("/invite/{token}", invitePageHandler)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.With(auth.RequireAuth).Get("/ws", s.websocket)
 		if s.Runners != nil {
@@ -100,6 +112,15 @@ func (s *Server) Router() http.Handler {
 }
 
 // --- meta ---
+
+// authConfig tells a client how it can sign in before it has any token.
+func (s *Server) authConfig(w http.ResponseWriter, _ *http.Request) {
+	resp := map[string]any{"oidc": s.OIDC != nil}
+	if s.OIDC != nil {
+		resp["provider"] = s.OIDC.ProviderName()
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
 func (s *Server) Healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, gen.Status{Status: "ok"})
@@ -146,13 +167,55 @@ func (s *Server) ListProjects(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	roles, err := s.userRoles(r, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	out := make([]gen.Project, 0, len(rows))
 	for _, pr := range rows {
 		if visible == nil || visible[pr.ID.Bytes] {
-			out = append(out, toProject(pr))
+			out = append(out, withRole(toProject(pr), roles(pr.ID)))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// userRoles answers the caller's role per project from one read of their memberships.
+// Runners and plugins have no role worth showing; they get none.
+func (s *Server) userRoles(r *http.Request, p auth.Principal) (func(pgtype.UUID) string, error) {
+	switch {
+	case p.Kind != auth.KindUser:
+		return func(pgtype.UUID) string { return "" }, nil
+	case p.IsWorkspaceAdmin():
+		return func(pgtype.UUID) string { return "admin" }, nil
+	}
+	ms, err := db.New(s.Pool).ListMembershipsForUser(r.Context(), p.UserID)
+	if err != nil {
+		return nil, err
+	}
+	byProject := make(map[[16]byte]string, len(ms))
+	for _, m := range ms {
+		byProject[m.ProjectID.Bytes] = m.Role
+	}
+	return func(id pgtype.UUID) string { return byProject[id.Bytes] }, nil
+}
+
+// roleIn is userRoles for a single project.
+func (s *Server) roleIn(r *http.Request, p auth.Principal, project pgtype.UUID) string {
+	roles, err := s.userRoles(r, p)
+	if err != nil {
+		return ""
+	}
+	return roles(project)
+}
+
+func withRole(p gen.Project, role string) gen.Project {
+	if role != "" {
+		r := gen.ProjectRole(role)
+		p.Role = &r
+	}
+	return p
 }
 
 func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
@@ -160,8 +223,9 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !p.IsWorkspaceAdmin() {
-		writeError(w, http.StatusForbidden, "creating projects requires workspace admin", "forbidden")
+	// Anyone signed in may start a project and runs it; a runner or a plugin may not.
+	if p.Kind != auth.KindUser {
+		writeError(w, http.StatusForbidden, "only a person can create a project", "forbidden")
 		return
 	}
 	var in gen.NewProject
@@ -172,11 +236,25 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "slug and name are required", "invalid")
 		return
 	}
+	var repo *repoInput
+	if in.RepoUrl != nil && strings.TrimSpace(*in.RepoUrl) != "" {
+		ri, err := parseRepo(in.Slug, *in.RepoUrl, in.DefaultBranch)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error(), "invalid")
+			return
+		}
+		repo = &ri
+	}
 	tags := []string{}
 	if in.Tags != nil {
 		tags = *in.Tags
 	}
 	pr, err := db.New(s.Pool).CreateProject(r.Context(), db.CreateProjectParams{Slug: in.Slug, Name: in.Name, Tags: tags, ProcessConfig: []byte("{}")})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		writeError(w, http.StatusConflict, fmt.Sprintf("a project called %q already exists; pick another short name", in.Slug), "conflict")
+		return
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -196,11 +274,19 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 			pr = updated
 		}
 	}
-	writeJSON(w, http.StatusCreated, toProject(pr))
+	// Given after the preset, so the repository named here wins over the preset's.
+	if repo != nil {
+		if _, err := s.putRepo(r.Context(), pr.ID, *repo, true); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, withRole(toProject(pr), "admin"))
 }
 
 func (s *Server) GetProject(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
-	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+	caller, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer)
+	if !ok {
 		return
 	}
 	p, err := db.New(s.Pool).GetProject(r.Context(), fromUUID(projectId))
@@ -208,7 +294,7 @@ func (s *Server) GetProject(w http.ResponseWriter, r *http.Request, projectId ge
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toProject(p))
+	writeJSON(w, http.StatusOK, withRole(toProject(p), s.roleIn(r, caller, p.ID)))
 }
 
 // --- tasks ---
@@ -419,7 +505,10 @@ type wsSubscribe struct {
 }
 
 // websocket streams hub events. The client sends {"subscribe":["inbox","task:<id>"]} first
-// and may send it again to change topics.
+// and may send it again to change topics. "project:<id>" carries everything that happens in
+// one project, so it is offered only to those who may read that project. Whatever the topic,
+// an event that belongs to a project reaches the caller only if they may read that project
+// (see eventFilter).
 func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 	if err != nil {
@@ -437,8 +526,14 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close(websocket.StatusPolicyViolation, "first message must be {\"subscribe\":[...]}")
 		return
 	}
+	if topic, ok := s.forbiddenTopic(r, sub.Subscribe); !ok {
+		_ = c.Close(websocket.StatusPolicyViolation, "not allowed to follow "+topic)
+		return
+	}
 	ch, stop := s.Hub.Subscribe(sub.Subscribe...)
 	defer stop()
+	p, _ := auth.FromContext(ctx)
+	visible := newEventFilter(s, p)
 
 	go func() {
 		for {
@@ -452,12 +547,34 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case e := <-ch:
+			if !visible.allow(ctx, e) {
+				continue
+			}
 			b, _ := json.Marshal(e)
 			if err := c.Write(ctx, websocket.MessageText, b); err != nil {
 				return
 			}
 		}
 	}
+}
+
+// forbiddenTopic answers the first project topic the caller may not read, if any.
+func (s *Server) forbiddenTopic(r *http.Request, topics []string) (string, bool) {
+	p, _ := auth.FromContext(r.Context())
+	for _, t := range topics {
+		id, ok := strings.CutPrefix(t, "project:")
+		if !ok {
+			continue
+		}
+		var project pgtype.UUID
+		if err := project.Scan(id); err != nil {
+			return t, false
+		}
+		if err := s.Authz.Require(r.Context(), p, project, auth.RoleViewer); err != nil {
+			return t, false
+		}
+	}
+	return "", true
 }
 
 // --- helpers ---
@@ -482,9 +599,9 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, process.ErrGateNotSatisfied), errors.Is(err, process.ErrTaskBlocked),
 		errors.Is(err, process.ErrTaskClosed), errors.Is(err, process.ErrNotBackward),
 		errors.Is(err, process.ErrRollbackCeiling), errors.Is(err, process.ErrUnknownPhase),
-		errors.Is(err, process.ErrTerminalPhase):
+		errors.Is(err, process.ErrTerminalPhase), errors.Is(err, process.ErrKindLocked):
 		writeError(w, http.StatusConflict, err.Error(), "conflict")
-	case errors.Is(err, process.ErrInvalidUsage):
+	case errors.Is(err, process.ErrInvalidUsage), errors.Is(err, process.ErrInvalidEdit):
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 	default:
 		s.Log.Error("request failed", "err", err)

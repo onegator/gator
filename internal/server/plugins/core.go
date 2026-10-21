@@ -89,8 +89,55 @@ func (i *instance) core(ctx context.Context, method string, raw json.RawMessage)
 		if err != nil {
 			return nil, err
 		}
-		refs, _ := json.Marshal(p.ExternalRefs)
-		if t, err = q.MergeTaskExternalRefs(ctx, db.MergeTaskExternalRefsParams{ID: t.ID, Refs: refs}); err != nil {
+		if len(p.ExternalRefs) > 0 {
+			refs, _ := json.Marshal(p.ExternalRefs)
+			if t, err = q.MergeTaskExternalRefs(ctx, db.MergeTaskExternalRefsParams{ID: t.ID, Refs: refs}); err != nil {
+				return nil, err
+			}
+		}
+		if p.Title != nil || p.Description != nil {
+			if p.Title != nil {
+				title := strings.TrimSpace(*p.Title)
+				p.Title = &title
+			}
+			edited, err := i.h.proc.Edit(ctx, t.ID, process.EditParams{Title: p.Title, Description: p.Description},
+				process.Actor{Kind: process.ActorPlugin})
+			switch {
+			case errors.Is(err, process.ErrTaskClosed):
+				// A closed task is history and keeps the words it closed with; a tracker that
+				// renames the issue afterwards is heard once the task is reopened and edited again.
+			case errors.Is(err, process.ErrInvalidEdit):
+				return nil, plugin.Errorf(plugin.CodeInvalidParams, "%v", err)
+			case err != nil:
+				return nil, err
+			default:
+				t = edited
+			}
+		}
+		return taskRef(t), nil
+	case plugin.CoreTaskClose, plugin.CoreTaskReopen:
+		p, err := decode[plugin.TaskStateParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		t, err := i.task(ctx, q, p.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		reason := strings.TrimSpace(p.Reason)
+		actor := process.Actor{Kind: process.ActorPlugin}
+		if method == plugin.CoreTaskClose {
+			if reason == "" {
+				reason = "closed in " + i.b.name
+			}
+			t, err = i.h.proc.Close(ctx, t.ID, actor, reason)
+		} else {
+			if reason == "" {
+				reason = "reopened in " + i.b.name
+			}
+			t, err = i.h.proc.Reopen(ctx, t.ID, actor, reason)
+		}
+		if err != nil {
 			return nil, err
 		}
 		return taskRef(t), nil
@@ -223,5 +270,6 @@ func taskRef(t db.Task) plugin.TaskRef {
 			refs[k] = fmt.Sprint(v)
 		}
 	}
-	return plugin.TaskRef{ID: uuidString(t.ID), ProjectID: uuidString(t.ProjectID), Kind: t.Kind, Title: t.Title, Phase: t.Phase, ExternalRefs: refs}
+	return plugin.TaskRef{ID: uuidString(t.ID), ProjectID: uuidString(t.ProjectID), Kind: t.Kind, Title: t.Title, Phase: t.Phase, ExternalRefs: refs,
+		Closed: t.ClosedAt.Valid}
 }
