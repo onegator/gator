@@ -84,7 +84,7 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectMember" } } } } }
     put:
       operationId: setMember
-      description: Set a user's role in a project. Requires project admin.
+      description: "Set a user's role in a project. Requires project admin. Refused (409) when it would leave the project without an admin."
       parameters: [ { $ref: "#/components/parameters/projectId" } ]
       requestBody:
         required: true
@@ -92,6 +92,84 @@ paths:
       responses:
         "204": { description: ok }
         "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/members/{userId}:
+    delete:
+      operationId: removeMember
+      description: "Take a person out of a project. Requires project admin, except that anyone may leave. Refused (409) for the last admin."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/candidates:
+    get:
+      operationId: listProjectCandidates
+      description: "People already in the workspace, not yet in this project, whose name or email contains q. At most ten, with nothing but name and email. Requires project admin."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ProjectCandidate" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/invitations:
+    get:
+      operationId: listInvitations
+      description: "Invitations nobody has accepted or revoked yet, expired ones included. Requires project admin."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Invitation" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createInvitation
+      description: "Invite a person by email. The answer carries the link to pass on; it is shown once. Inviting the same address again replaces its open invitation. Requires project admin."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInvitation" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/IssuedInvitation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/invitations/{invitationId}:
+    delete:
+      operationId: revokeInvitation
+      description: The invitation's link stops working. Requires project admin.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/invitationId" }
+      responses:
+        "204": { description: revoked }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/invitations/{invitationId}/renew:
+    post:
+      operationId: renewInvitation
+      description: "A fresh link and a fresh expiry for an open invitation; the old link stops working. Only the token's hash is stored, so this is how an admin gets a link to copy again. Requires project admin."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/invitationId" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/IssuedInvitation" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /invitations/accept:
+    post:
+      operationId: acceptInvitation
+      description: "The signed-in person joins the project they were invited to. The invitation must have been sent to their email (403 otherwise); an unknown, revoked or expired one answers 404. Signing in with the invited address accepts it too, without this call."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AcceptInvitation" } } }
+      responses:
+        "200": { description: joined, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /projects:
     get:
       operationId: listProjects
@@ -844,6 +922,7 @@ components:
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
     pluginName: { name: pluginName, in: path, required: true, schema: { type: string } }
+    invitationId: { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error:
       description: error
@@ -1287,6 +1366,44 @@ components:
         name: { type: string }
         email: { type: string }
         role: { type: string, enum: [admin, member, viewer] }
+    ProjectCandidate:
+      type: object
+      required: [userId, name, email]
+      properties:
+        userId: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string }
+    NewInvitation:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string }
+        role: { type: string, enum: [admin, member, viewer] }
+    Invitation:
+      type: object
+      required: [id, projectId, email, role, createdAt, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        email: { type: string }
+        role: { type: string, enum: [admin, member, viewer] }
+        invitedBy: { type: string, format: uuid }
+        invitedByName: { type: string }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    IssuedInvitation:
+      type: object
+      required: [invitation, link, appLink, emailed]
+      properties:
+        invitation: { $ref: "#/components/schemas/Invitation" }
+        link: { type: string, description: "https address on this server that opens Gator.app with the invitation" }
+        appLink: { type: string, description: "gator://invite/<token>, for someone who already has Gator.app" }
+        emailed: { type: boolean, description: "whether the server sent the link itself; when false, the inviter passes it on" }
+    AcceptInvitation:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string }
     ProjectConfig:
       type: object
       required: [config]

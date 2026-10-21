@@ -188,6 +188,7 @@ func serve(ctx context.Context) error {
 		Quality: scorecards,
 		Tokens:  auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
+		PublicURL: cfg.PublicURL,
 	}
 	if oc := auth.LoadOIDCConfig(); oc.Enabled() {
 		o, err := auth.NewOIDC(ctx, oc, db.Pool)

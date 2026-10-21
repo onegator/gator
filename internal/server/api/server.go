@@ -23,6 +23,7 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -55,6 +56,11 @@ type Server struct {
 	// TrustedProxies may name the client in X-Forwarded-For; everyone else is who they
 	// connect from.
 	TrustedProxies limits.Proxies
+	// PublicURL is where people reach this server, for the invitation links they pass on.
+	// Empty: the address the inviter used.
+	PublicURL string
+	// Mailer delivers invitations; nil leaves that to the inviter, who gets the link.
+	Mailer invites.Mailer
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -94,6 +100,7 @@ func (s *Server) Router() http.Handler {
 		}
 		r.Post("/logout", auth.Logout(s.Tokens))
 	})
+	r.Get("/invite/{token}", invitePageHandler)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.With(auth.RequireAuth).Get("/ws", s.websocket)
 		if s.Runners != nil {

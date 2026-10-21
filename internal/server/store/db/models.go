@@ -320,6 +320,20 @@ type Project struct {
 	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
 }
 
+type ProjectInvitation struct {
+	ID         pgtype.UUID        `json:"id"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	Email      string             `json:"email"`
+	Role       string             `json:"role"`
+	TokenHash  []byte             `json:"token_hash"`
+	InvitedBy  pgtype.UUID        `json:"invited_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	AcceptedAt pgtype.Timestamptz `json:"accepted_at"`
+	AcceptedBy pgtype.UUID        `json:"accepted_by"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type ProjectPack struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	PackID    pgtype.UUID `json:"pack_id"`

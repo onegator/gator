@@ -62,13 +62,13 @@ func TestProjectConfigAndPeople(t *testing.T) {
 	if len(members) != 1 || members[0].UserId != *me.UserId || members[0].Role != gen.ProjectMemberRoleAdmin {
 		t.Fatalf("the creator administers the project: %+v", members)
 	}
-	// A role can be changed, and the list follows.
-	if code := h.do("PUT", "/projects/"+project+"/members", gen.Member{UserId: *me.UserId, Role: gen.MemberRoleViewer}, nil); code != 204 {
-		t.Fatalf("change a role: %d", code)
+	// Its only admin cannot step down: nobody would be left to run it.
+	if code := h.do("PUT", "/projects/"+project+"/members", gen.Member{UserId: *me.UserId, Role: gen.MemberRoleViewer}, nil); code != 409 {
+		t.Fatalf("demoting the last admin: %d", code)
 	}
 	h.do("GET", "/projects/"+project+"/members", nil, &members)
-	if len(members) != 1 || members[0].Role != gen.ProjectMemberRoleViewer {
-		t.Fatalf("after the change: %+v", members)
+	if len(members) != 1 || members[0].Role != gen.ProjectMemberRoleAdmin {
+		t.Fatalf("after the refusal: %+v", members)
 	}
 
 	var users []gen.User

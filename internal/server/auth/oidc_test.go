@@ -18,6 +18,8 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"golang.org/x/oauth2"
+
+	"github.com/onegator/gator/internal/server/invites"
 )
 
 func TestNativeRedirectAllowed(t *testing.T) {
@@ -328,5 +330,46 @@ func TestStaleSessionCookieIsAnonymousNotRefused(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("a bad bearer token must still be refused, got %d", rec.Code)
+	}
+}
+
+func TestSigningInWithAnInvitedAddressJoinsTheProject(t *testing.T) {
+	// The domain list would refuse this person; the invitation lets them in.
+	h := newLoginHarness(t, OIDCConfig{AllowedDomains: []string{"allowed.test"}})
+	ctx := context.Background()
+	pool := h.o.pool
+	email := uniqueEmail("elsewhere.test")
+	var project string
+	if err := pool.QueryRow(ctx, "INSERT INTO projects(slug,name) VALUES($1,'Invited') RETURNING id", "inv"+randomString()[:12]).Scan(&project); err != nil {
+		t.Fatal(err)
+	}
+	_, tokenHash := invites.NewToken()
+	if _, err := pool.Exec(ctx, "INSERT INTO project_invitations(project_id,email,role,token_hash,expires_at) VALUES($1,$2,'member',$3,now()+interval '1 day')",
+		project, strings.ToUpper(email), tokenHash); err != nil {
+		t.Fatal(err)
+	}
+
+	h.provider.email = email
+	_, challenge := pkce()
+	resp := h.run(url.Values{"redirect_uri": {"gator://auth/callback"}, "state": {"s"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}})
+	if back, _ := url.Parse(resp.Header.Get("Location")); back.Query().Get("error") != "" || back.Query().Get("code") == "" {
+		t.Fatalf("the invited person was refused: %s", back)
+	}
+	var role string
+	var accepted bool
+	if err := pool.QueryRow(ctx, `SELECT m.role, i.accepted_at IS NOT NULL FROM memberships m
+		JOIN users u ON u.id = m.user_id JOIN project_invitations i ON i.project_id = m.project_id
+		WHERE m.project_id = $1 AND u.email = $2`, project, email).Scan(&role, &accepted); err != nil {
+		t.Fatalf("no membership after signing in: %v", err)
+	}
+	if role != "member" || !accepted {
+		t.Fatalf("role %q accepted %v", role, accepted)
+	}
+
+	// Once taken, the invitation no longer opens the door to anyone else at that domain.
+	h.provider.email = uniqueEmail("elsewhere.test")
+	resp = h.run(url.Values{"redirect_uri": {"gator://auth/callback"}, "state": {"s"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}})
+	if back, _ := url.Parse(resp.Header.Get("Location")); !strings.Contains(back.Query().Get("error"), "may not sign in") {
+		t.Fatalf("an uninvited stranger: %s", back)
 	}
 }
