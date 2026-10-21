@@ -23,8 +23,10 @@ const configSchema = `{"type":"object","properties":{
 	},"required":["client_secret"]}`
 
 var manifest = plugin.Manifest{
-	Name:         "sentry",
-	Version:      "0.1.0",
+	Name:    "sentry",
+	Version: "0.1.0",
+	Description: "Sentry issues become incidents with a task to fix them; " +
+		"finishing the task resolves it there too.",
 	Capabilities: []string{"monitoring"},
 	ConfigSchema: json.RawMessage(configSchema),
 	// Sentry names the delivery in this header, and the core refuses a repeat of one it has
