@@ -19,6 +19,9 @@ type Spec struct {
 	// Env is added to the agent's environment, as KEY=VALUE. It carries the job's own identity
 	// for gator-cli, and the directory that holds it.
 	Env []string
+	// DenyRead are files the agent must not open: the runner's token file. Backends pass them
+	// to agentenv.Command, which enforces it where the platform can.
+	DenyRead []string
 }
 
 // Emit streams one event.

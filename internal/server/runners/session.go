@@ -34,7 +34,12 @@ type session struct {
 	authMu   sync.Mutex
 	auth     map[string]string // backend → login state from the last heartbeat
 	projects []pgtype.UUID
-	seq      atomic.Uint64
+	// placement is where this runner takes work from; owner is the person whose machine it is,
+	// when it has one; onlyJob is set for a runner started for one job, which takes nothing else.
+	placement string
+	owner     pgtype.UUID
+	onlyJob   pgtype.UUID
+	seq       atomic.Uint64
 
 	dispatchMu sync.Mutex
 	closeOnce  sync.Once
@@ -100,6 +105,27 @@ func (m *Manager) handshake(ctx context.Context, c *websocket.Conn, p auth.Princ
 	default:
 		reg.Location = "other"
 	}
+	switch {
+	case p.JobID.Valid:
+		// A token minted for one job belongs to a runner the server started in the cloud.
+		reg.Placement = proto.PlacementCloud
+	case reg.Placement == "":
+		reg.Placement = proto.PlacementFor(reg.Location)
+	case !proto.ValidPlacement(reg.Placement):
+		reject(ctx, c, "bad_register", fmt.Sprintf("placement must be local or cloud, not %q", reg.Placement))
+		return proto.Register{}, 0, false
+	}
+	// A project the server cannot read used to be dropped, and a list of only such entries
+	// became "any project" — the opposite of what its author meant. Refuse it instead.
+	for _, id := range reg.Capabilities.Projects {
+		if _, ok := parseUUID(id); !ok {
+			reject(ctx, c, "bad_register", fmt.Sprintf("project %q is not a project id; GATOR_RUNNER_PROJECTS takes ids", id))
+			return proto.Register{}, 0, false
+		}
+	}
+	if p.ProjectID.Valid {
+		reg.Capabilities.Projects = []string{uuidString(p.ProjectID)}
+	}
 	return reg, version, true
 }
 
@@ -115,7 +141,7 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 	capsJSON, _ := json.Marshal(reg.Capabilities)
 	row, err := db.New(m.pool).UpsertRunner(ctx, db.UpsertRunnerParams{
 		TokenID: p.TokenID, Name: reg.Name, Location: reg.Location, Capabilities: capsJSON,
-		ProtocolVersion: int32(version), BinaryVersion: reg.BinaryVersion,
+		ProtocolVersion: int32(version), BinaryVersion: reg.BinaryVersion, Placement: reg.Placement,
 	})
 	if err != nil {
 		m.log.Error("runner upsert", "err", err)
@@ -123,7 +149,8 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 		return nil, false
 	}
 
-	s := &session{m: m, conn: c, runnerID: row.ID, tokenID: p.TokenID, name: reg.Name, caps: reg.Capabilities, projects: projects}
+	s := &session{m: m, conn: c, runnerID: row.ID, tokenID: p.TokenID, name: reg.Name, caps: reg.Capabilities, projects: projects,
+		placement: reg.Placement, owner: row.OwnerID, onlyJob: p.JobID}
 	s.ctx, s.cancel = ctx, cancel
 	m.mu.Lock()
 	if old := m.sessions[row.ID.Bytes]; old != nil {
@@ -138,9 +165,11 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 	}
 	runnersOnline(ctx, 1)
 	_ = m.tx(ctx, func(q *db.Queries) error {
-		return emit(ctx, q, "runner.online", "runner", row.ID, map[string]any{"name": reg.Name, "location": reg.Location, "backends": reg.Capabilities.Backends})
+		return emit(ctx, q, "runner.online", "runner", row.ID, map[string]any{"name": reg.Name, "location": reg.Location,
+			"placement": reg.Placement, "backends": reg.Capabilities.Backends})
 	})
-	m.log.Info("runner connected", "runner", reg.Name, "location", reg.Location, "backends", reg.Capabilities.Backends, "proto", version)
+	m.log.Info("runner connected", "runner", reg.Name, "location", reg.Location, "placement", reg.Placement,
+		"backends", reg.Capabilities.Backends, "proto", version)
 	return s, true
 }
 
@@ -326,6 +355,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 		jobs, err := q.LeaseJobs(ctx, db.LeaseJobsParams{
 			RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
 			Backends: backends, Projects: projects, Slots: int32(free),
+			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
 		})
 		if err != nil {
 			return err
@@ -345,6 +375,15 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 	}
 	// If this send fails the leases expire and the sweeper returns the jobs to the queue.
 	return s.send(proto.TypeLease, proto.Lease{Jobs: out})
+}
+
+// placementOrLocal is the session's placement; a session built without one (a test, an old
+// row) is local, which is what every runner was before placement existed.
+func (s *session) placementOrLocal() string {
+	if s.placement == "" {
+		return proto.PlacementLocal
+	}
+	return s.placement
 }
 
 // freeSlots is how many more jobs the runner can take, capped by what it asked for. A runner
@@ -546,6 +585,9 @@ func (s *session) finish(fin proto.Finish) error {
 	}
 	if err := s.m.tx(ctx, func(q *db.Queries) error { return s.closeJob(ctx, q, job.ID, fin, status, reason) }); err != nil {
 		return errRetry
+	}
+	if job.Placement == proto.PlacementCloud {
+		s.m.provisionSoon() // the machine that ran it goes now, not on the next sweep
 	}
 	return nil
 }

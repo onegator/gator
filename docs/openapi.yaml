@@ -891,7 +891,7 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Job" } } } } }
     post:
       operationId: createTaskJob
-      description: Queue an agent job for the task's current phase. Role defaults to the phase's runner role.
+      description: "Queue an agent job for the task's current phase. Role defaults to the phase's runner role. placement says where it runs: local (a machine of the caller's, or a shared one; the default) or cloud (a cloud runner, started on demand when the server has a provisioner)."
       parameters: [ { $ref: "#/components/parameters/taskId" } ]
       requestBody:
         required: true
@@ -1047,9 +1047,10 @@ components:
         maxAttempts: { type: integer, minimum: 1, maximum: 10 }
         timeoutSeconds: { type: integer, minimum: 60 }
         maxToolCalls: { type: integer, minimum: 1 }
+        placement: { type: string, enum: [local, cloud], default: local, description: "local runs on a machine of the person starting the job (or a shared one); cloud on a cloud runner" }
     Job:
       type: object
-      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt]
+      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt, placement]
       properties:
         id: { type: string, format: uuid }
         taskId: { type: string, format: uuid }
@@ -1057,6 +1058,7 @@ components:
         phase: { type: string }
         role: { type: string }
         backend: { type: string }
+        placement: { type: string, enum: [local, cloud], description: "where the job runs" }
         model: { type: string }
         instruction: { type: string }
         status: { type: string, enum: [queued, leased, running, stalled, done, failed, stopped] }
@@ -1129,11 +1131,13 @@ components:
         canLogin: { type: boolean, description: "this runner can drive an interactive backend login; when false, asking it to is refused" }
     RunnerInfo:
       type: object
-      required: [id, name, location, status, connected, capabilities, authState, protocolVersion, binaryVersion]
+      required: [id, name, location, placement, status, connected, capabilities, authState, protocolVersion, binaryVersion]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         location: { type: string }
+        placement: { type: string, enum: [local, cloud], description: "which jobs it takes: local ones (a person's own machine) or cloud ones" }
+        ownerId: { type: string, format: uuid, description: "the person whose machine it is; absent for a shared runner" }
         status: { type: string, enum: [online, busy, offline] }
         connected: { type: boolean }
         capabilities: { $ref: "#/components/schemas/RunnerCapabilities" }

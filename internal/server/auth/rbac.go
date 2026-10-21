@@ -41,10 +41,15 @@ type Authorizer struct{ Pool *pgxpool.Pool }
 
 // ProjectRole returns the effective role of p in project. Workspace admins are admins
 // everywhere. Runner tokens are members of every project (they act on leased jobs only).
-// Plugin tokens are members of their own project.
+// Plugin tokens are members of their own project. A runner token minted for one job — a
+// machine the server started in the cloud — is a member of nothing: it speaks the runner
+// protocol and no other API, so a token leaked out of that machine reads nothing.
 func (a Authorizer) ProjectRole(ctx context.Context, p Principal, project pgtype.UUID) (Role, error) {
 	switch p.Kind {
 	case KindRunner:
+		if p.JobID.Valid {
+			return RoleNone, nil
+		}
 		return RoleMember, nil
 	case KindPlugin:
 		if p.ProjectID.Valid && p.ProjectID.Bytes == project.Bytes {

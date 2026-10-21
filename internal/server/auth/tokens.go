@@ -91,6 +91,17 @@ func (t Tokens) IssueForJob(ctx context.Context, jobID, projectID pgtype.UUID, t
 	return plaintext, err
 }
 
+// IssueRunnerForJob mints the token of a runner started for one job, in the cloud. It leases
+// that job and nothing else, reads no project through the API, and is revoked with the job's
+// other tokens when the job ends — after which the machine has nothing left to authenticate.
+func (t Tokens) IssueRunnerForJob(ctx context.Context, jobID, projectID pgtype.UUID, name string, ttl time.Duration) (string, error) {
+	plaintext, _, err := t.Issue(ctx, IssueParams{
+		Kind: KindRunner, Scope: "runner:job:" + uuidString(jobID), Name: name,
+		ProjectID: projectID, JobID: jobID, TTL: ttl,
+	})
+	return plaintext, err
+}
+
 // RevokeForJob invalidates whatever the job was given, when the job is over.
 func (t Tokens) RevokeForJob(ctx context.Context, jobID pgtype.UUID) error {
 	return db.New(t.Pool).RevokeTokensForJob(ctx, jobID)

@@ -27,6 +27,7 @@ import (
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/product"
+	"github.com/onegator/gator/internal/server/provision"
 	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
@@ -171,6 +172,13 @@ func serve(ctx context.Context) error {
 		log.Warn("backups not configured (GATOR_BACKUP_S3_*)")
 	}
 
+	cloud, err := provision.FromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if cloud.Provisioner != nil {
+		log.Info("cloud runners start on demand", "provisioner", cloud.Provisioner.Name(), "server_url", cloud.ServerURL)
+	}
 	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
 		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
@@ -178,6 +186,9 @@ func serve(ctx context.Context) error {
 		Judge:          pluginHost,
 		// Every job gets an identity of its own to talk back with, revoked when it ends.
 		AgentTokens: auth.Tokens{Pool: db.Pool},
+		// A cloud job no connected runner can take gets a machine of its own, when configured.
+		Provisioner: cloud.Provisioner, RunnerTokens: auth.Tokens{Pool: db.Pool},
+		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
 	go runnerMgr.Run(ctx)
 	if os.Getenv("GATOR_AUTOPILOT") != "0" {

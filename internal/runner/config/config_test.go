@@ -39,3 +39,37 @@ func TestMissingTokenFileIsAnError(t *testing.T) {
 		t.Fatal("a missing token file should fail loudly")
 	}
 }
+
+func TestPlacementFollowsLocationUnlessNamed(t *testing.T) {
+	t.Setenv("GATOR_RUNNER_SERVER_URL", "https://gator.example")
+	t.Setenv("GATOR_RUNNER_TOKEN", "t")
+	for loc, want := range map[string]string{"vps": "cloud", "mac": "local", "other": "local"} {
+		t.Setenv("GATOR_RUNNER_LOCATION", loc)
+		if c, err := Load(); err != nil || c.Placement != want {
+			t.Errorf("%s: %q (%v), want %s", loc, c.Placement, err, want)
+		}
+	}
+	t.Setenv("GATOR_RUNNER_PLACEMENT", "local")
+	t.Setenv("GATOR_RUNNER_LOCATION", "vps")
+	if c, _ := Load(); c.Placement != "local" {
+		t.Errorf("an explicit placement lost to the location: %q", c.Placement)
+	}
+	t.Setenv("GATOR_RUNNER_PLACEMENT", "moon")
+	if _, err := Load(); err == nil {
+		t.Error("an unknown placement was accepted")
+	}
+}
+
+// A slug in the project list used to mean "any project" by the time it reached the server.
+func TestProjectsMustBeIDs(t *testing.T) {
+	t.Setenv("GATOR_RUNNER_SERVER_URL", "https://gator.example")
+	t.Setenv("GATOR_RUNNER_TOKEN", "t")
+	t.Setenv("GATOR_RUNNER_PROJECTS", "0b5b5e6a-5a7e-4c38-9a53-1f0f1a2b3c4d,my-project")
+	if _, err := Load(); err == nil {
+		t.Fatal("a project slug was accepted")
+	}
+	t.Setenv("GATOR_RUNNER_PROJECTS", "0b5b5e6a-5a7e-4c38-9a53-1f0f1a2b3c4d")
+	if c, err := Load(); err != nil || len(c.Projects) != 1 {
+		t.Fatalf("%v %v", c.Projects, err)
+	}
+}
