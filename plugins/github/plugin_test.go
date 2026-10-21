@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/onegator/gator/plugin"
 	"github.com/onegator/gator/plugin/plugintest"
 )
 
@@ -56,10 +57,14 @@ type fakeGitHub struct {
 	bases    map[int]string
 	labels   map[int][]string
 	runs     map[string][]CheckRun
+	issues   []Issue
+	hooks    []Hook
+	secrets  map[int64]string // webhook secrets by hook id
 }
 
 func newFakeGitHub(t *testing.T, token string) *fakeGitHub {
-	f := &fakeGitHub{token: token, bodies: map[int]string{}, bases: map[int]string{}, labels: map[int][]string{}, runs: map[string][]CheckRun{}}
+	f := &fakeGitHub{token: token, bodies: map[int]string{}, bases: map[int]string{}, labels: map[int][]string{}, runs: map[string][]CheckRun{},
+		secrets: map[int64]string{}}
 	mux := http.NewServeMux()
 	reply := func(w http.ResponseWriter, status int, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -136,6 +141,85 @@ func newFakeGitHub(t *testing.T, token string) *fakeGitHub {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		reply(w, 200, map[string]any{"total_count": len(f.runs[r.PathValue("sha")]), "check_runs": f.runs[r.PathValue("sha")]})
+	})
+	mux.HandleFunc("GET /repos/acme/app/issues", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		page, _ := strconv.Atoi(q.Get("page"))
+		per, _ := strconv.Atoi(q.Get("per_page"))
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		out := []Issue{}
+		for _, is := range f.issues {
+			if is.State == q.Get("state") && (q.Get("labels") == "" || is.has(q.Get("labels"))) {
+				out = append(out, is)
+			}
+		}
+		from, to := min((page-1)*per, len(out)), min(page*per, len(out))
+		reply(w, 200, out[from:to])
+	})
+	mux.HandleFunc("GET /repos/acme/app/issues/{n}", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.PathValue("n"))
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, is := range f.issues {
+			if is.Number == n {
+				reply(w, 200, is)
+				return
+			}
+		}
+		reply(w, 404, map[string]string{"message": "Not Found"})
+	})
+	mux.HandleFunc("PATCH /repos/acme/app/issues/{n}", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.PathValue("n"))
+		var in struct {
+			State       string `json:"state"`
+			StateReason string `json:"state_reason"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for i := range f.issues {
+			if f.issues[i].Number == n {
+				f.issues[i].State, f.issues[i].StateReason = in.State, in.StateReason
+				reply(w, 200, f.issues[i])
+				return
+			}
+		}
+		reply(w, 404, map[string]string{"message": "Not Found"})
+	})
+	mux.HandleFunc("GET /repos/acme/app/hooks", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		reply(w, 200, append([]Hook{}, f.hooks...))
+	})
+	saveHook := func(r *http.Request, id int64) Hook {
+		var in struct {
+			Events []string `json:"events"`
+			Config struct {
+				URL         string `json:"url"`
+				Secret      string `json:"secret"`
+				ContentType string `json:"content_type"`
+			} `json:"config"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		h := Hook{ID: id, Active: true, Events: in.Events}
+		h.Config.URL = in.Config.URL
+		f.secrets[id] = in.Config.Secret + "/" + in.Config.ContentType
+		return h
+	}
+	mux.HandleFunc("POST /repos/acme/app/hooks", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		h := saveHook(r, int64(len(f.hooks)+1))
+		f.hooks = append(f.hooks, h)
+		reply(w, 201, h)
+	})
+	mux.HandleFunc("PATCH /repos/acme/app/hooks/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.hooks[id-1] = saveHook(r, id)
+		reply(w, 200, f.hooks[id-1])
 	})
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -298,5 +382,157 @@ func TestHelpers(t *testing.T) {
 	}
 	if _, ok := refNumber("acme/other#12", "acme/app"); ok {
 		t.Fatal("ref of another repo")
+	}
+}
+
+func (f *fakeGitHub) count(prefix string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, r := range f.requests {
+		if strings.HasPrefix(r, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+func issue(n int, title string, labels ...string) Issue {
+	is := Issue{Number: n, Title: title, State: "open", HTMLURL: fmt.Sprintf("https://github.com/acme/app/issues/%d", n)}
+	for _, l := range labels {
+		is.Labels = append(is.Labels, struct {
+			Name string `json:"name"`
+		}{l})
+	}
+	return is
+}
+
+// Switching the plugin on brings the open issues in, once: a second import finds them all on
+// the board already. Pull requests, which the issues API also lists, are not issues.
+func TestImportBringsOpenIssuesInOnce(t *testing.T) {
+	gh := newFakeGitHub(t, "tok")
+	for n := 1; n <= 120; n++ {
+		gh.issues = append(gh.issues, issue(n, fmt.Sprintf("Issue %d", n)))
+	}
+	gh.issues[0].Labels = append(gh.issues[0].Labels, struct {
+		Name string `json:"name"`
+	}{"bug"})
+	gh.issues[1].PullRequest = &struct{}{}
+	gh.issues[2].State = "closed"
+	s := scenario(t, `{
+		"config": {"repo": "acme/app", "api_url": %q},
+		"secrets": {"token": "tok"},
+		"steps": [{"hook": "import"}, {"hook": "import"}]
+	}`, gh.URL)
+	rep := run(t, s)
+	var first, second plugin.ImportResult
+	_ = json.Unmarshal(rep.Steps[0].Result, &first)
+	_ = json.Unmarshal(rep.Steps[1].Result, &second)
+	if first.Created != 118 || first.Existing != 0 || second.Created != 0 || second.Existing != 118 || len(rep.Tasks) != 118 {
+		t.Fatalf("import: %+v then %+v, %d tasks", first, second, len(rep.Tasks))
+	}
+	bugs := 0
+	for _, task := range rep.Tasks {
+		if task.Kind == "bug" {
+			bugs++
+			if task.ExternalRefs[refIssue] != "acme/app#1" || !strings.Contains(task.Description, "issues/1") {
+				t.Fatalf("bug task: %+v", task)
+			}
+		}
+	}
+	if bugs != 1 {
+		t.Fatalf("%d bug tasks", bugs)
+	}
+}
+
+func TestImportFollowsTheTriggerLabel(t *testing.T) {
+	gh := newFakeGitHub(t, "tok")
+	gh.issues = []Issue{issue(1, "Wanted", "gator"), issue(2, "Not this one")}
+	rep := run(t, scenario(t, `{
+		"config": {"repo": "acme/app", "api_url": %q, "trigger_label": "gator"},
+		"secrets": {"token": "tok"},
+		"steps": [{"hook": "import"}]
+	}`, gh.URL))
+	if len(rep.Tasks) != 1 || rep.Tasks[0].Title != "Wanted" {
+		t.Fatalf("tasks: %+v", rep.Tasks)
+	}
+	// Without a token there is nothing to read, and the person is told what to do.
+	rep, err := plugintest.Run(context.Background(), []string{pluginBinary(t)}, scenario(t, `{
+		"config": {"repo": "acme/app"}, "steps": [{"hook": "import", "expect_error": true}]}`), os.Stderr, 10*time.Second)
+	if err != nil || rep.Failed() || !strings.Contains(rep.Steps[0].Error, "connect GitHub") {
+		t.Fatalf("no token: %v %+v", err, rep.Steps)
+	}
+}
+
+// A finished task closes its issue; an issue already closed, which is what a task closed from
+// GitHub's side finds, is left alone.
+func TestATaskClosedClosesItsIssue(t *testing.T) {
+	gh := newFakeGitHub(t, "tok")
+	gh.issues = []Issue{issue(7, "Search")}
+	run(t, scenario(t, `{
+		"config": {"repo": "acme/app", "api_url": %q},
+		"secrets": {"token": "tok"},
+		"tasks": [{"id": "t1", "kind": "feature", "title": "Search", "external_refs": {"github_issue": "acme/app#7"}},
+		          {"id": "t2", "kind": "feature", "title": "Elsewhere", "external_refs": {"github_issue": "other/repo#7"}}],
+		"steps": [{"hook": "taskClosed", "task": "t1"}, {"hook": "taskClosed", "task": "t1"}, {"hook": "taskClosed", "task": "t2"}]
+	}`, gh.URL))
+	if gh.issues[0].State != "closed" || gh.issues[0].StateReason != "completed" || gh.count("PATCH /repos/acme/app/issues/7") != 1 {
+		t.Fatalf("issue: %+v, %d closes", gh.issues[0], gh.count("PATCH /repos/acme/app/issues/7"))
+	}
+}
+
+// Edited, closed and reopened on GitHub means the same on the board, except that a task with
+// Gator's own pull request finishes by Gator's process, not by its issue closing.
+func TestIssueSyncScenario(t *testing.T) {
+	s, err := plugintest.LoadScenario("scenarios/issue-sync.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := run(t, s)
+	byRef := map[string]plugintest.Task{}
+	for _, task := range rep.Tasks {
+		byRef[task.ExternalRefs[refIssue]] = task
+	}
+	is := byRef["acme/app#12"]
+	if is.Title != "Login fails after a password reset" || !strings.Contains(is.Description, "Seen on Safari") || is.Closed {
+		t.Fatalf("issue task: %+v", is)
+	}
+	if byRef["acme/app#7"].Closed {
+		t.Fatal("a task with Gator's pull request closed with its issue")
+	}
+	if !slices.ContainsFunc(rep.Steps[2].CoreCalls, func(c plugintest.Call) bool {
+		return c.Method == "task.close" && strings.Contains(string(c.Params), "not planned")
+	}) {
+		t.Fatalf("close reason: %+v", rep.Steps[2].CoreCalls)
+	}
+}
+
+// With the server's webhook address the plugin registers the repository webhook itself, and on
+// the next start it rewrites the one it made instead of adding another.
+func TestThePluginRegistersItsWebhook(t *testing.T) {
+	gh := newFakeGitHub(t, "tok")
+	start := func(want string) {
+		p, err := plugintest.Start(context.Background(), []string{pluginBinary(t)}, plugintest.NewCore(""), plugintest.Options{
+			ProjectSlug: "demo", Config: map[string]any{"repo": "acme/app", "api_url": gh.URL},
+			Secrets: map[string]string{"token": "tok", "webhook_secret": "whsec"}, WebhookURL: "https://gator.example/hooks/demo/github"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		deadline := time.Now().Add(5 * time.Second)
+		for gh.count(want) == 0 && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	start("POST /repos/acme/app/hooks")
+	start("PATCH /repos/acme/app/hooks/1")
+	if gh.count("POST /repos/acme/app/hooks") != 1 || gh.count("PATCH /repos/acme/app/hooks/1") != 1 {
+		t.Fatalf("requests: %v", gh.requests)
+	}
+	gh.mu.Lock()
+	defer gh.mu.Unlock()
+	if len(gh.hooks) != 1 || gh.hooks[0].Config.URL != "https://gator.example/hooks/demo/github" || gh.secrets[1] != "whsec/json" ||
+		!slices.Equal(gh.hooks[0].Events, webhookEvents) {
+		t.Fatalf("hooks: %+v %v", gh.hooks, gh.secrets)
 	}
 }
