@@ -23,8 +23,10 @@ const configSchema = `{"type":"object","properties":{
 	},"required":["webhook_token"]}`
 
 var manifest = plugin.Manifest{
-	Name:         "honeybadger",
-	Version:      "0.1.0",
+	Name:    "honeybadger",
+	Version: "0.1.0",
+	Description: "Honeybadger faults become incidents with a task to fix them; " +
+		"finishing the task resolves it there too.",
 	Capabilities: []string{"monitoring"},
 	ConfigSchema: json.RawMessage(configSchema),
 }
