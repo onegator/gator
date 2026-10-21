@@ -37,18 +37,34 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64
 }
 
 const listUnpublishedEvents = `-- name: ListUnpublishedEvents :many
-SELECT id, type, aggregate, aggregate_id, payload, created_at, published_at FROM events WHERE published_at IS NULL ORDER BY id LIMIT $1
+SELECT e.id, e.type, e.aggregate, e.aggregate_id, e.payload, e.created_at, e.published_at, COALESCE(t.project_id, CASE WHEN e.aggregate = 'project' THEN e.aggregate_id END)::uuid AS project_id
+FROM events e
+LEFT JOIN tasks t ON e.aggregate = 'task' AND t.id = e.aggregate_id
+WHERE e.published_at IS NULL ORDER BY e.id LIMIT $1
 `
 
-func (q *Queries) ListUnpublishedEvents(ctx context.Context, limit int32) ([]Event, error) {
+type ListUnpublishedEventsRow struct {
+	ID          int64              `json:"id"`
+	Type        string             `json:"type"`
+	Aggregate   string             `json:"aggregate"`
+	AggregateID pgtype.UUID        `json:"aggregate_id"`
+	Payload     []byte             `json:"payload"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+}
+
+// Each event carries the project it happened in, so a board can listen to its project alone
+// rather than to the whole workspace.
+func (q *Queries) ListUnpublishedEvents(ctx context.Context, limit int32) ([]ListUnpublishedEventsRow, error) {
 	rows, err := q.db.Query(ctx, listUnpublishedEvents, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Event
+	var items []ListUnpublishedEventsRow
 	for rows.Next() {
-		var i Event
+		var i ListUnpublishedEventsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Type,
@@ -57,6 +73,7 @@ func (q *Queries) ListUnpublishedEvents(ctx context.Context, limit int32) ([]Eve
 			&i.Payload,
 			&i.CreatedAt,
 			&i.PublishedAt,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}

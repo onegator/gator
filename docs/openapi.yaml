@@ -563,6 +563,51 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/TaskDetail" } } } }
         "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateTask
+      description: >-
+        Changes what a person said about an open task. Title, description and urgency may change
+        while it is open; kind only before any work happened on it, and the task then starts over
+        in the first phase of the new kind's process. Every change goes into the task's
+        transitions as kind "edit". Emits task.updated.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TaskPatch" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/close:
+    post:
+      operationId: closeTask
+      description: >-
+        Closes a task wherever it stands, with a reason; its history stays. Jobs still queued or
+        running on it are stopped. Closing a closed task changes nothing. Emits task.closed.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TaskStateChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/reopen:
+    post:
+      operationId: reopenTask
+      description: >-
+        Brings a closed task back in the phase it was closed in, with a reason. The phase is
+        entered afresh, so its earlier approval no longer counts. Reopening an open task changes
+        nothing. Emits task.reopened.
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/TaskStateChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/approve:
     post:
       operationId: approveTask
@@ -1587,6 +1632,19 @@ components:
         title: { type: string }
         description: { type: string, description: "what the person wants, in their words; jobs get it in their prompt" }
         urgency: { type: integer, minimum: 1, maximum: 4 }
+    TaskPatch:
+      type: object
+      description: fields left out stay as they are
+      properties:
+        title: { type: string }
+        description: { type: string }
+        kind: { type: string, enum: [feature, bug, incident, chore], description: "only before work on the task has started" }
+        urgency: { type: integer, minimum: 1, maximum: 4 }
+    TaskStateChange:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string }
     Artifact:
       type: object
       required: [id, phase, type, version, approved, createdAt]

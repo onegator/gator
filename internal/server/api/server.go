@@ -498,7 +498,8 @@ type wsSubscribe struct {
 }
 
 // websocket streams hub events. The client sends {"subscribe":["inbox","task:<id>"]} first
-// and may send it again to change topics.
+// and may send it again to change topics. "project:<id>" carries everything that happens in
+// one project, so it is offered only to those who may read that project.
 func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 	if err != nil {
@@ -514,6 +515,10 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	var sub wsSubscribe
 	if err := json.Unmarshal(first, &sub); err != nil || len(sub.Subscribe) == 0 {
 		_ = c.Close(websocket.StatusPolicyViolation, "first message must be {\"subscribe\":[...]}")
+		return
+	}
+	if topic, ok := s.forbiddenTopic(r, sub.Subscribe); !ok {
+		_ = c.Close(websocket.StatusPolicyViolation, "not allowed to follow "+topic)
 		return
 	}
 	ch, stop := s.Hub.Subscribe(sub.Subscribe...)
@@ -539,6 +544,25 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// forbiddenTopic answers the first project topic the caller may not read, if any.
+func (s *Server) forbiddenTopic(r *http.Request, topics []string) (string, bool) {
+	p, _ := auth.FromContext(r.Context())
+	for _, t := range topics {
+		id, ok := strings.CutPrefix(t, "project:")
+		if !ok {
+			continue
+		}
+		var project pgtype.UUID
+		if err := project.Scan(id); err != nil {
+			return t, false
+		}
+		if err := s.Authz.Require(r.Context(), p, project, auth.RoleViewer); err != nil {
+			return t, false
+		}
+	}
+	return "", true
+}
+
 // --- helpers ---
 
 func (s *Server) respondTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
@@ -561,9 +585,9 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, process.ErrGateNotSatisfied), errors.Is(err, process.ErrTaskBlocked),
 		errors.Is(err, process.ErrTaskClosed), errors.Is(err, process.ErrNotBackward),
 		errors.Is(err, process.ErrRollbackCeiling), errors.Is(err, process.ErrUnknownPhase),
-		errors.Is(err, process.ErrTerminalPhase):
+		errors.Is(err, process.ErrTerminalPhase), errors.Is(err, process.ErrKindLocked):
 		writeError(w, http.StatusConflict, err.Error(), "conflict")
-	case errors.Is(err, process.ErrInvalidUsage):
+	case errors.Is(err, process.ErrInvalidUsage), errors.Is(err, process.ErrInvalidEdit):
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 	default:
 		s.Log.Error("request failed", "err", err)

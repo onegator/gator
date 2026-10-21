@@ -33,3 +33,27 @@ func TestHubRoutesByTopic(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestHubRoutesAProjectsEventsToItsTopic(t *testing.T) {
+	h := NewHub()
+	mine, stopMine := h.Subscribe("project:p1")
+	defer stopMine()
+	theirs, stopTheirs := h.Subscribe("project:p2")
+	defer stopTheirs()
+
+	h.Publish(Event{ID: 7, Type: "task.closed", Aggregate: "task", AggregateID: "abc", ProjectID: "p1", Payload: json.RawMessage(`{}`)})
+
+	select {
+	case e := <-mine:
+		if e.ID != 7 {
+			t.Fatalf("got %d", e.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the project's topic did not receive its task's event")
+	}
+	select {
+	case e := <-theirs:
+		t.Fatalf("another project's topic received %v", e)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

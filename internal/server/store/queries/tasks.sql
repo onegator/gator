@@ -158,3 +158,26 @@ LIMIT sqlc.arg(max_rows);
 -- Alerts are deduplicated by what they say: the same plugin switched off twice is one thing to
 -- look at, not two.
 SELECT * FROM tasks WHERE project_id = $1 AND kind = $2 AND title = $3 AND closed_at IS NULL;
+
+-- name: UpdateTaskFields :one
+-- What a person may say about a task after creating it. Kind and phase move together and only
+-- before any work happened; see process.Edit.
+UPDATE tasks SET title = $2, description = $3, urgency = $4, kind = $5, phase = $6,
+    phase_entered_at = CASE WHEN phase = $6 THEN phase_entered_at ELSE now() END, updated_at = now()
+WHERE id = $1 RETURNING *;
+
+-- name: TaskWorkedOn :one
+-- Whether anything beyond creating (and admitting, and editing) the task has happened: a job,
+-- an artifact, a move. The answer decides whether its kind may still change.
+SELECT (EXISTS (SELECT 1 FROM jobs j WHERE j.task_id = $1)
+    OR EXISTS (SELECT 1 FROM artifacts a WHERE a.task_id = $1)
+    OR EXISTS (SELECT 1 FROM phase_transitions p WHERE p.task_id = $1 AND p.kind NOT IN ('create', 'edit')))::boolean AS worked_on;
+
+-- name: ReopenTask :one
+-- Reopened work enters its phase afresh: the inbox's clock restarts and the autopilot sees an
+-- entry that has no job yet.
+UPDATE tasks SET closed_at = NULL, phase_entered_at = now(), updated_at = now()
+WHERE id = $1 RETURNING *;
+
+-- name: ListActiveJobsForTask :many
+SELECT * FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at;

@@ -41,6 +41,8 @@ and are embedded too; a project replaces one with `process_config.roles.<role>`.
 (`internal/server/api/gen`) and the sqlc queries. Live updates: WebSocket at `/api/v1/ws`,
 first message `{"subscribe":["inbox","task:<id>"]}`; every domain event is written to the
 `events` outbox in the same transaction as the change and relayed to subscribers.
+`"project:<id>"` follows everything that happens in one project (a board uses it) and is
+refused to anyone who may not read that project.
 
 `/admin` is a minimal HTML panel for M1 and debugging; it goes away once Gator.app covers it.
 

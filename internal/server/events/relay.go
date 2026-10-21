@@ -17,16 +17,18 @@ import (
 
 // Event is one published domain event.
 type Event struct {
-	ID          int64           `json:"id"`
-	Type        string          `json:"type"`
-	Aggregate   string          `json:"aggregate"`
-	AggregateID string          `json:"aggregateId,omitempty"`
-	Payload     json.RawMessage `json:"payload"`
-	CreatedAt   time.Time       `json:"createdAt"`
+	ID          int64  `json:"id"`
+	Type        string `json:"type"`
+	Aggregate   string `json:"aggregate"`
+	AggregateID string `json:"aggregateId,omitempty"`
+	// ProjectID is the project the event happened in, when it happened in one.
+	ProjectID string          `json:"projectId,omitempty"`
+	Payload   json.RawMessage `json:"payload"`
+	CreatedAt time.Time       `json:"createdAt"`
 }
 
 // Hub fans events out to topic subscribers. Topics: "inbox", "task:<id>", "job:<id>",
-// "runners", "runner:<id>", "*".
+// "project:<id>", "runners", "runner:<id>", "*".
 type Hub struct {
 	mu   sync.RWMutex
 	subs map[string]map[chan Event]struct{}
@@ -61,6 +63,9 @@ func (h *Hub) Publish(e Event) {
 	topics := []string{"*"}
 	if e.Aggregate == "task" {
 		topics = append(topics, "inbox", "task:"+e.AggregateID)
+	}
+	if e.ProjectID != "" {
+		topics = append(topics, "project:"+e.ProjectID)
 	}
 	if e.Aggregate == "job" {
 		topics = append(topics, "job:"+e.AggregateID)
@@ -128,6 +133,10 @@ func (r *Relay) Drain(ctx context.Context) error {
 			if row.AggregateID.Valid {
 				v, _ := row.AggregateID.Value()
 				e.AggregateID, _ = v.(string)
+			}
+			if row.ProjectID.Valid {
+				v, _ := row.ProjectID.Value()
+				e.ProjectID, _ = v.(string)
 			}
 			r.Hub.Publish(e)
 			if err := q.MarkEventPublished(ctx, row.ID); err != nil {
