@@ -167,7 +167,7 @@ func taskWords(d process.Decision) (string, []gen.DecisionAction) {
 	if phase == "" {
 		return "Waits for your approval.", []gen.DecisionAction{gen.DecisionActionApprove, open}
 	}
-	return strings.ToUpper(phase[:1]) + phase[1:] + " is done and waits for your approval.",
+	return strings.ToUpper(phase[:1]) + phase[1:] + " waits for your approval.",
 		[]gen.DecisionAction{gen.DecisionActionApprove, open}
 }
 
