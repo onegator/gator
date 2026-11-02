@@ -629,9 +629,11 @@ func (h *Host) disable(i *instance, reason string) {
 }
 
 // alertKind is the task a person sees for something only a person can fix.
-const alertKind = "alert"
+const alertKind = process.AlertKind
 
-func disabledAlertTitle(plugin string) string {
+// DisabledAlertTitle is the title of the alert raised when a plugin is switched off. The inbox
+// reads it to tell that alert apart from others.
+func DisabledAlertTitle(plugin string) string {
 	return "The " + plugin + " plugin was switched off"
 }
 
@@ -639,7 +641,7 @@ func disabledAlertTitle(plugin string) string {
 // the reason sat on the plugin's settings page, where nobody looks until they wonder why
 // nothing has happened for a week. One alert per plugin, however often it trips.
 func (h *Host) raiseDisabledAlert(ctx context.Context, q *db.Queries, projectID pgtype.UUID, plugin, reason string) {
-	title := disabledAlertTitle(plugin)
+	title := DisabledAlertTitle(plugin)
 	open, err := q.OpenTasksByTitle(ctx, db.OpenTasksByTitleParams{ProjectID: projectID, Kind: alertKind, Title: title})
 	if err != nil || len(open) > 0 {
 		return
@@ -658,7 +660,7 @@ func (h *Host) raiseDisabledAlert(ctx context.Context, q *db.Queries, projectID 
 // been done, and leaving it open would teach people that alerts do not mean anything.
 func (h *Host) clearDisabledAlert(ctx context.Context, projectID pgtype.UUID, plugin string) {
 	q := db.New(h.pool)
-	open, err := q.OpenTasksByTitle(ctx, db.OpenTasksByTitleParams{ProjectID: projectID, Kind: alertKind, Title: disabledAlertTitle(plugin)})
+	open, err := q.OpenTasksByTitle(ctx, db.OpenTasksByTitleParams{ProjectID: projectID, Kind: alertKind, Title: DisabledAlertTitle(plugin)})
 	if err != nil {
 		return
 	}

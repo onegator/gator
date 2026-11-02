@@ -667,6 +667,15 @@ paths:
           required: false
           description: only tasks handed to the caller
           schema: { type: boolean }
+        - name: all
+          in: query
+          required: false
+          description: >-
+            Every decision, not only the tasks: components and product entries an agent proposed,
+            runners waiting for a backend login, plugins switched off after failing, and stalled
+            jobs. Without it the answer holds only task decisions with the original seven
+            reasons, which is what clients built before these existed can read.
+          schema: { type: boolean }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Decision" } } } } }
   /tasks/{taskId}:
@@ -1902,12 +1911,41 @@ components:
         detail: { type: string }
     Decision:
       type: object
-      required: [task, waitingSince, reason]
+      description: >-
+        One thing waiting for a person. Most are about a task; with all=true some are about a
+        component, a product entry, a runner or a plugin, and those carry no task.
+      required: [id, reason, waitingSince, urgency, summary, subject, actions]
       properties:
+        id: { type: string, description: "stable while the decision waits: task:<id>, component:<id>, product:<id>, runner:<id>:<backend>, plugin:<projectId>:<name>" }
         task: { $ref: "#/components/schemas/Task" }
         waitingSince: { type: string, format: date-time }
-        reason: { type: string, enum: [approval, blocked, requirements_changed, idea, job_failed, no_runner, external] }
+        reason:
+          type: string
+          enum: [approval, blocked, requirements_changed, idea, job_failed, no_runner, external,
+                 job_stalled, alert, component_proposed, product_proposed, runner_login, plugin_disabled]
+          description: the last six only with all=true
+        urgency: { type: integer, minimum: 1, maximum: 4, description: "1 is the most urgent, as on a task. A task's decision carries the task's urgency, raised to 2 when the task cannot move by itself" }
+        summary: { type: string, description: "what happened, in words a person reads" }
+        subject: { $ref: "#/components/schemas/DecisionSubject" }
+        jobId: { type: string, format: uuid, description: the job a job_failed or job_stalled decision is about }
+        actions:
+          type: array
+          description: what the person can do from the decision itself, most likely first
+          items: { $ref: "#/components/schemas/DecisionAction" }
         rollbacks: { type: integer, description: times this task was sent back into its current phase }
+    DecisionSubject:
+      type: object
+      required: [kind, id, name]
+      properties:
+        kind: { type: string, enum: [task, component, product_entry, runner, plugin] }
+        id: { type: string, description: "the subject's id; for a component, its key; for a plugin, its name" }
+        projectId: { type: string, format: uuid }
+        name: { type: string, description: "the title, name or key a person knows it by" }
+        backend: { type: string, description: "for a runner_login decision, the backend that needs a login" }
+    DecisionAction:
+      type: string
+      enum: [approve, admit, retry, stop_job, close, open,
+             accept_component, reject_component, approve_entry, archive_entry, login_runner, enable_plugin]
     Reason:
       type: object
       properties: { reason: { type: string } }

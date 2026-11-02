@@ -112,7 +112,7 @@ ORDER BY id DESC LIMIT 1;
 
 -- name: ListCurrentPhaseJobs :many
 -- The newest job of each open task's current phase entry, for the inbox.
-SELECT DISTINCT ON (j.task_id) j.task_id, j.status
+SELECT DISTINCT ON (j.task_id) j.task_id, j.id AS job_id, j.status
 FROM jobs j
 JOIN tasks t ON t.id = j.task_id
 WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at

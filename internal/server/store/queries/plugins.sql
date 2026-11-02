@@ -118,3 +118,12 @@ DELETE FROM plugin_connect_states WHERE expires_at < now();
 -- name: ClearPluginTokenExpiry :exec
 -- A token a person pasted over a connected one is theirs to replace; the server stops refreshing.
 UPDATE project_plugins SET token_expires_at = NULL WHERE id = $1;
+
+-- name: ListTrippedProjectPlugins :many
+-- Plugins Gator switched off for a project after they kept failing. A person switching one off
+-- clears the reason (UpsertProjectPlugin), so only the ones that tripped are listed.
+SELECT pp.project_id, pp.disabled_reason, pp.updated_at, p.name AS plugin_name
+FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id JOIN projects pr ON pr.id = pp.project_id
+WHERE NOT pp.enabled AND pp.disabled_reason IS NOT NULL AND pr.archived_at IS NULL
+  AND (sqlc.narg(project_id)::uuid IS NULL OR pp.project_id = sqlc.narg(project_id)::uuid)
+ORDER BY pp.updated_at;

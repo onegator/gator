@@ -89,3 +89,10 @@ INSERT INTO components (project_id, key, name, kind, repo, path, notes, status, 
 VALUES ($1, $2, $3, $4, $5, $6, '', 'proposed', sqlc.arg(proposed_reason))
 ON CONFLICT (project_id, key) DO NOTHING
 RETURNING *;
+
+-- name: ListProposedComponents :many
+-- What the inbox shows for the catalogue: proposals in live projects, optionally one project's.
+SELECT c.* FROM components c JOIN projects p ON p.id = c.project_id
+WHERE c.status = 'proposed' AND p.archived_at IS NULL
+  AND (sqlc.narg(project_id)::uuid IS NULL OR c.project_id = sqlc.narg(project_id)::uuid)
+ORDER BY c.created_at;

@@ -593,7 +593,7 @@ func (q *Queries) ListBudgetBlockedTasks(ctx context.Context) ([]ListBudgetBlock
 }
 
 const listCurrentPhaseJobs = `-- name: ListCurrentPhaseJobs :many
-SELECT DISTINCT ON (j.task_id) j.task_id, j.status
+SELECT DISTINCT ON (j.task_id) j.task_id, j.id AS job_id, j.status
 FROM jobs j
 JOIN tasks t ON t.id = j.task_id
 WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
@@ -602,6 +602,7 @@ ORDER BY j.task_id, j.created_at DESC
 
 type ListCurrentPhaseJobsRow struct {
 	TaskID pgtype.UUID `json:"task_id"`
+	JobID  pgtype.UUID `json:"job_id"`
 	Status string      `json:"status"`
 }
 
@@ -615,7 +616,7 @@ func (q *Queries) ListCurrentPhaseJobs(ctx context.Context) ([]ListCurrentPhaseJ
 	var items []ListCurrentPhaseJobsRow
 	for rows.Next() {
 		var i ListCurrentPhaseJobsRow
-		if err := rows.Scan(&i.TaskID, &i.Status); err != nil {
+		if err := rows.Scan(&i.TaskID, &i.JobID, &i.Status); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

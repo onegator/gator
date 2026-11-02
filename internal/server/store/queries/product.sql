@@ -67,3 +67,10 @@ WHERE id = ANY(sqlc.arg(ids)::uuid[]) AND archived_at IS NULL;
 -- collect a queue of identical tasks.
 SELECT count(*)::bigint FROM tasks
 WHERE project_id = $1 AND kind = 'curation' AND closed_at IS NULL AND title = $2;
+
+-- name: ListProposedProductEntries :many
+-- What the inbox shows for the product context: proposals waiting for a person, in live projects.
+SELECT pc.* FROM product_context pc JOIN projects p ON p.id = pc.project_id
+WHERE pc.status = 'proposed' AND pc.archived_at IS NULL AND p.archived_at IS NULL
+  AND (sqlc.narg(project_id)::uuid IS NULL OR pc.project_id = sqlc.narg(project_id)::uuid)
+ORDER BY pc.created_at;

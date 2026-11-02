@@ -57,12 +57,23 @@ func (h *Hub) Subscribe(topics ...string) (<-chan Event, func()) {
 	}
 }
 
+// inboxEvents are the events outside a task that add a decision to the inbox or take one
+// away: a stalled job, an agent's proposal, a plugin switched off, a runner's login.
+var inboxEvents = map[string]bool{
+	"job.stalled": true, "job.resumed": true, "job.finished": true,
+	"component.proposed": true, "product.proposed": true,
+	"plugin.disabled": true, "plugin.connected": true,
+	"runner.auth_changed": true,
+}
+
 // Publish delivers e to every subscriber of its topics. Slow subscribers drop events
 // rather than block the relay; clients resync from the API.
 func (h *Hub) Publish(e Event) {
 	topics := []string{"*"}
 	if e.Aggregate == "task" {
 		topics = append(topics, "inbox", "task:"+e.AggregateID)
+	} else if inboxEvents[e.Type] {
+		topics = append(topics, "inbox")
 	}
 	if e.ProjectID != "" {
 		topics = append(topics, "project:"+e.ProjectID)

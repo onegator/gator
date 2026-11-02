@@ -23,7 +23,16 @@ const (
 	ReasonNoRunner            DecisionReason = "no_runner"
 	// ReasonExternal is work raised from outside the workspace, waiting to be let in.
 	ReasonExternal DecisionReason = "external"
+	// ReasonJobStalled is an agent that went quiet: its job runs, but nothing has come out of
+	// it for a while. Only in the full inbox (InboxFilter.All).
+	ReasonJobStalled DecisionReason = "job_stalled"
+	// ReasonAlert is something only a person can fix, raised by Gator itself as an alert task.
+	// Only in the full inbox; the short one calls it an approval, as it always has.
+	ReasonAlert DecisionReason = "alert"
 )
+
+// AlertKind is the task kind of an alert.
+const AlertKind = "alert"
 
 // Decision is one inbox row: a task that needs a human now.
 type Decision struct {
@@ -32,13 +41,16 @@ type Decision struct {
 	Phase        Phase
 	Reason       DecisionReason
 	WaitingSince time.Time
-	Rollbacks    int // times this task was sent back into its current phase
+	Rollbacks    int         // times this task was sent back into its current phase
+	JobID        pgtype.UUID // the newest job of the current phase, if any
 }
 
 // InboxFilter narrows the inbox to one project, to the tasks handed to one person, or both.
 type InboxFilter struct {
 	ProjectID pgtype.UUID
 	OwnerID   pgtype.UUID // set: only tasks whose owner is this user
+	// All adds the reasons older clients cannot read: stalled jobs, and alerts by their name.
+	All bool
 }
 
 // Inbox lists open tasks whose current phase waits on a person: a human-gated phase without
@@ -66,8 +78,10 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 		return nil, err
 	}
 	jobStatus := map[[16]byte]string{}
+	jobID := map[[16]byte]pgtype.UUID{}
 	for _, j := range jobRows {
 		jobStatus[j.TaskID.Bytes] = j.Status
+		jobID[j.TaskID.Bytes] = j.JobID
 	}
 	orphanRows, err := q.ListUnassignableTaskIDs(ctx)
 	if err != nil {
@@ -106,7 +120,7 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 		if err != nil {
 			continue // phase deactivated by config change; surfaced elsewhere
 		}
-		reason, ok := decisionReason(r.Task, r.Gate, p, jobStatus[r.Task.ID.Bytes], orphaned[r.Task.ID.Bytes])
+		reason, ok := decisionReason(r.Task, r.Gate, p, jobStatus[r.Task.ID.Bytes], orphaned[r.Task.ID.Bytes], f.All)
 		if !ok {
 			continue
 		}
@@ -114,7 +128,8 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 			continue
 		}
 		out = append(out, Decision{Task: r.Task, Gate: r.Gate, Phase: p, Reason: reason,
-			WaitingSince: r.Task.PhaseEnteredAt.Time, Rollbacks: rollbacks[phaseKey{r.Task.ID.Bytes, r.Task.Phase}]})
+			WaitingSince: r.Task.PhaseEnteredAt.Time, Rollbacks: rollbacks[phaseKey{r.Task.ID.Bytes, r.Task.Phase}],
+			JobID: jobID[r.Task.ID.Bytes]})
 	}
 	return out, nil
 }
@@ -123,7 +138,7 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 // children's routine approvals, never their problems.
 func stuck(r DecisionReason) bool {
 	switch r {
-	case ReasonBlocked, ReasonJobFailed, ReasonNoRunner, ReasonRequirementsChanged, ReasonExternal:
+	case ReasonBlocked, ReasonJobFailed, ReasonNoRunner, ReasonRequirementsChanged, ReasonExternal, ReasonJobStalled, ReasonAlert:
 		return true
 	}
 	return false
@@ -134,7 +149,9 @@ func ownedBy(t db.Task, userID pgtype.UUID) bool {
 	return t.OwnerKind != nil && *t.OwnerKind == string(ActorUser) && t.OwnerID == userID
 }
 
-func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignable bool) (DecisionReason, bool) {
+// decisionReason says why a task waits on a person, if it does. all admits the reasons only
+// the full inbox carries.
+func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignable, all bool) (DecisionReason, bool) {
 	switch {
 	case t.BlockedReason != nil:
 		return ReasonBlocked, true
@@ -147,12 +164,18 @@ func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignabl
 		// The job is queued, so the case below would call this premature — but no runner can
 		// take it, and waiting for an agent that cannot come is how a task waits forever.
 		return ReasonNoRunner, true
+	case all && jobStatus == "stalled":
+		// The agent is still on it in name only. Whether to wait longer or stop it is a
+		// person's call, and nobody makes it if nobody is told.
+		return ReasonJobStalled, true
 	case jobStatus == "queued" || jobStatus == "leased" || jobStatus == "running" || jobStatus == "stalled":
 		return "", false // an agent is on it; asking a person now would be premature
 	case jobStatus == "failed" || jobStatus == "stopped":
 		return ReasonJobFailed, true
 	case p.Name == "idea":
 		return ReasonIdea, true
+	case all && t.Kind == AlertKind && !g.HumanApprovedAt.Valid:
+		return ReasonAlert, true
 	case (p.Gate == GateHuman || p.Gate == GateBoth) && !g.HumanApprovedAt.Valid:
 		return ReasonApproval, true
 	}

@@ -337,9 +337,8 @@ func (h *harness) pluginAlert(projectID, title string) *gen.Task {
 		for _, d := range h.decisions("?projectId=" + projectID) {
 			// Checked as well as filtered: another test tripping the same plugin raises an
 			// alert with the same title in its own project.
-			if d.Task.Title == title && d.Task.ProjectId.String() == projectID {
-				task := d.Task
-				found = &task
+			if d.Task != nil && d.Task.Title == title && d.Task.ProjectId.String() == projectID {
+				found = d.Task
 			}
 		}
 		if found == nil {
