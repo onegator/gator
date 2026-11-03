@@ -2,8 +2,10 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,75 +87,92 @@ func TestSilentRunnerNotifiesTheAdmins(t *testing.T) {
 	go notify.New(h.pool, h.svc, sender, h.hub, slog.Default(), 50*time.Millisecond).Run(ctx)
 	time.Sleep(150 * time.Millisecond) // let the cursor start at the newest event
 
-	// The development database is shared, so older runners are already silent. Sweep them
-	// away first and count what that produced; this test only judges what comes after.
-	if _, err := h.mgr.Sweep(context.Background(), time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	before := settled(sender)
+	// The database is shared with other tests and packages whose runners go quiet too, so
+	// only the messages about this test's runners count; each dial carries its own name.
 
-	// A plain disconnect is not news: the runner usually comes straight back.
-	raw, _ := h.dialRaw(h.runner, uniqueBackend(), proto.Version, 1)
+	// A plain disconnect is not news: the runner usually comes straight back. The runner list
+	// still says why and since when, so a person can tell a blip from an outage.
+	backend := uniqueBackend()
+	raw, reg := h.dialRaw(h.runner, backend, proto.Version, 1)
+	id := registeredID(t, reg)
 	raw.c.CloseNow()
+	dropped := h.waitRunner(id, func(r gen.RunnerInfo) bool { return r.Status == gen.Offline })
+	if dropped.OfflineReason == nil || *dropped.OfflineReason != "disconnected" || dropped.OfflineSince == nil {
+		t.Fatalf("a disconnected runner should say so: %+v", dropped)
+	}
 	if _, err := h.mgr.Sweep(context.Background(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if got := settled(sender); got != before {
-		t.Fatalf("a disconnect woke someone: %d new messages", got-before)
+	if n := settled(sender, "raw-"+backend); n != 0 {
+		t.Fatalf("a disconnect woke someone: %d messages", n)
 	}
 
 	// Silence past OfflineAfter is different: the session is still there, the runner is not.
-	live, _ := h.dialRaw(h.runner, uniqueBackend(), proto.Version, 1)
+	backend = uniqueBackend()
+	live, reg := h.dialRaw(h.runner, backend, proto.Version, 1)
 	defer live.c.CloseNow()
+	if registeredID(t, reg) != id {
+		t.Fatal("the same token reconnects as the same runner")
+	}
 	if _, err := h.mgr.Sweep(context.Background(), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	var got notify.Message
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && got.Link == "" {
-		for _, m := range sender.messages() {
-			if m.Link == "gator://runners" {
-				got = m
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if got.Link == "" {
+	if n := settled(sender, "raw-"+backend); n == 0 {
 		t.Fatal("a runner that stopped answering should reach the admins")
 	}
-	if got.Title == "" || got.Body == "" {
-		t.Fatalf("the message should say what happened: %+v", got)
-	}
-
-	// The runner list says since when and why, so a person can tell a blip from an outage.
-	var list []gen.RunnerInfo
-	if code := h.do("GET", "/runners", nil, &list); code != 200 {
-		t.Fatalf("runners: %d", code)
-	}
-	var silent, dropped *gen.RunnerInfo
-	for i := range list {
-		switch {
-		case list[i].Status != gen.Offline || list[i].OfflineReason == nil:
-		case *list[i].OfflineReason == "no heartbeat":
-			silent = &list[i]
-		case *list[i].OfflineReason == "disconnected":
-			dropped = &list[i]
+	for _, m := range runnerMessages(sender, "raw-"+backend) {
+		if m.Body == "" {
+			t.Fatalf("the message should say what happened: %+v", m)
 		}
 	}
-	if silent == nil || silent.OfflineSince == nil {
-		t.Fatalf("a silent runner should say since when: %+v", silent)
-	}
-	if dropped == nil || dropped.OfflineSince == nil {
-		t.Fatalf("a disconnected runner should say so too: %+v", dropped)
+
+	// Closing its session for the silence does not turn the reason into a disconnect.
+	silent := h.waitRunner(id, func(r gen.RunnerInfo) bool { return !r.Connected })
+	if silent.Status != gen.Offline || silent.OfflineReason == nil || *silent.OfflineReason != "no heartbeat" || silent.OfflineSince == nil {
+		t.Fatalf("a silent runner should say so, and since when: %+v", silent)
 	}
 }
 
-// settled waits for the notifier to go quiet and returns the count it settled on. Counting
-// after a fixed sleep raced the delivery of the previous sweep's messages.
-func settled(s *fakeSender) int {
+// registeredID is the runner id in the server's answer to a register.
+func registeredID(t *testing.T, reply proto.RawEnvelope) string {
+	t.Helper()
+	if reply.Type != proto.TypeRegistered {
+		t.Fatalf("register: %s", reply.Type)
+	}
+	var r proto.Registered
+	if err := json.Unmarshal(reply.Payload, &r); err != nil {
+		t.Fatal(err)
+	}
+	return r.RunnerID
+}
+
+// waitRunner polls the runner list until the runner with id satisfies ok.
+func (h *harness) waitRunner(id string, ok func(gen.RunnerInfo) bool) gen.RunnerInfo {
+	h.t.Helper()
+	var last gen.RunnerInfo
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		var list []gen.RunnerInfo
+		if code := h.do("GET", "/runners", nil, &list); code != 200 {
+			h.t.Fatalf("runners: %d", code)
+		}
+		for _, r := range list {
+			if r.Id.String() == id {
+				if last = r; ok(r) {
+					return r
+				}
+			}
+		}
+	}
+	h.t.Fatalf("runner %s never got there: %+v", id, last)
+	return last
+}
+
+// settled waits for the notifier to go quiet about the named runner and returns how many
+// messages it settled on. Counting after a fixed sleep raced their delivery.
+func settled(s *fakeSender, name string) int {
 	last, stableSince := -1, time.Now()
-	for time.Since(stableSince) < 600*time.Millisecond {
-		if n := runnerMessages(s); n != last {
+	for time.Since(stableSince) < time.Second {
+		if n := len(runnerMessages(s, name)); n != last {
 			last, stableSince = n, time.Now()
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -161,15 +180,15 @@ func settled(s *fakeSender) int {
 	return last
 }
 
-// runnerMessages counts the pushes about runners the fake sender has seen.
-func runnerMessages(s *fakeSender) int {
-	n := 0
+// runnerMessages are the pushes the fake sender has seen about the named runner.
+func runnerMessages(s *fakeSender, name string) []notify.Message {
+	var ms []notify.Message
 	for _, m := range s.messages() {
-		if m.Link == "gator://runners" {
-			n++
+		if m.Link == "gator://runners" && strings.Contains(m.Title, " "+name+" ") {
+			ms = append(ms, m)
 		}
 	}
-	return n
+	return ms
 }
 
 // The reason enum is part of the contract the app switches on.

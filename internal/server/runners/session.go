@@ -140,11 +140,13 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 		}
 	}
 	capsJSON, _ := json.Marshal(reg.Capabilities)
+	m.statusMu.Lock()
 	row, err := db.New(m.pool).UpsertRunner(ctx, db.UpsertRunnerParams{
 		TokenID: p.TokenID, Name: reg.Name, Location: reg.Location, Capabilities: capsJSON,
 		ProtocolVersion: int32(version), BinaryVersion: reg.BinaryVersion, Placement: reg.Placement,
 	})
 	if err != nil {
+		m.statusMu.Unlock()
 		m.log.Error("runner upsert", "err", err)
 		reject(ctx, c, "internal", "could not register runner")
 		return nil, false
@@ -159,6 +161,7 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 	}
 	m.sessions[row.ID.Bytes] = s
 	m.mu.Unlock()
+	m.statusMu.Unlock()
 
 	if err := s.send(proto.TypeRegistered, proto.Registered{RunnerID: uuidString(row.ID), Version: version}); err != nil {
 		m.dropSession(s)
@@ -177,11 +180,14 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 // disconnect marks the runner offline, unless a newer connection has already taken its place.
 func (m *Manager) disconnect(s *session) {
 	runnersOnline(context.Background(), -1)
+	bg := context.Background()
+	m.statusMu.Lock()
 	if !m.dropSession(s) {
+		m.statusMu.Unlock()
 		return
 	}
-	bg := context.Background()
 	_ = db.New(m.pool).SetRunnerStatus(bg, db.SetRunnerStatusParams{ID: s.runnerID, Status: "offline", Reason: "disconnected"})
+	m.statusMu.Unlock()
 	_ = m.tx(bg, func(q *db.Queries) error {
 		return emit(bg, q, "runner.offline", "runner", s.runnerID, map[string]any{"name": s.name, "reason": "disconnected"})
 	})
