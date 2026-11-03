@@ -678,6 +678,24 @@ paths:
           schema: { type: boolean }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Decision" } } } } }
+  /dashboard:
+    get:
+      operationId: getDashboard
+      description: >-
+        The numbers on the app's home screen that come from plugins: open issues each tracker
+        brought in (its tasks Gator still holds open) and open errors each monitoring plugin
+        reported (incidents not yet closed). One entry per plugin switched on in a project the
+        caller can read, zero included, so a client can tell "no errors" from "nothing watches".
+      parameters:
+        - name: projectId
+          in: query
+          required: false
+          description: only this project
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/DashboardCounts" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}:
     get:
       operationId: getTask
@@ -1909,6 +1927,25 @@ components:
         source: { type: string }
         status: { type: string, enum: [pass, fail, pending] }
         detail: { type: string }
+    DashboardCounts:
+      type: object
+      required: [issues, errors]
+      properties:
+        issues:
+          description: one per tracker plugin (capability tracker) switched on in a readable project
+          type: array
+          items: { $ref: "#/components/schemas/PluginCount" }
+        errors:
+          description: one per monitoring plugin (capability monitoring) switched on in a readable project
+          type: array
+          items: { $ref: "#/components/schemas/PluginCount" }
+    PluginCount:
+      type: object
+      required: [projectId, plugin, open]
+      properties:
+        projectId: { type: string, format: uuid }
+        plugin: { type: string, description: "the plugin's name, e.g. github or honeybadger" }
+        open: { type: integer, minimum: 0 }
     Decision:
       type: object
       description: >-
