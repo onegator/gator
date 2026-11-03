@@ -29,6 +29,9 @@ const (
 	// ReasonAlert is something only a person can fix, raised by Gator itself as an alert task.
 	// Only in the full inbox; the short one calls it an approval, as it always has.
 	ReasonAlert DecisionReason = "alert"
+	// ReasonAgentsNotAllowed is a task the autopilot would start an agent on, if a person had
+	// allowed agents to work on it without asking. Only in the full inbox.
+	ReasonAgentsNotAllowed DecisionReason = "agents_not_allowed"
 )
 
 // AlertKind is the task kind of an alert.
@@ -102,6 +105,7 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 		campaignChild[id.Bytes] = true
 	}
 	machines := map[string]*Machine{}
+	autopilot := map[[16]byte]bool{}
 	var out []Decision
 	for _, r := range rows {
 		if f.OwnerID.Valid && !ownedBy(r.Task, f.OwnerID) {
@@ -120,7 +124,20 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 		if err != nil {
 			continue // phase deactivated by config change; surfaced elsewhere
 		}
-		reason, ok := decisionReason(r.Task, r.Gate, p, jobStatus[r.Task.ID.Bytes], orphaned[r.Task.ID.Bytes], f.All)
+		// Whether an agent would start by itself, were it allowed to: only asked for tasks that
+		// wait on that answer, once per project.
+		waitsForAgents := false
+		if f.All && !r.Task.AgentsAllowedAt.Valid && p.Owner == OwnerRunner && p.Role != "" {
+			on, seen := autopilot[r.Task.ProjectID.Bytes]
+			if !seen {
+				if on, _, err = s.Autopilot(ctx, r.Task.ProjectID, "claude"); err != nil {
+					return nil, err
+				}
+				autopilot[r.Task.ProjectID.Bytes] = on
+			}
+			waitsForAgents = on
+		}
+		reason, ok := decisionReason(r.Task, r.Gate, p, jobStatus[r.Task.ID.Bytes], orphaned[r.Task.ID.Bytes], waitsForAgents, f.All)
 		if !ok {
 			continue
 		}
@@ -138,7 +155,8 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 // children's routine approvals, never their problems.
 func stuck(r DecisionReason) bool {
 	switch r {
-	case ReasonBlocked, ReasonJobFailed, ReasonNoRunner, ReasonRequirementsChanged, ReasonExternal, ReasonJobStalled, ReasonAlert:
+	case ReasonBlocked, ReasonJobFailed, ReasonNoRunner, ReasonRequirementsChanged, ReasonExternal, ReasonJobStalled, ReasonAlert,
+		ReasonAgentsNotAllowed:
 		return true
 	}
 	return false
@@ -150,8 +168,9 @@ func ownedBy(t db.Task, userID pgtype.UUID) bool {
 }
 
 // decisionReason says why a task waits on a person, if it does. all admits the reasons only
-// the full inbox carries.
-func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignable, all bool) (DecisionReason, bool) {
+// the full inbox carries. waitsForAgents is a task the autopilot would start an agent on, but
+// for nobody having allowed agents on it.
+func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignable, waitsForAgents, all bool) (DecisionReason, bool) {
 	switch {
 	case t.BlockedReason != nil:
 		return ReasonBlocked, true
@@ -172,6 +191,10 @@ func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignabl
 		return "", false // an agent is on it; asking a person now would be premature
 	case jobStatus == "failed" || jobStatus == "stopped":
 		return ReasonJobFailed, true
+	case all && waitsForAgents && jobStatus == "":
+		// An agent is ready to start; it only waits for a person to say it may work unasked.
+		// Outside work is let in first (the case above): admitting it does not allow agents.
+		return ReasonAgentsNotAllowed, true
 	case p.Name == "idea":
 		return ReasonIdea, true
 	case all && t.Kind == AlertKind && !g.HumanApprovedAt.Valid:

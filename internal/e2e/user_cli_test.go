@@ -80,7 +80,7 @@ func TestAPersonRunsATaskFromTheTerminal(t *testing.T) {
 		t.Fatalf("tasks:\n%s", out)
 	}
 
-	gator("task", "run", id, "--backend", backend)
+	gator("task", "run", id, "--backend", backend, "--allow-agents")
 	out = gator("task", "logs", id, "-f")
 	want := "looking at the task\n→ Bash go test ./...\nall green\n"
 	if out != want {

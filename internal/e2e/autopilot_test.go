@@ -62,7 +62,17 @@ func (h *harness) featureTask(backend string) (gen.Project, gen.Task) {
 	if code := h.do("POST", "/projects/"+p.Id.String()+"/tasks", gen.NewTask{Kind: "feature", Title: "Dark mode", Description: &desc}, &task); code != 201 {
 		h.t.Fatalf("task: %d", code)
 	}
-	return p, task
+	return p, h.allowAgents(task)
+}
+
+// allowAgents is a person allowing agents to work on the task without asking.
+func (h *harness) allowAgents(task gen.Task) gen.Task {
+	h.t.Helper()
+	var out gen.Task
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/allow-agents", nil, &out); code != 200 {
+		h.t.Fatalf("allow agents: %d", code)
+	}
+	return out
 }
 
 func (h *harness) approveAdvance(task gen.Task) gen.Task {

@@ -225,7 +225,7 @@ func TestClosingATaskStopsItsJobs(t *testing.T) {
 	h.do("POST", "/projects/"+project.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "x"}, &task)
 	path := "/tasks/" + task.Id.String()
 	var job gen.Job
-	if code := h.do("POST", path+"/jobs", gen.NewJob{Backend: ptr("claude")}, &job); code != 201 || job.Status != "queued" {
+	if code := h.do("POST", path+"/jobs", gen.NewJob{Backend: ptr("claude"), AllowAgents: ptr(true)}, &job); code != 201 || job.Status != "queued" {
 		t.Fatalf("queue a job: %d %s", code, job.Status)
 	}
 	h.do("POST", path+"/close", gen.TaskStateChange{Reason: "not wanted"}, nil)

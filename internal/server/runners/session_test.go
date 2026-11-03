@@ -119,6 +119,7 @@ func (f *fixture) queuedJob(t *testing.T) db.Job {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.allowAgents(t, task.ID)
 	job, err := f.m.CreateJob(ctx, task.ID, NewJob{Role: "implementer", Backend: f.backend})
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +176,14 @@ func (f *fixture) outbox(t *testing.T, aggregate string, id pgtype.UUID) []strin
 		out = append(out, typ)
 	}
 	return out
+}
+
+// allowAgents records the consent a person gives before any job runs on a task.
+func (f *fixture) allowAgents(t *testing.T, taskID pgtype.UUID) {
+	t.Helper()
+	if _, err := f.q.AllowAgents(context.Background(), db.AllowAgentsParams{ID: taskID}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // roleArtifacts are the documents the job's role produced for its task.

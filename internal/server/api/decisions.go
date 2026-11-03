@@ -150,6 +150,9 @@ func taskWords(d process.Decision) (string, []gen.DecisionAction) {
 	case process.ReasonExternal:
 		return "Raised outside the workspace. Nothing runs on it until you let it in.",
 			[]gen.DecisionAction{gen.DecisionActionAdmit, gen.DecisionActionClose, open}
+	case process.ReasonAgentsNotAllowed:
+		return "An agent is ready to start once you allow it.",
+			[]gen.DecisionAction{gen.DecisionActionAllowAgents, open}
 	case process.ReasonRequirementsChanged:
 		return "The requirements changed after work in " + phase + " started.", []gen.DecisionAction{open}
 	case process.ReasonNoRunner:

@@ -447,6 +447,7 @@ func cmdTaskRun(ctx context.Context, env *Env, args []string) error {
 	backend := fs.String("backend", "", "claude | codex | pi; the project's policy when omitted")
 	follow := fs.Bool("f", false, "follow the job's log until it ends")
 	fs.BoolVar(follow, "follow", false, "same as -f")
+	allow := fs.Bool("allow-agents", false, "allow agents to work on this task without asking for permission (asked once per task)")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -459,12 +460,17 @@ func cmdTaskRun(ctx context.Context, env *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	in := NewJob{Instruction: *instruction, Backend: *backend}
+	in := NewJob{Instruction: *instruction, Backend: *backend, AllowAgents: *allow}
 	if *cloud {
 		in.Placement = "cloud"
 	}
 	job, err := s.client.CreateJob(ctx, id, in)
 	var ae *APIError
+	if errors.As(err, &ae) && ae.Code == "agents_not_allowed" {
+		return coded(exitUserErr, "nobody has allowed agents on this task yet. An agent works without asking for permission, "+
+			"as the runner machine's user, with its files, network and credentials; Gator filters its environment but cannot sandbox it.\n"+
+			"If that is what you want for this task, run again with --allow-agents")
+	}
 	if *cloud && errors.As(err, &ae) && ae.Status == http.StatusBadRequest && strings.Contains(ae.Message, "placement") {
 		return coded(exitUserErr, "%s does not know about cloud runs yet (it refused the placement field: %s); update the server, or run without --cloud", s.server, ae.Message)
 	}

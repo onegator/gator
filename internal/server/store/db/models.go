@@ -477,6 +477,8 @@ type Task struct {
 	OriginSource        string             `json:"origin_source"`
 	AdmittedAt          pgtype.Timestamptz `json:"admitted_at"`
 	AdmittedBy          pgtype.UUID        `json:"admitted_by"`
+	AgentsAllowedAt     pgtype.Timestamptz `json:"agents_allowed_at"`
+	AgentsAllowedBy     pgtype.UUID        `json:"agents_allowed_by"`
 }
 
 type UsageRecord struct {

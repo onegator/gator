@@ -388,6 +388,25 @@ func (s *Server) AdmitTask(w http.ResponseWriter, r *http.Request, taskId gen.Ta
 	s.respondTask(w, r, taskId)
 }
 
+// AllowAgents is a person allowing agents to work on a task without asking for permission.
+// Until somebody does, no job starts on it: an agent runs as the runner's user, with that
+// machine's files, network and credentials, and nothing stops it to ask first.
+func (s *Server) AllowAgents(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	p, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember)
+	if !ok {
+		return
+	}
+	if p.Kind != auth.KindUser {
+		writeError(w, http.StatusForbidden, "only a person can allow agents to work without asking", "forbidden")
+		return
+	}
+	if _, err := s.Process.AllowAgents(r.Context(), fromUUID(taskId), ActorFromContext(r.Context())); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.respondTask(w, r, taskId)
+}
+
 func (s *Server) AdvanceTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
 	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleMember); !ok {
 		return
@@ -566,6 +585,15 @@ func (s *Server) respondTask(w http.ResponseWriter, r *http.Request, taskId gen.
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, runners.ErrAgentsNotAllowed):
+		writeError(w, http.StatusConflict, "nobody has allowed agents on this task yet: agents work without asking for permission, "+
+			"so a person allows it once per task (POST /tasks/{id}/allow-agents, or allowAgents: true on the job)", "agents_not_allowed")
+		return
+	case errors.Is(err, process.ErrConsentNeedsPerson):
+		writeError(w, http.StatusForbidden, err.Error(), "forbidden")
+		return
+	}
 	if code, ok := runnerErrStatus(err); ok {
 		writeError(w, code, err.Error(), http.StatusText(code))
 		return

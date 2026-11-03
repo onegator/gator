@@ -536,6 +536,15 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/allow-agents:
+    post:
+      operationId: allowAgents
+      description: "A person allowing agents to work on this task without asking for permission. Agents run as the runner machine's user, with its files, network and credentials; Gator filters their environment but cannot sandbox them. Until a person allows it, no job starts on the task, neither by the autopilot nor by hand. Saying it twice keeps the first answer. Admitting outside work does not imply it. Only a person can do it."
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/context:
     get:
       operationId: previewTaskContext
@@ -920,7 +929,7 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Job" } } } } }
     post:
       operationId: createTaskJob
-      description: "Queue an agent job for the task's current phase. Role defaults to the phase's runner role. placement says where it runs: local (a machine of the caller's, or a shared one; the default) or cloud (a cloud runner, started on demand when the server has a provisioner)."
+      description: "Queue an agent job for the task's current phase. Role defaults to the phase's runner role. placement says where it runs: local (a machine of the caller's, or a shared one; the default) or cloud (a cloud runner, started on demand when the server has a provisioner). A task nobody has allowed agents on answers 409 with code agents_not_allowed, unless allowAgents is true, which records the caller's consent first (only a person can give it)."
       parameters: [ { $ref: "#/components/parameters/taskId" } ]
       requestBody:
         required: true
@@ -1077,6 +1086,7 @@ components:
         timeoutSeconds: { type: integer, minimum: 60 }
         maxToolCalls: { type: integer, minimum: 1 }
         placement: { type: string, enum: [local, cloud], default: local, description: "local runs on a machine of the person starting the job (or a shared one); cloud on a cloud runner" }
+        allowAgents: { type: boolean, default: false, description: "the caller allows agents to work on this task without asking, recorded before the job is queued, in the same step; see allowAgents" }
     Job:
       type: object
       required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt, placement]
@@ -1892,6 +1902,8 @@ components:
         origin: { type: string, enum: [internal, external], description: "external means the words came from outside the workspace — a webhook, an issue, an alert" }
         originSource: { type: string, description: "who raised it: a plugin's name, usually" }
         admittedAt: { type: string, format: date-time, description: "when a person let outside work through; until then nothing runs on it by itself" }
+        agentsAllowedAt: { type: string, format: date-time, description: "when a person allowed agents to work on this task without asking; until then no job starts on it. Tasks that had a job before this was asked carry their first job's time and no agentsAllowedBy" }
+        agentsAllowedBy: { type: string, format: uuid, description: "the person who allowed agents on this task" }
         phase: { type: string }
         urgency: { type: integer }
         ownerKind: { type: string }
@@ -1959,8 +1971,9 @@ components:
         reason:
           type: string
           enum: [approval, blocked, requirements_changed, idea, job_failed, no_runner, external,
-                 job_stalled, alert, component_proposed, product_proposed, runner_login, plugin_disabled]
-          description: the last six only with all=true
+                 job_stalled, alert, component_proposed, product_proposed, runner_login, plugin_disabled,
+                 agents_not_allowed]
+          description: "the last seven only with all=true. agents_not_allowed is a task the autopilot would start an agent on, once a person allows agents on it"
         urgency: { type: integer, minimum: 1, maximum: 4, description: "1 is the most urgent, as on a task. A task's decision carries the task's urgency, raised to 2 when the task cannot move by itself" }
         summary: { type: string, description: "what happened, in words a person reads" }
         subject: { $ref: "#/components/schemas/DecisionSubject" }
@@ -1982,7 +1995,8 @@ components:
     DecisionAction:
       type: string
       enum: [approve, admit, retry, stop_job, close, open,
-             accept_component, reject_component, approve_entry, archive_entry, login_runner, enable_plugin]
+             accept_component, reject_component, approve_entry, archive_entry, login_runner, enable_plugin,
+             allow_agents]
     Reason:
       type: object
       properties: { reason: { type: string } }

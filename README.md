@@ -147,6 +147,9 @@ and `/stop`; live output streams on the WebSocket topic `job:<id>`.
    bypassPermissions --strict-mcp-config --mcp-config <explicit or empty>` in its own process group,
    so MCP servers and claude.ai connectors of the logged-in account never reach a job. Output becomes job events (`session`, `text`,
    `tool_call`, `tool_result`, `rate_limit`, `result`); hook output and thinking are not forwarded.
+   Because the agent never stops to ask, no job starts on a task until a person has allowed
+   agents on it, once per task (`POST /tasks/{id}/allow-agents`, or `allowAgents: true` on the
+   first job). Until then the autopilot waits and the full inbox asks (`agents_not_allowed`).
 3. **Bounds.** The job timeout and tool-call limit end the whole process group; a process that
    exits without a `result` line is `failed`, never quietly `done`.
 4. **Steer.** A person's correction interrupts the current run and resumes the same session

@@ -23,6 +23,9 @@ var (
 	ErrTaskClosed       = errors.New("task is closed")
 	// ErrNotExternal answers an attempt to admit work that was raised inside the workspace.
 	ErrNotExternal = errors.New("not raised outside the workspace")
+	// ErrConsentNeedsPerson answers anything but a person trying to allow agents on a task:
+	// the point of asking is that somebody chose it.
+	ErrConsentNeedsPerson = errors.New("only a person can allow agents to work without asking")
 )
 
 // ActorKind identifies who performs an operation.
@@ -191,6 +194,47 @@ func (s *Service) Admit(ctx context.Context, taskID pgtype.UUID, actor Actor) (d
 	})
 	return out, err
 }
+
+// AllowAgents is a person saying that agents may work on this task without asking for
+// permission. They run as the runner's user, with that machine's files, network and
+// credentials, so nothing runs on a task until somebody has chosen this for it. Saying it twice
+// keeps the first answer. Admitting outside work does not imply it: that says the words may
+// reach an agent, this says an agent may act on them unattended.
+func (s *Service) AllowAgents(ctx context.Context, taskID pgtype.UUID, actor Actor) (db.Task, error) {
+	var out db.Task
+	err := s.tx(ctx, func(q *db.Queries) error {
+		var err error
+		out, err = s.AllowAgentsIn(ctx, q, taskID, actor)
+		return err
+	})
+	return out, err
+}
+
+// AllowAgentsIn is AllowAgents inside the caller's transaction, for a job that is started and
+// allowed in one go.
+func (s *Service) AllowAgentsIn(ctx context.Context, q *db.Queries, taskID pgtype.UUID, actor Actor) (db.Task, error) {
+	task, err := q.GetTaskForUpdate(ctx, taskID)
+	if err != nil {
+		return db.Task{}, err
+	}
+	if task.AgentsAllowedAt.Valid {
+		return task, nil // somebody got there first; saying so twice is not an error
+	}
+	if actor.Kind != ActorUser || !actor.ID.Valid {
+		return db.Task{}, ErrConsentNeedsPerson
+	}
+	out, err := q.AllowAgents(ctx, db.AllowAgentsParams{ID: taskID, AgentsAllowedBy: actor.ID})
+	if err != nil {
+		return db.Task{}, err
+	}
+	if err := s.record(ctx, q, taskID, nil, task.Phase, "create", actor, AllowedAgentsReason, nil); err != nil {
+		return db.Task{}, err
+	}
+	return out, s.emit(ctx, q, "task.agents_allowed", taskID, map[string]any{"phase": task.Phase})
+}
+
+// AllowedAgentsReason is how the history tells of a person allowing agents on a task.
+const AllowedAgentsReason = "allowed agents to work without asking"
 
 // Advance moves a task to the next phase if the current gate is satisfied.
 func (s *Service) Advance(ctx context.Context, taskID pgtype.UUID, actor Actor, reason string) (db.Task, error) {
