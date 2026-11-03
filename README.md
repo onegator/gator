@@ -241,5 +241,4 @@ pasted token (callback: `GATOR_PUBLIC_URL/connect/callback`). Others are install
 
 ## License
 
-[AGPL-3.0](LICENSE). Run it, change it, build plugins on it. Offer it to others as a hosted
-service and your changes have to be published too.
+[MIT](LICENSE).
