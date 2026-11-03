@@ -335,43 +335,6 @@ func (s *Server) CreateTask(w http.ResponseWriter, r *http.Request, projectId ge
 	writeJSON(w, http.StatusCreated, toTask(t))
 }
 
-func (s *Server) ListInbox(w http.ResponseWriter, r *http.Request, params gen.ListInboxParams) {
-	p, ok := s.principal(w, r)
-	if !ok {
-		return
-	}
-	var pid pgtype.UUID
-	if params.ProjectId != nil {
-		pid = fromUUID(*params.ProjectId)
-		if _, ok := s.requireProject(w, r, pid, auth.RoleViewer); !ok {
-			return
-		}
-	}
-	visible, err := s.visibleProjects(r, p)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	var owner pgtype.UUID
-	if params.Mine != nil && *params.Mine {
-		owner = p.UserID
-	}
-	rows, err := s.Process.Inbox(r.Context(), process.InboxFilter{ProjectID: pid, OwnerID: owner})
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	out := make([]gen.Decision, 0, len(rows))
-	for _, d := range rows {
-		if visible != nil && !visible[d.Task.ProjectID.Bytes] {
-			continue
-		}
-		rollbacks := d.Rollbacks
-		out = append(out, gen.Decision{Task: toTask(d.Task), Reason: gen.DecisionReason(d.Reason), WaitingSince: d.WaitingSince, Rollbacks: &rollbacks})
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
 func (s *Server) GetTask(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
 	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer); !ok {
 		return

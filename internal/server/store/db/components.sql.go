@@ -318,6 +318,48 @@ func (q *Queries) ListComponents(ctx context.Context, projectID pgtype.UUID) ([]
 	return items, nil
 }
 
+const listProposedComponents = `-- name: ListProposedComponents :many
+SELECT c.id, c.project_id, c.key, c.name, c.kind, c.repo, c.path, c.owner_id, c.notes, c.created_at, c.updated_at, c.status, c.proposed_reason FROM components c JOIN projects p ON p.id = c.project_id
+WHERE c.status = 'proposed' AND p.archived_at IS NULL
+  AND ($1::uuid IS NULL OR c.project_id = $1::uuid)
+ORDER BY c.created_at
+`
+
+// What the inbox shows for the catalogue: proposals in live projects, optionally one project's.
+func (q *Queries) ListProposedComponents(ctx context.Context, projectID pgtype.UUID) ([]Component, error) {
+	rows, err := q.db.Query(ctx, listProposedComponents, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Component
+	for rows.Next() {
+		var i Component
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Key,
+			&i.Name,
+			&i.Kind,
+			&i.Repo,
+			&i.Path,
+			&i.OwnerID,
+			&i.Notes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Status,
+			&i.ProposedReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markHintProposed = `-- name: MarkHintProposed :exec
 UPDATE component_hints SET proposed_at = now() WHERE id = $1
 `

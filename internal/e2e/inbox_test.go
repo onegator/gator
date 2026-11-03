@@ -17,7 +17,7 @@ func (h *harness) decisions(query string) []gen.Decision {
 
 func has(decisions []gen.Decision, task gen.Task) *gen.Decision {
 	for i := range decisions {
-		if decisions[i].Task.Id == task.Id {
+		if decisions[i].Task != nil && decisions[i].Task.Id == task.Id {
 			return &decisions[i]
 		}
 	}

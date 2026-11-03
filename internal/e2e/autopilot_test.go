@@ -112,7 +112,7 @@ func (h *harness) inboxReason(p gen.Project, task gen.Task) string {
 	var ds []gen.Decision
 	h.do("GET", "/inbox?projectId="+p.Id.String(), nil, &ds)
 	for _, d := range ds {
-		if d.Task.Id == task.Id {
+		if d.Task != nil && d.Task.Id == task.Id {
 			return string(d.Reason)
 		}
 	}

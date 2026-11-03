@@ -262,6 +262,50 @@ func (q *Queries) ListProductContext(ctx context.Context, projectID pgtype.UUID)
 	return items, nil
 }
 
+const listProposedProductEntries = `-- name: ListProposedProductEntries :many
+SELECT pc.id, pc.project_id, pc.kind, pc.title, pc.content, pc.version, pc.status, pc.source_task_id, pc.created_by_kind, pc.created_by, pc.approved_by, pc.approved_at, pc.created_at, pc.archived_at, pc.condensed_from FROM product_context pc JOIN projects p ON p.id = pc.project_id
+WHERE pc.status = 'proposed' AND pc.archived_at IS NULL AND p.archived_at IS NULL
+  AND ($1::uuid IS NULL OR pc.project_id = $1::uuid)
+ORDER BY pc.created_at
+`
+
+// What the inbox shows for the product context: proposals waiting for a person, in live projects.
+func (q *Queries) ListProposedProductEntries(ctx context.Context, projectID pgtype.UUID) ([]ProductContext, error) {
+	rows, err := q.db.Query(ctx, listProposedProductEntries, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProductContext
+	for rows.Next() {
+		var i ProductContext
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Kind,
+			&i.Title,
+			&i.Content,
+			&i.Version,
+			&i.Status,
+			&i.SourceTaskID,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.ArchivedAt,
+			&i.CondensedFrom,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const liveProductEntriesOfKind = `-- name: LiveProductEntriesOfKind :many
 SELECT DISTINCT ON (title) id, project_id, kind, title, content, version, status, source_task_id, created_by_kind, created_by, approved_by, approved_at, created_at, archived_at, condensed_from FROM product_context
 WHERE project_id = $1 AND kind = $2 AND status = 'approved' AND archived_at IS NULL

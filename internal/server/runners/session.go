@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -309,6 +310,7 @@ func (s *session) heartbeat(hb proto.Heartbeat) {
 		status = "busy"
 	}
 	s.authMu.Lock()
+	changed := !maps.Equal(s.auth, hb.AuthState)
 	s.auth = hb.AuthState
 	s.authMu.Unlock()
 	auth, _ := json.Marshal(hb.AuthState)
@@ -318,6 +320,13 @@ func (s *session) heartbeat(hb proto.Heartbeat) {
 	if err := q.RunnerHeartbeat(ctx, db.RunnerHeartbeatParams{ID: s.runnerID, AuthState: auth, Status: status}); err != nil {
 		s.m.log.Warn("heartbeat", "runner", s.name, "err", err)
 		return
+	}
+	if changed {
+		// A backend that lost its login is a decision in the inbox; say so the moment it is
+		// known rather than when somebody next reloads.
+		_ = s.m.tx(ctx, func(q *db.Queries) error {
+			return emit(ctx, q, "runner.auth_changed", "runner", s.runnerID, map[string]any{"auth": hb.AuthState})
+		})
 	}
 	ids := make([]pgtype.UUID, 0, len(hb.ActiveJobs))
 	for _, id := range hb.ActiveJobs {

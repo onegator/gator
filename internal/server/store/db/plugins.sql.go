@@ -516,6 +516,48 @@ func (q *Queries) ListProjectPlugins(ctx context.Context, projectID pgtype.UUID)
 	return items, nil
 }
 
+const listTrippedProjectPlugins = `-- name: ListTrippedProjectPlugins :many
+SELECT pp.project_id, pp.disabled_reason, pp.updated_at, p.name AS plugin_name
+FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id JOIN projects pr ON pr.id = pp.project_id
+WHERE NOT pp.enabled AND pp.disabled_reason IS NOT NULL AND pr.archived_at IS NULL
+  AND ($1::uuid IS NULL OR pp.project_id = $1::uuid)
+ORDER BY pp.updated_at
+`
+
+type ListTrippedProjectPluginsRow struct {
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	DisabledReason *string            `json:"disabled_reason"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	PluginName     string             `json:"plugin_name"`
+}
+
+// Plugins Gator switched off for a project after they kept failing. A person switching one off
+// clears the reason (UpsertProjectPlugin), so only the ones that tripped are listed.
+func (q *Queries) ListTrippedProjectPlugins(ctx context.Context, projectID pgtype.UUID) ([]ListTrippedProjectPluginsRow, error) {
+	rows, err := q.db.Query(ctx, listTrippedProjectPlugins, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTrippedProjectPluginsRow
+	for rows.Next() {
+		var i ListTrippedProjectPluginsRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.DisabledReason,
+			&i.UpdatedAt,
+			&i.PluginName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pluginKVGet = `-- name: PluginKVGet :one
 SELECT value FROM plugin_kv WHERE project_plugin_id = $1 AND key = $2
 `
