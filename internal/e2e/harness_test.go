@@ -238,7 +238,7 @@ func (h *harness) dialRaw(token, backend string, version, maxParallel int) (*raw
 	}
 	h.t.Cleanup(func() { c.CloseNow() })
 	r := &rawRunner{t: h.t, c: c}
-	reg := proto.Register{Name: "raw", Location: "other", Capabilities: proto.Capabilities{Backends: []string{backend}, MaxParallel: maxParallel}}
+	reg := proto.Register{Name: "raw-" + backend, Location: "other", Capabilities: proto.Capabilities{Backends: []string{backend}, MaxParallel: maxParallel}}
 	b, _ := json.Marshal(proto.Envelope{Type: proto.TypeRegister, Seq: 1, Version: version, Payload: reg})
 	r.seq = 1
 	if err := c.Write(ctx, websocket.MessageText, b); err != nil {

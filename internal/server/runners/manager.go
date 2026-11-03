@@ -157,6 +157,11 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[[16]byte]*session
 
+	// statusMu orders the writes that say whether a runner is online. Without it a session's
+	// teardown could take itself off the map, let a reconnect store "online", and then write
+	// "offline" over the runner that is connected again.
+	statusMu sync.Mutex
+
 	// cloudMu serialises Provision; machines are the cloud runners started and not yet
 	// stopped, provisions how many each queued job has had.
 	cloudMu    sync.Mutex
@@ -522,7 +527,10 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepResult, error)
 	}
 	for _, r := range silent {
 		res.Offline++
+		// Taken off the map first, so its teardown does not write "disconnected" over the
+		// reason and announce the runner offline a second time.
 		if s := m.session(r.ID); s != nil {
+			m.dropSession(s)
 			s.close("no heartbeat")
 		}
 		_ = m.tx(ctx, func(q *db.Queries) error {
