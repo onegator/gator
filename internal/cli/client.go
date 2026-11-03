@@ -189,6 +189,7 @@ type NewJob struct {
 	Backend     string `json:"backend,omitempty"`
 	Instruction string `json:"instruction,omitempty"`
 	Placement   string `json:"placement,omitempty"`
+	AllowAgents bool   `json:"allowAgents,omitempty"`
 }
 
 type Job struct {

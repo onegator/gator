@@ -35,6 +35,9 @@ var (
 	ErrJobNotActive  = errors.New("job is not running")
 	// ErrBudgetExceeded refuses new jobs once the project spent its daily budget.
 	ErrBudgetExceeded = errors.New("daily budget spent")
+	// ErrAgentsNotAllowed refuses a job on a task nobody has allowed agents on. An agent works
+	// without asking for permission, so a person says once per task that it may.
+	ErrAgentsNotAllowed = errors.New("agents are not allowed on this task yet")
 )
 
 // Config tunes timing. Zero values take the protocol defaults.
@@ -225,6 +228,9 @@ type NewJob struct {
 	// Placement is proto.PlacementLocal or proto.PlacementCloud. Empty takes the project's
 	// policy, which is local unless the project says otherwise.
 	Placement string
+	// AllowAgents records CreatedBy's consent to agents on the task before queueing, in the
+	// same transaction. Only a person can give it.
+	AllowAgents bool
 }
 
 // CreateJob queues a job for the task's current phase and offers it to connected runners.
@@ -235,6 +241,13 @@ func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) 
 	}
 	var job db.Job
 	err = m.tx(ctx, func(q *db.Queries) error {
+		if in.AllowAgents {
+			t, err := m.process.AllowAgentsIn(ctx, q, taskID, in.CreatedBy)
+			if err != nil {
+				return err
+			}
+			d.Task = t
+		}
 		var err error
 		job, err = m.insertJob(ctx, q, d, in)
 		return err
@@ -253,6 +266,9 @@ func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) 
 func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail, in NewJob) (db.Job, error) {
 	if d.Task.ClosedAt.Valid {
 		return db.Job{}, fmt.Errorf("%w: task is closed", ErrInvalidJob)
+	}
+	if !d.Task.AgentsAllowedAt.Valid {
+		return db.Job{}, ErrAgentsNotAllowed
 	}
 	role := in.Role
 	if role == "" {
@@ -325,6 +341,11 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 	// Work raised from outside the workspace waits for a person to let it in. An agent runs
 	// with the operator's credentials, so a stranger's words must not start one by themselves.
 	if d.Task.Origin == "external" && !d.Task.AdmittedAt.Valid {
+		return db.Job{}, false, nil
+	}
+	// Nor does anything start before a person allowed agents on the task: they work without
+	// asking, as the runner's user. The inbox asks for it instead.
+	if !d.Task.AgentsAllowedAt.Valid {
 		return db.Job{}, false, nil
 	}
 	enabled, _, err := m.process.Autopilot(ctx, d.Task.ProjectID, m.cfg.DefaultBackend)
@@ -411,7 +432,7 @@ func (m *Manager) RunAutopilot(ctx context.Context) {
 			switch e.Type {
 			// A reopened task, or one whose kind changed before work began, has entered a
 			// phase afresh, just like one that moved.
-			case "task.created", "task.phase_changed", "gate.unblocked", "task.reopened", "task.updated":
+			case "task.created", "task.phase_changed", "gate.unblocked", "task.reopened", "task.updated", "task.admitted", "task.agents_allowed":
 				id, ok := parseUUID(e.AggregateID)
 				if !ok {
 					continue

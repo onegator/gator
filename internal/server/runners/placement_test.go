@@ -31,6 +31,7 @@ func (f *fixture) jobFor(t *testing.T, placement string, actor process.Actor) db
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.allowAgents(t, task.ID)
 	job, err := f.m.CreateJob(ctx, task.ID, NewJob{Role: "implementer", Backend: f.backend, Placement: placement, CreatedBy: actor})
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +137,7 @@ func TestAProjectChoosesWhereItsAutopilotRuns(t *testing.T) {
 		t.Fatalf("an explicit placement was overridden: %q", j.Placement)
 	}
 	task, _ := f.m.process.Create(context.Background(), process.CreateParams{ProjectID: f.project, Kind: "bug", Title: "x"}, process.Actor{Kind: process.ActorSystem})
+	f.allowAgents(t, task.ID)
 	if _, err := f.m.CreateJob(context.Background(), task.ID, NewJob{Role: "implementer", Backend: f.backend, Placement: "moon"}); err == nil {
 		t.Fatal("an unknown placement was accepted")
 	}

@@ -73,7 +73,7 @@ func TestCloudJobRunsOnARunnerStartedForIt(t *testing.T) {
 
 	instruction, placement := "ok", gen.NewJobPlacementCloud
 	var job gen.Job
-	if code := h.do("POST", "/tasks/"+task.Id.String()+"/jobs", gen.NewJob{Backend: &backend, Instruction: &instruction, Placement: &placement}, &job); code != 201 {
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/jobs", gen.NewJob{Backend: &backend, Instruction: &instruction, Placement: &placement, AllowAgents: ptr(true)}, &job); code != 201 {
 		t.Fatalf("create: %d", code)
 	}
 	if job.Placement != gen.JobPlacementCloud {

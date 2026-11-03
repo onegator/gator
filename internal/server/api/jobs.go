@@ -54,7 +54,7 @@ func (s *Server) CreateTaskJob(w http.ResponseWriter, r *http.Request, taskId ge
 		placement = string(*in.Placement)
 	}
 	nj := runners.NewJob{Backend: deref(in.Backend), Model: deref(in.Model), Instruction: deref(in.Instruction), Role: deref(in.Role),
-		CreatedBy: ActorFromContext(r.Context()), Placement: placement}
+		CreatedBy: ActorFromContext(r.Context()), Placement: placement, AllowAgents: in.AllowAgents != nil && *in.AllowAgents}
 	if in.MaxAttempts != nil {
 		nj.MaxAttempts = *in.MaxAttempts
 	}

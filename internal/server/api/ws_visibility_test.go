@@ -122,7 +122,7 @@ func TestEventFilterRules(t *testing.T) {
 	var task gen.Task
 	h.do("POST", "/projects/"+a.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "x"}, &task)
 	var job gen.Job
-	if code := h.do("POST", "/tasks/"+task.Id.String()+"/jobs", gen.NewJob{Backend: ptr("claude")}, &job); code != 201 {
+	if code := h.do("POST", "/tasks/"+task.Id.String()+"/jobs", gen.NewJob{Backend: ptr("claude"), AllowAgents: ptr(true)}, &job); code != 201 {
 		t.Fatalf("queue a job: %d", code)
 	}
 	output := events.Event{Type: "job.output", Aggregate: "job", AggregateID: job.Id.String()}

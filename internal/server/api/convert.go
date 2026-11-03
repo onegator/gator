@@ -36,6 +36,7 @@ func toTask(t db.Task) gen.Task {
 	out := gen.Task{
 		Id: toUUID(t.ID), ProjectId: toUUID(t.ProjectID), Kind: t.Kind, Title: t.Title, Description: &t.Description, Phase: t.Phase,
 		Origin: (*gen.TaskOrigin)(&t.Origin), OriginSource: &t.OriginSource, AdmittedAt: timePtr(t.AdmittedAt),
+		AgentsAllowedAt: timePtr(t.AgentsAllowedAt), AgentsAllowedBy: toUUIDPtr(t.AgentsAllowedBy),
 		Urgency: int(t.Urgency), OwnerKind: t.OwnerKind, OwnerId: toUUIDPtr(t.OwnerID),
 		RequirementsChanged: t.RequirementsChanged, BlockedReason: t.BlockedReason,
 		PhaseEnteredAt: t.PhaseEnteredAt.Time, CreatedAt: t.CreatedAt.Time,
@@ -77,6 +78,7 @@ func toDetail(d process.Detail) gen.TaskDetail {
 		OwnerKind: t.OwnerKind, OwnerId: t.OwnerId, RequirementsChanged: t.RequirementsChanged,
 		BlockedReason: t.BlockedReason, PhaseEnteredAt: t.PhaseEnteredAt, CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
 		Origin: (*gen.TaskDetailOrigin)(t.Origin), OriginSource: t.OriginSource, AdmittedAt: t.AdmittedAt,
+		AgentsAllowedAt: t.AgentsAllowedAt, AgentsAllowedBy: t.AgentsAllowedBy,
 		Gate: toGate(d.Gate, d.Phase), Phases: phases,
 	}
 }

@@ -174,7 +174,10 @@ func (h *harness) task() gen.Task {
 
 func (h *harness) job(task gen.Task, backend, instruction string, maxAttempts int) gen.Job {
 	h.t.Helper()
-	in := gen.NewJob{Backend: &backend, Instruction: &instruction}
+	// A person allows agents on the task in the same step: every job needs that consent, and
+	// the tests about the consent itself live in consent_test.go.
+	allow := true
+	in := gen.NewJob{Backend: &backend, Instruction: &instruction, AllowAgents: &allow}
 	if maxAttempts > 0 {
 		in.MaxAttempts = &maxAttempts
 	}

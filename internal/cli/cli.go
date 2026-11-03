@@ -52,7 +52,7 @@ Tasks
   gator task new [--project SLUG] [--kind feature|bug|chore] TITLE [--description TEXT]
   gator task advance ID [--reason TEXT]
   gator task approve ID
-  gator task run ID [--cloud] [--backend NAME] [--instruction TEXT] [-f]
+  gator task run ID [--allow-agents] [--cloud] [--backend NAME] [--instruction TEXT] [-f]
   gator task logs ID [-f] [--job JOB_ID]
 
 Every command takes --json for output a script can read, and --server URL.

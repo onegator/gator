@@ -9,6 +9,12 @@ RETURNING *;
 UPDATE tasks SET admitted_at = COALESCE(admitted_at, now()), admitted_by = COALESCE(admitted_by, sqlc.narg(admitted_by))
 WHERE id = $1 RETURNING *;
 
+-- name: AllowAgents :one
+-- A person allowing agents to work on this task without asking. Like admitting, saying it twice
+-- keeps the first person and the first moment.
+UPDATE tasks SET agents_allowed_at = COALESCE(agents_allowed_at, now()), agents_allowed_by = COALESCE(agents_allowed_by, sqlc.narg(agents_allowed_by))
+WHERE id = $1 RETURNING *;
+
 -- name: GetTask :one
 SELECT * FROM tasks WHERE id = $1;
 

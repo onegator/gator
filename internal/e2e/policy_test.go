@@ -56,7 +56,7 @@ func (h *harness) projectTask(cfg map[string]any) (gen.Project, gen.Task) {
 	if code := h.do("POST", "/projects/"+p.Id.String()+"/tasks", gen.NewTask{Kind: "feature", Title: "Search", Description: &desc}, &task); code != 201 {
 		h.t.Fatalf("task: %d", code)
 	}
-	return p, h.approveAdvance(task) // idea is a human phase
+	return p, h.approveAdvance(h.allowAgents(task)) // idea is a human phase
 }
 
 func TestPolicyChoosesBackendModelAndCostCapPerRole(t *testing.T) {
