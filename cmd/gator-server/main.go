@@ -203,7 +203,13 @@ func serve(ctx context.Context) error {
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
 		PublicURL: cfg.PublicURL,
 	}
-	if oc := auth.LoadOIDCConfig(); oc.Enabled() {
+	oc := auth.LoadOIDCConfig()
+	// A server people sign in to, or reach at a public address, is not a developer's laptop:
+	// trusting X-Gator-User there lets anyone be anyone.
+	if cfg.DevAuth && (oc.Enabled() || cfg.PublicURL != "") {
+		return errors.New("GATOR_DEV_AUTH=1 is for local development; unset it on a server with GATOR_OIDC_* or GATOR_PUBLIC_URL")
+	}
+	if oc.Enabled() {
 		o, err := auth.NewOIDC(ctx, oc, db.Pool)
 		if err != nil {
 			return err

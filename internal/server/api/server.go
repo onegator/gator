@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -463,6 +464,16 @@ func (s *Server) ListTaskTransitions(w http.ResponseWriter, r *http.Request, tas
 
 // --- websocket ---
 
+// wsOrigins are the browser origins besides the request's own host that may open the
+// WebSocket: the host of GATOR_PUBLIC_URL, when the server sits behind a proxy that changes
+// the Host it sees.
+func (s *Server) wsOrigins() []string {
+	if u, err := url.Parse(s.PublicURL); err == nil && u.Host != "" {
+		return []string{u.Host}
+	}
+	return nil
+}
+
 type wsSubscribe struct {
 	Subscribe []string `json:"subscribe"`
 }
@@ -473,7 +484,10 @@ type wsSubscribe struct {
 // an event that belongs to a project reaches the caller only if they may read that project
 // (see eventFilter).
 func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
-	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+	// Gator.app, the CLI and runners send no Origin and are let in. A browser always sends one,
+	// and its session cookie rides along, so a page on another site could listen in on the
+	// caller's events: only this server's own address, or GATOR_PUBLIC_URL's, may open one.
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: s.wsOrigins()})
 	if err != nil {
 		return
 	}
