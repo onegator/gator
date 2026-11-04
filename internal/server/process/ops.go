@@ -118,6 +118,26 @@ type CreateParams struct {
 	// labels the origin but never decides it — see Create.
 	OriginSource string
 	SourceTaskID pgtype.UUID
+	// Automation, when set, makes this the work of an automation a person switched on.
+	Automation *Automated
+}
+
+// Automated says which automation creates a task. Switching on one that puts agents to work is
+// that person allowing agents to work without asking on every task it creates, and letting
+// through the outside words those tasks carry: such a task is created with both answers given,
+// in that person's name, and its history says why.
+type Automated struct {
+	Key   string
+	Title string // "PR review", for the history
+	// AllowAgents records AllowedBy's consent on the task. An automation that needs no agent,
+	// such as a summary the server writes, leaves it off.
+	AllowAgents bool
+	// AllowedBy is the person who switched the automation on. Required with AllowAgents:
+	// consent is a person's.
+	AllowedBy pgtype.UUID
+	// InTx runs inside the transaction that creates the task, so whatever records the run
+	// commits or rolls back with it.
+	InTx func(q *db.Queries, task db.Task) error
 }
 
 // OriginFor says whether a task's words came from outside this workspace. It is derived from
@@ -157,9 +177,48 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 		if err := s.record(ctx, q, task.ID, nil, first.Name, "create", actor, "", nil); err != nil {
 			return err
 		}
-		return s.emit(ctx, q, "task.created", task.ID, map[string]any{"kind": p.Kind, "phase": first.Name, "origin": task.Origin})
+		payload := map[string]any{"kind": p.Kind, "phase": first.Name, "origin": task.Origin}
+		if a := p.Automation; a != nil {
+			if task, err = s.automate(ctx, q, task, *a); err != nil {
+				return err
+			}
+			payload["automation"] = a.Key
+		}
+		return s.emit(ctx, q, "task.created", task.ID, payload)
 	})
 	return task, err
+}
+
+// automate records on a new task the answers its automation's enabling gave.
+func (s *Service) automate(ctx context.Context, q *db.Queries, task db.Task, a Automated) (db.Task, error) {
+	if a.Key == "" || (a.AllowAgents && !a.AllowedBy.Valid) {
+		return task, ErrConsentNeedsPerson
+	}
+	out, err := q.SetTaskAutomation(ctx, db.SetTaskAutomationParams{ID: task.ID, Automation: a.Key})
+	if err != nil {
+		return task, err
+	}
+	if a.AllowAgents {
+		reason := AllowedAgentsReason + ", by switching on " + a.Title
+		if out.Origin == "external" {
+			if out, err = q.AdmitTask(ctx, db.AdmitTaskParams{ID: task.ID, AdmittedBy: a.AllowedBy}); err != nil {
+				return task, err
+			}
+			reason = "admitted work raised from outside the workspace and " + reason
+		}
+		if out, err = q.AllowAgents(ctx, db.AllowAgentsParams{ID: task.ID, AgentsAllowedBy: a.AllowedBy}); err != nil {
+			return task, err
+		}
+		if err := s.record(ctx, q, task.ID, nil, task.Phase, "create", Actor{Kind: ActorUser, ID: a.AllowedBy}, reason, nil); err != nil {
+			return task, err
+		}
+	}
+	if a.InTx != nil {
+		if err := a.InTx(q, out); err != nil {
+			return task, err
+		}
+	}
+	return out, nil
 }
 
 // Admit is a person letting an outside task through: until then nothing starts on it by

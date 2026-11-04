@@ -72,7 +72,7 @@ func New(pool *pgxpool.Pool, proc *process.Service, sender Sender, hub *events.H
 
 // watched are the events worth a notification.
 var watched = []string{"task.phase_changed", "gate.blocked", "task.requirements_changed", "job.finished",
-	"job.no_runner", "runner.offline"}
+	"job.no_runner", "runner.offline", "summary.ready"}
 
 // Run delivers notifications until ctx ends.
 func (n *Notifier) Run(ctx context.Context) {
@@ -194,6 +194,8 @@ func (n *Notifier) message(ctx context.Context, row db.EventsAfterRow, task db.T
 		Rollback bool   `json:"rollback"`
 		Reason   string `json:"reason"`
 		Backend  string `json:"backend"`
+		Headline string `json:"headline"`
+		Project  string `json:"project"`
 	}
 	_ = json.Unmarshal(row.Payload, &payload)
 	m := Message{Title: task.Title, Link: "gator://tasks/" + uuidString(task.ID)}
@@ -204,6 +206,9 @@ func (n *Notifier) message(ctx context.Context, row db.EventsAfterRow, task db.T
 		m.Body = "Requirements changed; the phase needs approving again"
 	case "job.finished":
 		m.Body = "A job stopped without finishing"
+	case "summary.ready":
+		m.Title = "Weekly summary: " + payload.Project
+		m.Body = payload.Headline
 	case "job.no_runner":
 		m.Body = "No runner can take this job: none is online with " + payload.Backend + " ready"
 	case "task.phase_changed":

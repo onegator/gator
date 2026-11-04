@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/process"
@@ -69,6 +70,9 @@ type Config struct {
 	OAuthClient func(provider string) (OAuthClient, bool)
 	// HTTP makes the server's own calls to OAuth providers; default: 20s timeout.
 	HTTP *http.Client
+	// Automations decides what a project does with a pull request a plugin reports, or a new
+	// incident. Optional: without it no automation runs on a plugin's behalf.
+	Automations *automations.Service
 }
 
 // LoadEnv fills the settings that come from the server's environment and are the plugins'

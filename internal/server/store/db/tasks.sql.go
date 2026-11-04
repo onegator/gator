@@ -13,7 +13,7 @@ import (
 
 const admitTask = `-- name: AdmitTask :one
 UPDATE tasks SET admitted_at = COALESCE(admitted_at, now()), admitted_by = COALESCE(admitted_by, $2)
-WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by
+WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation
 `
 
 type AdmitTaskParams struct {
@@ -51,13 +51,14 @@ func (q *Queries) AdmitTask(ctx context.Context, arg AdmitTaskParams) (Task, err
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
 
 const allowAgents = `-- name: AllowAgents :one
 UPDATE tasks SET agents_allowed_at = COALESCE(agents_allowed_at, now()), agents_allowed_by = COALESCE(agents_allowed_by, $2)
-WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by
+WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation
 `
 
 type AllowAgentsParams struct {
@@ -95,6 +96,7 @@ func (q *Queries) AllowAgents(ctx context.Context, arg AllowAgentsParams) (Task,
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
@@ -234,7 +236,7 @@ func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) 
 const createTask = `-- name: CreateTask :one
 INSERT INTO tasks (project_id, kind, title, description, phase, urgency, owner_kind, owner_id, source_task_id, origin, origin_source)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by
+RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation
 `
 
 type CreateTaskParams struct {
@@ -291,12 +293,13 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
 
 const findTaskByExternalRef = `-- name: FindTaskByExternalRef :one
-SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by FROM tasks
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation FROM tasks
 WHERE project_id = $1 AND external_refs ->> $2::text = $3::text
 ORDER BY created_at DESC LIMIT 1
 `
@@ -335,6 +338,7 @@ func (q *Queries) FindTaskByExternalRef(ctx context.Context, arg FindTaskByExter
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
@@ -393,7 +397,7 @@ func (q *Queries) GetLatestArtifact(ctx context.Context, arg GetLatestArtifactPa
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by FROM tasks WHERE id = $1
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation FROM tasks WHERE id = $1
 `
 
 func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
@@ -424,12 +428,13 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
 
 const getTaskForUpdate = `-- name: GetTaskForUpdate :one
-SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by FROM tasks WHERE id = $1 FOR UPDATE
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation FROM tasks WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetTaskForUpdate(ctx context.Context, id pgtype.UUID) (Task, error) {
@@ -460,6 +465,7 @@ func (q *Queries) GetTaskForUpdate(ctx context.Context, id pgtype.UUID) (Task, e
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
@@ -682,7 +688,7 @@ func (q *Queries) ListCurrentPhaseJobs(ctx context.Context) ([]ListCurrentPhaseJ
 }
 
 const listOpenTasksByProject = `-- name: ListOpenTasksByProject :many
-SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by FROM tasks WHERE project_id = $1 AND closed_at IS NULL ORDER BY urgency, phase_entered_at
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation FROM tasks WHERE project_id = $1 AND closed_at IS NULL ORDER BY urgency, phase_entered_at
 `
 
 func (q *Queries) ListOpenTasksByProject(ctx context.Context, projectID pgtype.UUID) ([]Task, error) {
@@ -719,6 +725,7 @@ func (q *Queries) ListOpenTasksByProject(ctx context.Context, projectID pgtype.U
 			&i.AdmittedBy,
 			&i.AgentsAllowedAt,
 			&i.AgentsAllowedBy,
+			&i.Automation,
 		); err != nil {
 			return nil, err
 		}
@@ -731,7 +738,7 @@ func (q *Queries) ListOpenTasksByProject(ctx context.Context, projectID pgtype.U
 }
 
 const listOpenTasksWithGates = `-- name: ListOpenTasksWithGates :many
-SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id, t.origin, t.origin_source, t.admitted_at, t.admitted_by, t.agents_allowed_at, t.agents_allowed_by, g.task_id, g.phase, g.checks, g.human_approved_by, g.human_approved_at, g.blocked_reason, g.blocked_by, g.updated_at
+SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id, t.origin, t.origin_source, t.admitted_at, t.admitted_by, t.agents_allowed_at, t.agents_allowed_by, t.automation, g.task_id, g.phase, g.checks, g.human_approved_by, g.human_approved_at, g.blocked_reason, g.blocked_by, g.updated_at
 FROM tasks t
 JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
 JOIN projects p ON p.id = t.project_id AND p.archived_at IS NULL
@@ -780,6 +787,7 @@ func (q *Queries) ListOpenTasksWithGates(ctx context.Context, projectID pgtype.U
 			&i.Task.AdmittedBy,
 			&i.Task.AgentsAllowedAt,
 			&i.Task.AgentsAllowedBy,
+			&i.Task.Automation,
 			&i.Gate.TaskID,
 			&i.Gate.Phase,
 			&i.Gate.Checks,
@@ -800,7 +808,7 @@ func (q *Queries) ListOpenTasksWithGates(ctx context.Context, projectID pgtype.U
 }
 
 const listOpenUnblockedTasks = `-- name: ListOpenUnblockedTasks :many
-SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id, t.origin, t.origin_source, t.admitted_at, t.admitted_by, t.agents_allowed_at, t.agents_allowed_by FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived_at IS NULL
+SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id, t.origin, t.origin_source, t.admitted_at, t.admitted_by, t.agents_allowed_at, t.agents_allowed_by, t.automation FROM tasks t JOIN projects p ON p.id = t.project_id AND p.archived_at IS NULL
 WHERE t.closed_at IS NULL AND t.blocked_reason IS NULL ORDER BY t.phase_entered_at
 `
 
@@ -839,6 +847,7 @@ func (q *Queries) ListOpenUnblockedTasks(ctx context.Context) ([]Task, error) {
 			&i.AdmittedBy,
 			&i.AgentsAllowedAt,
 			&i.AgentsAllowedBy,
+			&i.Automation,
 		); err != nil {
 			return nil, err
 		}
@@ -918,7 +927,7 @@ func (q *Queries) ListRollbackCounts(ctx context.Context) ([]ListRollbackCountsR
 }
 
 const listTasksWithStalePendingChecks = `-- name: ListTasksWithStalePendingChecks :many
-SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id, t.origin, t.origin_source, t.admitted_at, t.admitted_by, t.agents_allowed_at, t.agents_allowed_by FROM tasks t
+SELECT t.id, t.project_id, t.kind, t.title, t.phase, t.urgency, t.owner_kind, t.owner_id, t.requirements_changed, t.blocked_reason, t.source_task_id, t.external_refs, t.phase_entered_at, t.created_at, t.updated_at, t.closed_at, t.description, t.component_id, t.origin, t.origin_source, t.admitted_at, t.admitted_by, t.agents_allowed_at, t.agents_allowed_by, t.automation FROM tasks t
 JOIN gates g ON g.task_id = t.id AND g.phase = t.phase
 WHERE t.closed_at IS NULL
   AND (NOT $1::uuid IS NOT NULL OR t.project_id = $1)
@@ -978,6 +987,7 @@ func (q *Queries) ListTasksWithStalePendingChecks(ctx context.Context, arg ListT
 			&i.Task.AdmittedBy,
 			&i.Task.AgentsAllowedAt,
 			&i.Task.AgentsAllowedBy,
+			&i.Task.Automation,
 		); err != nil {
 			return nil, err
 		}
@@ -991,7 +1001,7 @@ func (q *Queries) ListTasksWithStalePendingChecks(ctx context.Context, arg ListT
 
 const mergeTaskExternalRefs = `-- name: MergeTaskExternalRefs :one
 UPDATE tasks SET external_refs = external_refs || $1::jsonb, updated_at = now()
-WHERE id = $2 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by
+WHERE id = $2 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation
 `
 
 type MergeTaskExternalRefsParams struct {
@@ -1027,12 +1037,13 @@ func (q *Queries) MergeTaskExternalRefs(ctx context.Context, arg MergeTaskExtern
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
 
 const openTasksByTitle = `-- name: OpenTasksByTitle :many
-SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by FROM tasks WHERE project_id = $1 AND kind = $2 AND title = $3 AND closed_at IS NULL
+SELECT id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation FROM tasks WHERE project_id = $1 AND kind = $2 AND title = $3 AND closed_at IS NULL
 `
 
 type OpenTasksByTitleParams struct {
@@ -1077,6 +1088,7 @@ func (q *Queries) OpenTasksByTitle(ctx context.Context, arg OpenTasksByTitlePara
 			&i.AdmittedBy,
 			&i.AgentsAllowedAt,
 			&i.AgentsAllowedBy,
+			&i.Automation,
 		); err != nil {
 			return nil, err
 		}
@@ -1090,7 +1102,7 @@ func (q *Queries) OpenTasksByTitle(ctx context.Context, arg OpenTasksByTitlePara
 
 const reopenTask = `-- name: ReopenTask :one
 UPDATE tasks SET closed_at = NULL, phase_entered_at = now(), updated_at = now()
-WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by
+WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation
 `
 
 // Reopened work enters its phase afresh: the inbox's clock restarts and the autopilot sees an
@@ -1123,6 +1135,7 @@ func (q *Queries) ReopenTask(ctx context.Context, id pgtype.UUID) (Task, error) 
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }
@@ -1267,7 +1280,7 @@ func (q *Queries) TaskWorkedOn(ctx context.Context, taskID pgtype.UUID) (bool, e
 const updateTaskFields = `-- name: UpdateTaskFields :one
 UPDATE tasks SET title = $2, description = $3, urgency = $4, kind = $5, phase = $6,
     phase_entered_at = CASE WHEN phase = $6 THEN phase_entered_at ELSE now() END, updated_at = now()
-WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by
+WHERE id = $1 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation
 `
 
 type UpdateTaskFieldsParams struct {
@@ -1316,6 +1329,7 @@ func (q *Queries) UpdateTaskFields(ctx context.Context, arg UpdateTaskFieldsPara
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }

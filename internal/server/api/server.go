@@ -23,6 +23,7 @@ import (
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/limits"
@@ -39,18 +40,20 @@ import (
 
 // Server implements gen.ServerInterface.
 type Server struct {
-	Pool     *pgxpool.Pool
-	Process  *process.Service
-	Runners  *runners.Manager
-	Plugins  *plugins.Host // nil: plugin endpoints answer 503
-	Quality  *quality.Service
-	Hub      *events.Hub
-	Tokens   auth.Tokens
-	Authz    auth.Authorizer
-	OIDC     *auth.OIDC // nil when not configured
-	DevAuth  bool       // accept X-Gator-User; local development only
-	Features []string
-	Log      *slog.Logger
+	Pool    *pgxpool.Pool
+	Process *process.Service
+	Runners *runners.Manager
+	Plugins *plugins.Host // nil: plugin endpoints answer 503
+	Quality *quality.Service
+	// Automations is the project's catalogue of automations; nil: those endpoints answer 503.
+	Automations *automations.Service
+	Hub         *events.Hub
+	Tokens      auth.Tokens
+	Authz       auth.Authorizer
+	OIDC        *auth.OIDC // nil when not configured
+	DevAuth     bool       // accept X-Gator-User; local development only
+	Features    []string
+	Log         *slog.Logger
 	// RateLimit applies per token (or IP when anonymous). Zero disables.
 	RateLimitPerSecond float64
 	RateLimitBurst     int

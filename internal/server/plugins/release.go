@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/plugin"
@@ -113,11 +114,22 @@ func (i *instance) upsertIncident(ctx context.Context, q *db.Queries, p plugin.I
 	if !row.IsNew && row.TaskID.Valid {
 		return out, nil // already someone's problem
 	}
+	// With error triage on, the task is created with an agent's consent already given by the
+	// person who switched it on, so autopilot starts on it at once. Off, it waits for a person.
+	triage, err := i.h.cfg.Automations.IncidentAutomation(ctx, i.b.projectID, row.ID)
+	if err != nil {
+		return out, err
+	}
+	description := incidentDescription(p, int(row.Count))
+	if triage != nil {
+		description += "\n\n" + automations.TriageNote
+	}
 	task, err := i.h.proc.Create(ctx, process.CreateParams{
 		ProjectID: i.b.projectID, Kind: "incident", Title: title,
-		Description:  incidentDescription(p, int(row.Count)),
+		Description:  description,
 		Urgency:      int16(urgencyFor(severity)),
 		OriginSource: i.b.name,
+		Automation:   triage,
 	}, process.Actor{Kind: process.ActorPlugin})
 	if err != nil {
 		return out, plugin.Errorf(plugin.CodeInvalidParams, "%v", err)

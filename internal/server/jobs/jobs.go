@@ -154,6 +154,33 @@ func (w *CondenseProductWorker) Work(ctx context.Context, _ *river.Job[CondenseP
 	return err
 }
 
+// RunAutomationsArgs runs the weekly automations that are due.
+type RunAutomationsArgs struct{}
+
+func (RunAutomationsArgs) Kind() string { return "run_automations" }
+
+// AutomationRunner is the automations service; the interface keeps this package off it.
+type AutomationRunner interface {
+	RunScheduled(ctx context.Context, now time.Time) (int, error)
+}
+
+// RunAutomationsWorker looks for weekly automations whose moment has come. Each week's run is
+// recorded with the task it made, so a tick that comes twice, or after a restart, does nothing.
+type RunAutomationsWorker struct {
+	river.WorkerDefaults[RunAutomationsArgs]
+	Automations AutomationRunner
+	Log         *slog.Logger
+}
+
+// Work implements river.Worker.
+func (w *RunAutomationsWorker) Work(ctx context.Context, _ *river.Job[RunAutomationsArgs]) error {
+	n, err := w.Automations.RunScheduled(ctx, time.Now())
+	if n > 0 {
+		w.Log.Info("ran weekly automations", "runs", n)
+	}
+	return err
+}
+
 // BackupArgs is the periodic database backup.
 type BackupArgs struct{}
 
@@ -194,6 +221,8 @@ type Options struct {
 	Quality QualityScorer
 	// Product condenses a project's product context once it outgrows a prompt. Optional.
 	Product ProductCondenser
+	// Automations runs the weekly automations. Optional.
+	Automations AutomationRunner
 	// Intervals; zero picks the defaults (1m sweep, 1h backup, 5m reconcile of checks that
 	// have not moved for 15m).
 	ExpireEvery    time.Duration
@@ -203,6 +232,7 @@ type Options struct {
 	SettleEvery    time.Duration
 	QualityEvery   time.Duration
 	CondenseEvery  time.Duration
+	AutomateEvery  time.Duration
 }
 
 // every schedules args on an interval. A run still queued or in flight is not queued again.
@@ -261,6 +291,15 @@ func New(o Options) (*river.Client[pgx.Tx], error) {
 		}
 		river.AddWorker(workers, &CondenseProductWorker{Product: o.Product, Log: o.Log})
 		periodic = append(periodic, every(o.CondenseEvery, CondenseProductArgs{}, false))
+	}
+	if o.Automations != nil {
+		if o.AutomateEvery == 0 {
+			// Often enough that a weekly run lands within minutes of its hour, and on start, so
+			// a server that was down at that hour catches up as soon as it is back.
+			o.AutomateEvery = 10 * time.Minute
+		}
+		river.AddWorker(workers, &RunAutomationsWorker{Automations: o.Automations, Log: o.Log})
+		periodic = append(periodic, every(o.AutomateEvery, RunAutomationsArgs{}, true))
 	}
 	if o.Backup.Enabled() {
 		river.AddWorker(workers, &BackupWorker{Config: o.Backup, DatabaseURL: o.DatabaseURL, Log: o.Log})
