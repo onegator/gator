@@ -197,8 +197,10 @@ func (s *Service) Set(ctx context.Context, projectID pgtype.UUID, key string, c 
 	}
 	q := db.New(s.pool)
 	var settings Settings
+	wasOn := false
 	if row, err := q.GetProjectAutomation(ctx, db.GetProjectAutomationParams{ProjectID: projectID, Key: key}); err == nil {
 		_ = json.Unmarshal(row.Settings, &settings)
+		wasOn = row.Enabled && row.EnabledBy.Valid
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return View{}, err
 	}
@@ -211,7 +213,9 @@ func (s *Service) Set(ctx context.Context, projectID pgtype.UUID, key string, c 
 	}
 	raw, _ := json.Marshal(settings)
 	if c.Enabled {
-		if d.UsesAgents && !c.AllowAgents {
+		// Changing the day of one already on keeps the consent it was switched on with, and the
+		// person who gave it; only switching it on asks.
+		if d.UsesAgents && !c.AllowAgents && !wasOn {
 			return View{}, ErrConsentRequired
 		}
 		if !by.Valid {

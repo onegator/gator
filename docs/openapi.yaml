@@ -638,7 +638,8 @@ paths:
         task it creates, and needs allowAgents true: 409 consent_required otherwise. Those tasks are
         created with agentsAllowedBy set to that person and, when their words come from outside
         the workspace, admitted by them too. 409 automation_unavailable while the project lacks
-        what it needs (see unavailableReason). Switching off stops new tasks; tasks already made
+        what it needs (see unavailableReason). Changing the settings of one already on needs no
+        allowAgents and keeps who switched it on. Switching off stops new tasks; tasks already made
         keep their consent. Project admins only.
       parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/automationKey" } ]
       requestBody:

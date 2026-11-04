@@ -203,6 +203,17 @@ func TestAWeeklyScanRunsOncePerWeek(t *testing.T) {
 		t.Fatalf("the card says when it runs next: %+v", a.NextRunAt)
 	}
 
+	// Changing the day of a scan that is on does not ask again, and keeps who switched it on.
+	thursday := "thursday"
+	var changed gen.Automation
+	if code := h.do("PUT", "/projects/"+pid+"/automations/dependency_scan", gen.AutomationChange{Enabled: true,
+		Settings: &gen.AutomationSettings{Weekday: &thursday}}, &changed); code != 200 || *changed.Settings.Weekday != "thursday" ||
+		changed.EnabledBy == nil || a.EnabledBy == nil || changed.EnabledBy.String() != a.EnabledBy.String() {
+		t.Fatalf("changing the day: %d %+v", code, changed)
+	}
+	h.do("PUT", "/projects/"+pid+"/automations/dependency_scan", gen.AutomationChange{Enabled: true,
+		Settings: &gen.AutomationSettings{Weekday: &wednesday}}, nil)
+
 	ctx := context.Background()
 	run := func(at time.Time) {
 		if _, err := h.autos.RunScheduled(ctx, at); err != nil {
