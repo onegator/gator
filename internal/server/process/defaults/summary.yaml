@@ -1,0 +1,6 @@
+kind: summary
+max_rollbacks: 0
+phases:
+  # A week of a project in a few lines, written by the server from what it already knows: no
+  # agent, nothing to approve. A person reads it and closes it; next week's replaces it if not.
+  - { name: reading, owner: human, gate: human, timeout: 0 }

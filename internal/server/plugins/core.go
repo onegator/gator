@@ -228,6 +228,15 @@ func (i *instance) core(ctx context.Context, method string, raw json.RawMessage)
 			return nil, err
 		}
 		return i.upsertIncident(ctx, q, p)
+	case plugin.CoreReviewRequest:
+		p, err := decode[plugin.ReviewRequestParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		if i.h.cfg.Automations == nil {
+			return plugin.ReviewRequestResult{Tasks: []plugin.ReviewTask{}}, nil
+		}
+		return i.h.cfg.Automations.RequestReview(ctx, i.b.projectID, i.b.name, p)
 	case plugin.CoreIncidentClose:
 		p, err := decode[plugin.IncidentCloseParams](raw)
 		if err != nil {

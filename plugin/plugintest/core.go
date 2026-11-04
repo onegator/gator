@@ -18,7 +18,8 @@ import (
 )
 
 // firstPhase mirrors the server's default templates.
-var firstPhase = map[string]string{"feature": "idea", "bug": "planning", "incident": "implementation", "chore": "implementation"}
+var firstPhase = map[string]string{"feature": "idea", "bug": "planning", "incident": "implementation", "chore": "implementation",
+	"review": "review", "security_review": "review", "summary": "reading"}
 
 // Task is a task in the fake core.
 type Task struct {
@@ -406,6 +407,17 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 		inc := &Incident{IncidentUpsertParams: p, ID: newID(), Count: 1, TaskID: task.ID}
 		c.incidents[p.Fingerprint] = inc
 		return plugin.IncidentUpsertResult{IncidentID: inc.ID, TaskID: inc.TaskID, Created: true}, nil
+	case plugin.CoreReviewRequest:
+		p, err := decode[plugin.ReviewRequestParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(p.Ref) == "" || strings.TrimSpace(p.Revision) == "" || p.RefKey == "" {
+			return nil, plugin.Errorf(plugin.CodeInvalidParams, "a review request needs a ref, a revision and a ref_key")
+		}
+		// Whether a review task opens depends on the project's automations, which this core
+		// does not have: it answers as a project with none switched on. The call is recorded.
+		return plugin.ReviewRequestResult{Tasks: []plugin.ReviewTask{}}, nil
 	case plugin.CoreIncidentClose:
 		p, err := decode[plugin.IncidentCloseParams](raw)
 		if err != nil {

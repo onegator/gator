@@ -618,6 +618,38 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPlugin" } } } }
         "400": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/automations:
+    get:
+      operationId: listProjectAutomations
+      description: >-
+        The automations Gator ships, each with this project's state: whether it is on, its
+        settings, whether the project has what it needs, and its last run. A fixed catalogue;
+        every one is off until a project admin switches it on. Anyone who can read the project.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Automation" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/automations/{automationKey}:
+    put:
+      operationId: setProjectAutomation
+      description: >-
+        Switches an automation on or off, or changes its settings. Switching on one that puts
+        agents to work (usesAgents) is the person allowing agents to work without asking on every
+        task it creates, and needs allowAgents true: 409 consent_required otherwise. Those tasks are
+        created with agentsAllowedBy set to that person and, when their words come from outside
+        the workspace, admitted by them too. 409 automation_unavailable while the project lacks
+        what it needs (see unavailableReason). Switching off stops new tasks; tasks already made
+        keep their consent. Project admins only.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/automationKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AutomationChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Automation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/plugins/{pluginName}/connect:
     post:
       operationId: connectProjectPlugin
@@ -1039,6 +1071,7 @@ components:
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
     pluginName: { name: pluginName, in: path, required: true, schema: { type: string } }
     invitationId: { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
+    automationKey: { name: automationKey, in: path, required: true, schema: { type: string } }
   responses:
     Error:
       description: error
@@ -1856,6 +1889,39 @@ components:
         text: { type: string }
         color: { type: string }
         url: { type: string }
+    Automation:
+      type: object
+      required: [key, title, summary, creates, trigger, needs, usesAgents, available, enabled, settings]
+      properties:
+        key: { type: string, description: "pr_review, security_review, dependency_scan, error_triage or weekly_summary; more may come, so clients show what they do not know by its title" }
+        title: { type: string }
+        summary: { type: string, description: one line for the card }
+        creates: { type: string, description: "what switching it on will create, in a sentence or two" }
+        trigger: { type: string, description: "pull_request, weekly or incident" }
+        needs: { type: string, description: "what the project must have first: github, monitoring, repository, or empty for nothing" }
+        usesAgents: { type: boolean, description: "its tasks are worked on by agents, so switching it on needs allowAgents" }
+        available: { type: boolean, description: the project has what it needs }
+        unavailableReason: { type: string, description: "what to do first, when not available" }
+        enabled: { type: boolean }
+        settings: { $ref: "#/components/schemas/AutomationSettings" }
+        enabledBy: { type: string, format: uuid, description: "who switched it on: the person the tasks it creates name as having allowed agents" }
+        enabledByName: { type: string }
+        enabledAt: { type: string, format: date-time }
+        lastRunAt: { type: string, format: date-time, description: when it last created a task }
+        lastError: { type: string, description: "why the last run, or the last job of one of its tasks, failed; absent when it did not" }
+        lastTaskId: { type: string, format: uuid, description: "the newest task it created, such as the latest weekly summary" }
+        nextRunAt: { type: string, format: date-time, description: when a weekly automation that is on runs next }
+    AutomationSettings:
+      type: object
+      properties:
+        weekday: { type: string, description: "weekly automations: the day they run on, monday to sunday (09:00 UTC)" }
+    AutomationChange:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        settings: { $ref: "#/components/schemas/AutomationSettings" }
+        allowAgents: { type: boolean, description: "the person allows agents to work without asking on the tasks this automation creates; required to switch on one that uses agents" }
     NewTask:
       type: object
       required: [kind, title]
@@ -1904,6 +1970,7 @@ components:
         admittedAt: { type: string, format: date-time, description: "when a person let outside work through; until then nothing runs on it by itself" }
         agentsAllowedAt: { type: string, format: date-time, description: "when a person allowed agents to work on this task without asking; until then no job starts on it. Tasks that had a job before this was asked carry their first job's time and no agentsAllowedBy" }
         agentsAllowedBy: { type: string, format: uuid, description: "the person who allowed agents on this task" }
+        automation: { type: string, description: "the key of the automation that created this task, such as pr_review; absent for tasks a person or a plugin created" }
         phase: { type: string }
         urgency: { type: integer }
         ownerKind: { type: string }

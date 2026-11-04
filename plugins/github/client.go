@@ -44,13 +44,31 @@ func (e *APIError) Error() string {
 type PR struct {
 	Number  int    `json:"number"`
 	Title   string `json:"title"`
+	Body    string `json:"body"`
 	State   string `json:"state"`
 	HTMLURL string `json:"html_url"`
 	Merged  bool   `json:"merged"`
-	Head    struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
+	Draft   bool   `json:"draft"`
+	User    struct {
+		Login string `json:"login"`
+		Type  string `json:"type"` // User | Bot
+	} `json:"user"`
+	Head struct {
+		Ref  string `json:"ref"`
+		SHA  string `json:"sha"`
+		Repo struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+}
+
+// Review is a pull request review GitHub stored.
+type Review struct {
+	ID      int64  `json:"id"`
+	HTMLURL string `json:"html_url"`
 }
 
 // CheckRun is one CI check on a commit.
@@ -129,6 +147,14 @@ func (c *Client) CreatePR(ctx context.Context, title, head, base, body string) (
 	var pr PR
 	err := c.do(ctx, http.MethodPost, c.repo()+"/pulls", map[string]string{"title": title, "head": head, "base": base, "body": body}, &pr)
 	return pr, err
+}
+
+// CommentReview posts a review that neither approves nor asks for changes: a reader's notes,
+// which is all an agent's opinion should be on somebody else's pull request.
+func (c *Client) CommentReview(ctx context.Context, number int, body string) (Review, error) {
+	var r Review
+	err := c.do(ctx, http.MethodPost, fmt.Sprintf("%s/pulls/%d/reviews", c.repo(), number), map[string]string{"body": body, "event": "COMMENT"}, &r)
+	return r, err
 }
 
 // FindOpenPR returns the open pull request from branch, or nil.

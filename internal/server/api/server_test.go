@@ -19,6 +19,7 @@ import (
 
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
@@ -81,7 +82,8 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(cancel)
 	go relay.Run(rctx)
 	s := &Server{Pool: pool, Process: svc, Hub: hub, Features: []string{"inbox"}, Log: slog.Default(),
-		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
+		Automations: automations.New(pool, svc, hub, slog.Default()),
+		Tokens:      auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
 	srv := httptest.NewServer(s.Router())
 	t.Cleanup(srv.Close)
 	h := &harness{t: t, srv: srv, pool: pool, relay: relay, api: s}

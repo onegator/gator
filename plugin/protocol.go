@@ -53,6 +53,7 @@ const (
 	CoreIncidentUpsert = "incident.upsert" // M6
 	CoreIncidentClose  = "incident.close"  // M6
 	CoreReleaseRecord  = "release.record"  // M6
+	CoreReviewRequest  = "review.request"
 	CoreKVGet          = "kv.get"
 	CoreKVPut          = "kv.put"
 	CoreLog            = "log"
@@ -410,6 +411,39 @@ type QualityCheck struct {
 	Status    string `json:"status"` // pass | fail | unknown
 	Detail    string `json:"detail,omitempty"`
 	Weight    int    `json:"weight,omitempty"` // default 1
+}
+
+// ReviewRequestParams tells the core that somebody's change is waiting to be read: a pull request
+// a person opened or pushed to. The plugin says what happened; the core decides what to do about
+// it. A project with a review automation switched on gets a review task, one per automation and
+// revision, and nothing happens otherwise. A plugin never reports a change Gator made itself.
+type ReviewRequestParams struct {
+	// Ref names the change across pushes, in the plugin's own form: owner/name#12.
+	Ref string `json:"ref"`
+	// Revision is the commit proposed now. A redelivered event for the same one does nothing.
+	Revision    string `json:"revision"`
+	Title       string `json:"title"`
+	URL         string `json:"url,omitempty"`
+	Description string `json:"description,omitempty"` // the author's words, which reach the agent as data
+	Author      string `json:"author,omitempty"`
+	BaseBranch  string `json:"base_branch,omitempty"`
+	HeadBranch  string `json:"head_branch,omitempty"`
+	// RefKey is the external reference the review task carries Ref under, so the plugin finds
+	// the task again when the job finishes. ExternalRefs are added to the task as well.
+	RefKey       string            `json:"ref_key"`
+	ExternalRefs map[string]string `json:"external_refs,omitempty"`
+}
+
+// ReviewRequestResult lists the review tasks the request opened; empty when no review
+// automation is on, or every one already has this revision.
+type ReviewRequestResult struct {
+	Tasks []ReviewTask `json:"tasks"`
+}
+
+// ReviewTask is one review a request opened.
+type ReviewTask struct {
+	Automation string `json:"automation"` // pr_review | security_review
+	TaskID     string `json:"task_id"`
 }
 
 // TaskCreateParams creates a task in the plugin's project, in its template's first phase.

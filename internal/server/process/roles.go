@@ -238,7 +238,7 @@ func ArtifactTypeFor(role string) string {
 		return "brief"
 	case "planner":
 		return "plan"
-	case "reviewer":
+	case "reviewer", "security_reviewer":
 		return "review"
 	default:
 		return "report"

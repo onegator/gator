@@ -39,7 +39,7 @@ func toTask(t db.Task) gen.Task {
 		AgentsAllowedAt: timePtr(t.AgentsAllowedAt), AgentsAllowedBy: toUUIDPtr(t.AgentsAllowedBy),
 		Urgency: int(t.Urgency), OwnerKind: t.OwnerKind, OwnerId: toUUIDPtr(t.OwnerID),
 		RequirementsChanged: t.RequirementsChanged, BlockedReason: t.BlockedReason,
-		PhaseEnteredAt: t.PhaseEnteredAt.Time, CreatedAt: t.CreatedAt.Time,
+		PhaseEnteredAt: t.PhaseEnteredAt.Time, CreatedAt: t.CreatedAt.Time, Automation: t.Automation,
 	}
 	if t.ClosedAt.Valid {
 		c := t.ClosedAt.Time
@@ -78,7 +78,7 @@ func toDetail(d process.Detail) gen.TaskDetail {
 		OwnerKind: t.OwnerKind, OwnerId: t.OwnerId, RequirementsChanged: t.RequirementsChanged,
 		BlockedReason: t.BlockedReason, PhaseEnteredAt: t.PhaseEnteredAt, CreatedAt: t.CreatedAt, ClosedAt: t.ClosedAt,
 		Origin: (*gen.TaskDetailOrigin)(t.Origin), OriginSource: t.OriginSource, AdmittedAt: t.AdmittedAt,
-		AgentsAllowedAt: t.AgentsAllowedAt, AgentsAllowedBy: t.AgentsAllowedBy,
+		AgentsAllowedAt: t.AgentsAllowedAt, AgentsAllowedBy: t.AgentsAllowedBy, Automation: t.Automation,
 		Gate: toGate(d.Gate, d.Phase), Phases: phases,
 	}
 }

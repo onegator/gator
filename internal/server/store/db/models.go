@@ -55,6 +55,15 @@ type AuditLog struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type AutomationRun struct {
+	ID         pgtype.UUID        `json:"id"`
+	ProjectID  pgtype.UUID        `json:"project_id"`
+	Automation string             `json:"automation"`
+	Subject    string             `json:"subject"`
+	TaskID     pgtype.UUID        `json:"task_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type CampaignTarget struct {
 	ID         pgtype.UUID        `json:"id"`
 	CampaignID pgtype.UUID        `json:"campaign_id"`
@@ -332,6 +341,18 @@ type Project struct {
 	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
 }
 
+type ProjectAutomation struct {
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Key       string             `json:"key"`
+	Enabled   bool               `json:"enabled"`
+	Settings  []byte             `json:"settings"`
+	EnabledBy pgtype.UUID        `json:"enabled_by"`
+	EnabledAt pgtype.Timestamptz `json:"enabled_at"`
+	LastRunAt pgtype.Timestamptz `json:"last_run_at"`
+	LastError string             `json:"last_error"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ProjectInvitation struct {
 	ID         pgtype.UUID        `json:"id"`
 	ProjectID  pgtype.UUID        `json:"project_id"`
@@ -479,6 +500,7 @@ type Task struct {
 	AdmittedBy          pgtype.UUID        `json:"admitted_by"`
 	AgentsAllowedAt     pgtype.Timestamptz `json:"agents_allowed_at"`
 	AgentsAllowedBy     pgtype.UUID        `json:"agents_allowed_by"`
+	Automation          *string            `json:"automation"`
 }
 
 type UsageRecord struct {

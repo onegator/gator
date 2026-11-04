@@ -296,6 +296,14 @@ func (c *Core) ReportIncident(ctx context.Context, p IncidentUpsertParams) (Inci
 	return out, err
 }
 
+// RequestReview reports a change somebody else made, such as a pull request a person opened. The
+// core opens review tasks for it when the project has a review automation switched on.
+func (c *Core) RequestReview(ctx context.Context, p ReviewRequestParams) (ReviewRequestResult, error) {
+	var out ReviewRequestResult
+	err := c.conn.Call(ctx, CoreReviewRequest, p, &out)
+	return out, err
+}
+
 // CloseIncident says a fault has stopped: production is all right again. Closing one that is
 // already closed changes nothing, because a monitoring tool may say so more than once.
 func (c *Core) CloseIncident(ctx context.Context, p IncidentCloseParams) error {

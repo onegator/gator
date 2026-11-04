@@ -24,7 +24,7 @@ func main() {
 	}
 	err := plugin.Serve(plugin.Handlers{
 		Manifest: plugin.Manifest{
-			Name: name, Version: "1.0.0", Capabilities: []string{"ci", "deploy"}, UI: []string{"tab", "chip"},
+			Name: name, Version: "1.0.0", Capabilities: []string{"ci", "deploy", "vcs", "monitoring"}, UI: []string{"tab", "chip"},
 			Description: "Says what it hears.",
 			ConfigSchema: json.RawMessage(`{"type":"object","properties":{
 				"greeting":{"type":"string"},
@@ -81,9 +81,10 @@ func main() {
 					Severity    string `json:"severity"`
 					Version     string `json:"version"`
 				} `json:"incident"`
-				Resolve string `json:"resolve"` // fingerprint of a fault that has stopped
-				Close   string `json:"close"`   // task ids
-				Reopen  string `json:"reopen"`
+				Review  *plugin.ReviewRequestParams `json:"review"`
+				Resolve string                      `json:"resolve"` // fingerprint of a fault that has stopped
+				Close   string                      `json:"close"`   // task ids
+				Reopen  string                      `json:"reopen"`
 				Retitle *struct {
 					Task, Title, Description string
 				} `json:"retitle"`
@@ -113,6 +114,9 @@ func main() {
 				return err
 			case b.Retitle != nil:
 				_, err := core.UpdateTask(ctx, plugin.TaskUpdateParams{TaskID: b.Retitle.Task, Title: &b.Retitle.Title, Description: &b.Retitle.Description})
+				return err
+			case b.Review != nil:
+				_, err := core.RequestReview(ctx, *b.Review)
 				return err
 			case b.Resolve != "":
 				return core.CloseIncident(ctx, plugin.IncidentCloseParams{Fingerprint: b.Resolve})
@@ -162,6 +166,11 @@ func main() {
 			return plugin.TurnEndingResult{}, nil
 		},
 		JobFinish: func(ctx context.Context, core *plugin.Core, p plugin.JobFinishParams) error {
+			if p.Task.ExternalRefs["echo_review"] != "" {
+				// What the GitHub plugin does with a finished review, minus GitHub.
+				_, err := core.CloseTask(ctx, p.Task.ID, "the review is posted")
+				return err
+			}
 			_, err := core.PutArtifact(ctx, plugin.ArtifactPutParams{TaskID: p.Task.ID, Type: "echo-note", Content: "job " + p.Job.ID + " " + p.Job.Status})
 			return err
 		},

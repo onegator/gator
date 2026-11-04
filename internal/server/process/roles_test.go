@@ -11,7 +11,7 @@ import (
 )
 
 func TestDefaultRoleGuides(t *testing.T) {
-	for _, role := range []string{"researcher", "planner", "worker", "reviewer"} {
+	for _, role := range []string{"researcher", "planner", "worker", "reviewer", "security_reviewer"} {
 		g := DefaultRoleGuide(role)
 		if !strings.Contains(g, "# Role: "+role) || !strings.Contains(g, "## ") {
 			t.Errorf("%s guide missing or without output sections", role)
@@ -20,7 +20,7 @@ func TestDefaultRoleGuides(t *testing.T) {
 	if DefaultRoleGuide("astronaut") != "" {
 		t.Error("unknown role should have no guide")
 	}
-	for role, want := range map[string]string{"researcher": "brief", "planner": "plan", "worker": "report", "reviewer": "review"} {
+	for role, want := range map[string]string{"researcher": "brief", "planner": "plan", "worker": "report", "reviewer": "review", "security_reviewer": "review"} {
 		if got := ArtifactTypeFor(role); got != want {
 			t.Errorf("%s produces %s, want %s", role, got, want)
 		}

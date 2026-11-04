@@ -541,7 +541,7 @@ func (q *Queries) SetJobContextSize(ctx context.Context, arg SetJobContextSizePa
 
 const setTaskComponent = `-- name: SetTaskComponent :one
 UPDATE tasks SET component_id = $1, updated_at = now()
-WHERE id = $2 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by
+WHERE id = $2 RETURNING id, project_id, kind, title, phase, urgency, owner_kind, owner_id, requirements_changed, blocked_reason, source_task_id, external_refs, phase_entered_at, created_at, updated_at, closed_at, description, component_id, origin, origin_source, admitted_at, admitted_by, agents_allowed_at, agents_allowed_by, automation
 `
 
 type SetTaskComponentParams struct {
@@ -577,6 +577,7 @@ func (q *Queries) SetTaskComponent(ctx context.Context, arg SetTaskComponentPara
 		&i.AdmittedBy,
 		&i.AgentsAllowedAt,
 		&i.AgentsAllowedBy,
+		&i.Automation,
 	)
 	return i, err
 }

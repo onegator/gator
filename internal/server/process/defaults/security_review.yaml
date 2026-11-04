@@ -1,0 +1,6 @@
+kind: security_review
+max_rollbacks: 0
+phases:
+  # The same as a review, read by an agent looking only for what an attacker could use. Opened by
+  # the Security review automation; the GitHub plugin posts the result and closes the task.
+  - { name: review, owner: runner, role: security_reviewer, gate: human, timeout: 6h }

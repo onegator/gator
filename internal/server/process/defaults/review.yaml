@@ -1,0 +1,7 @@
+kind: review
+max_rollbacks: 0
+phases:
+  # Somebody's pull request, read by an agent before a person does. The PR review automation
+  # opens it; the GitHub plugin posts what the agent wrote on the pull request and closes the
+  # task. If posting fails, the review is still here to read and a person closes it.
+  - { name: review, owner: runner, role: reviewer, gate: human, timeout: 6h }

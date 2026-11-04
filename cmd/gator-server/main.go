@@ -18,6 +18,7 @@ import (
 	"github.com/onegator/gator/internal/server/admin"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/backup"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/events"
@@ -135,7 +136,10 @@ func serve(ctx context.Context) error {
 	hub := events.NewHub()
 	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
 	go relay.Run(ctx)
-	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL}
+	// The catalogue of things Gator does for a project by itself once a person switches them on.
+	autos := automations.New(db.Pool, svc, hub, log)
+	go autos.Run(ctx)
+	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos}
 	pluginCfg.LoadEnv()
 	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
@@ -157,7 +161,7 @@ func serve(ctx context.Context) error {
 	bc := backup.LoadConfig()
 	scorecards := quality.New(db.Pool, svc, pluginHost, log)
 	queue, err := jobs.New(jobs.Options{Pool: db.Pool, Process: svc, Backup: bc, DatabaseURL: cfg.DatabaseURL,
-		Plugins: pluginHost, Releases: pluginHost, Quality: scorecards, Product: condenser, Log: log})
+		Plugins: pluginHost, Releases: pluginHost, Quality: scorecards, Product: condenser, Automations: autos, Log: log})
 	if err != nil {
 		return err
 	}
@@ -198,8 +202,8 @@ func serve(ctx context.Context) error {
 
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
-		Quality: scorecards,
-		Tokens:  auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
+		Quality: scorecards, Automations: autos,
+		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
 		PublicURL: cfg.PublicURL,
 	}

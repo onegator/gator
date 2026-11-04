@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,15 @@ const (
 	refPR       = "github_pr"        // owner/name#34
 	refPRURL    = "github_pr_url"    //
 	refBranch   = "github_branch"    // the job's branch
+	// A review task is about somebody else's pull request, so it keeps it under keys of its own:
+	// github_pr would make the plugin treat the pull request as the task's work.
+	refReviewPR    = "github_review_pr"     // owner/name#34
+	refReviewPRURL = "github_review_pr_url" //
+	refReviewSHA   = "github_review_sha"    // the commit the review was asked for
 )
+
+// gatorBranchPrefix starts every branch a Gator job pushes.
+const gatorBranchPrefix = "gator/"
 
 const configSchema = `{"type":"object","properties":{
 	"repo":{"type":"string","title":"Repository","description":"owner/name of the repository"},
@@ -38,9 +47,9 @@ const configSchema = `{"type":"object","properties":{
 
 var manifest = plugin.Manifest{
 	Name:    "github",
-	Version: "0.2.0",
+	Version: "0.3.0",
 	Description: "Issues become tasks and follow them both ways, finished work opens a pull request, " +
-		"and CI results gate the phase.",
+		"CI results gate the phase, and pull requests people open can be reviewed by an agent.",
 	Capabilities: []string{"tracker", "vcs", "ci"},
 	UI:           []string{"tab", "chip"},
 	ConfigSchema: json.RawMessage(configSchema),
@@ -379,8 +388,12 @@ func (g *gh) onPullRequest(ctx context.Context, core *plugin.Core, repo, action 
 	if err == nil && t == nil && pr.Head.Ref != "" {
 		t, err = core.FindTask(ctx, refBranch, pr.Head.Ref)
 	}
-	if err != nil || t == nil {
-		return err // not a pull request Gator knows
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		// Not Gator's work: somebody's pull request, which a review automation may want to read.
+		return g.requestReview(ctx, core, repo, action, pr)
 	}
 	if t.ExternalRefs[refPR] != ref {
 		if _, err := core.UpdateTask(ctx, plugin.TaskUpdateParams{TaskID: t.ID, ExternalRefs: map[string]string{refPR: ref, refPRURL: pr.HTMLURL}}); err != nil {
@@ -398,6 +411,96 @@ func (g *gh) onPullRequest(ctx context.Context, core *plugin.Core, repo, action 
 		return err
 	}
 	return nil
+}
+
+// reviewActions are the pull request events that put a new revision in front of a reader.
+var reviewActions = []string{"opened", "reopened", "synchronize", "ready_for_review"}
+
+// requestReview tells the core about a pull request a person opened or pushed to. The core opens
+// a review task when the project has a review automation on, and does nothing otherwise. Gator's
+// own pull requests are never sent: their branch is a job's (which tells them apart even before
+// the job's task knows its pull request), and reviewing them is the Verification phase's work.
+// Drafts wait until they are ready, bots are not people, and a fork's pull request is left out:
+// its author has no access to this repository, and their words would reach an agent that has.
+func (g *gh) requestReview(ctx context.Context, core *plugin.Core, repo, action string, pr PR) error {
+	switch {
+	case !slices.Contains(reviewActions, action), pr.Number == 0, pr.Head.SHA == "", pr.Draft, prState(pr) != "open",
+		strings.HasPrefix(pr.Head.Ref, gatorBranchPrefix), strings.EqualFold(pr.User.Type, "Bot"),
+		pr.Head.Repo.FullName != "" && !strings.EqualFold(pr.Head.Repo.FullName, repo):
+		return nil
+	}
+	_, err := core.RequestReview(ctx, plugin.ReviewRequestParams{
+		Ref: refFor(repo, pr.Number), Revision: pr.Head.SHA, Title: pr.Title, URL: pr.HTMLURL, Description: pr.Body,
+		Author: pr.User.Login, BaseBranch: pr.Base.Ref, HeadBranch: pr.Head.Ref, RefKey: refReviewPR,
+		ExternalRefs: map[string]string{refReviewPRURL: pr.HTMLURL, refReviewSHA: pr.Head.SHA},
+	})
+	return err
+}
+
+// reviewRoles are the roles whose report is a review.
+var reviewRoles = []string{"reviewer", "security_reviewer"}
+
+// postReview puts a finished review on the pull request it was asked for, as a comment review,
+// and closes the task: its work is done once the author can read it. A job's review is posted
+// once, however often its finish is delivered.
+func (g *gh) postReview(ctx context.Context, core *plugin.Core, p plugin.JobFinishParams, ref string) error {
+	var r struct {
+		Status  string `json:"status"`
+		Summary string `json:"summary"`
+	}
+	_ = json.Unmarshal(p.Receipt, &r)
+	summary := strings.TrimSpace(r.Summary)
+	if !slices.Contains(reviewRoles, p.Job.Role) || r.Status != "done" || summary == "" {
+		return nil
+	}
+	n, ok := refNumber(ref, core.Setting("repo"))
+	if !ok {
+		return nil
+	}
+	key := "review:" + p.Job.ID
+	var posted string
+	if found, err := core.KVGet(ctx, key, &posted); err != nil || found {
+		return err
+	}
+	review, err := g.client(core).CommentReview(ctx, n, reviewBody(p, summary))
+	if err != nil {
+		return asPluginErr(err)
+	}
+	if err := core.KVPut(ctx, key, review.HTMLURL); err != nil {
+		return err
+	}
+	if _, err := core.PutArtifact(ctx, plugin.ArtifactPutParams{TaskID: p.Task.ID, Type: "pull_request_review", URL: review.HTMLURL,
+		Content: fmt.Sprintf("Posted on PR #%d.", n)}); err != nil {
+		return err
+	}
+	_, err = core.CloseTask(ctx, p.Task.ID, fmt.Sprintf("the review is posted on pull request #%d", n))
+	return err
+}
+
+// reviewBody is the agent's review and who wrote it. GitHub caps bodies at 65536 characters.
+func reviewBody(p plugin.JobFinishParams, summary string) string {
+	if len(summary) > 60000 {
+		summary = summary[:60000] + "\n\n_Review truncated._"
+	}
+	who := "PR review"
+	if p.Task.Kind == "security_review" {
+		who = "Security review"
+	}
+	var b strings.Builder
+	b.WriteString(summary)
+	fmt.Fprintf(&b, "\n\n---\n%s by a Gator agent", who)
+	if sha := p.Task.ExternalRefs[refReviewSHA]; sha != "" {
+		fmt.Fprintf(&b, ", asked for at %s", shortSHA(sha))
+	}
+	fmt.Fprintf(&b, " (task `%s`, job `%s`). It reads the change and comments; it does not approve or block it.", p.Task.ID, p.Job.ID)
+	return b.String()
+}
+
+func shortSHA(s string) string {
+	if len(s) > 7 {
+		return s[:7]
+	}
+	return s
 }
 
 func (g *gh) onCheckRun(ctx context.Context, core *plugin.Core, repo string, body []byte) error {
@@ -433,6 +536,9 @@ func (g *gh) jobFinish(ctx context.Context, core *plugin.Core, p plugin.JobFinis
 		Summary string   `json:"summary"`
 	}
 	_ = json.Unmarshal(p.Receipt, &r)
+	if ref := p.Task.ExternalRefs[refReviewPR]; ref != "" {
+		return g.postReview(ctx, core, p, ref)
+	}
 	if p.Job.Role != "worker" || r.Status != "done" || r.Branch == "" || len(r.Commits) == 0 {
 		return nil // only finished work with commits becomes a pull request
 	}
@@ -569,6 +675,11 @@ func (g *gh) renderUI(ctx context.Context, core *plugin.Core, p plugin.RenderUIP
 	}
 	if b := p.Task.ExternalRefs[refBranch]; b != "" {
 		lines = append(lines, "- Branch: `"+b+"`")
+	}
+	if n, ok := refNumber(p.Task.ExternalRefs[refReviewPR], repo); ok {
+		u := p.Task.ExternalRefs[refReviewPRURL]
+		lines = append(lines, fmt.Sprintf("- Reviewing: [%s#%d](%s) at `%s`", repo, n, u, shortSHA(p.Task.ExternalRefs[refReviewSHA])))
+		out.Chips = append(out.Chips, plugin.Chip{Text: fmt.Sprintf("PR #%d", n), URL: u})
 	}
 	if len(lines) > 0 {
 		out.Tabs = []plugin.Tab{{Title: "GitHub", Markdown: strings.Join(lines, "\n")}}
