@@ -239,6 +239,22 @@ func afterPost(ctx context.Context, q *db.Queries, conv db.Conversation, msg db.
 	return emit(ctx, q, EventMessagePosted, conv.ID, messagePayload(msg, map[string]any{"mentions": uuidStrings(ids)}), ids...)
 }
 
+// postSystemText writes a line Gator says by itself into conv, in the caller's transaction.
+func postSystemText(ctx context.Context, q *db.Queries, conv db.Conversation, body string) (db.Message, error) {
+	seq, err := q.NextMessageSeq(ctx, conv.ID)
+	if err != nil {
+		return db.Message{}, err
+	}
+	msg, err := q.InsertMessage(ctx, db.InsertMessageParams{
+		ConversationID: conv.ID, Seq: seq, AuthorKind: AuthorSystem, Kind: messageText, Body: body,
+		Origin: []byte(emptyOrigin), Status: messageFinal,
+	})
+	if err != nil {
+		return db.Message{}, err
+	}
+	return msg, afterPost(ctx, q, conv, msg, System, nil)
+}
+
 // messagePayload is what an event says about a message: never its body.
 func messagePayload(msg db.Message, extra map[string]any) map[string]any {
 	out := map[string]any{

@@ -42,3 +42,15 @@ func TestPromotionDescriptionQuotesAndLinksBack(t *testing.T) {
 		t.Fatalf("a deleted reply or a card was quoted:\n%s", got)
 	}
 }
+
+// Out of a private conversation, a task carries the promoter's own words and nobody else's.
+func TestPrivateDescriptionQuotesOnlyThePromoter(t *testing.T) {
+	ann, bob := newID(1), newID(2)
+	msg := db.Message{AuthorKind: AuthorUser, AuthorID: ann, Body: "Salary bands leak in the export"}
+	if got := privateDescription(msg, Author{Kind: AuthorUser, ID: ann}); !strings.Contains(got, "> Salary bands leak") {
+		t.Fatalf("the promoter's own message is not quoted: %s", got)
+	}
+	if got := privateDescription(msg, Author{Kind: AuthorUser, ID: bob}); strings.Contains(got, "Salary") {
+		t.Fatalf("someone else's private words went into the task: %s", got)
+	}
+}

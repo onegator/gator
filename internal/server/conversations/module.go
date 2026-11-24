@@ -57,7 +57,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		deps:      deps,
 	}
 	if deps.Tasks != nil {
-		m.Promoter = NewPromoter(pool, access, deps.Roles, deps.Tasks)
+		m.Promoter = NewPromoter(pool, access, deps.Roles, deps.Tasks, threads)
 	}
 	if deps.Blobs != nil {
 		m.Attachments = NewAttachments(pool, access, deps.Blobs)

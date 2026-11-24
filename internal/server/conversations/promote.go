@@ -38,15 +38,16 @@ const (
 // the thread it is a reply in) becomes the task's thread, and the task's description quotes the
 // conversation and links back to it.
 type Promoter struct {
-	pool   *pgxpool.Pool
-	access *Access
-	roles  RoleResolver
-	tasks  TaskCreator
+	pool    *pgxpool.Pool
+	access  *Access
+	roles   RoleResolver
+	tasks   TaskCreator
+	threads taskThreads
 }
 
 // NewPromoter builds the promoter.
-func NewPromoter(pool *pgxpool.Pool, access *Access, roles RoleResolver, tasks TaskCreator) *Promoter {
-	return &Promoter{pool: pool, access: access, roles: roles, tasks: tasks}
+func NewPromoter(pool *pgxpool.Pool, access *Access, roles RoleResolver, tasks TaskCreator, threads taskThreads) *Promoter {
+	return &Promoter{pool: pool, access: access, roles: roles, tasks: tasks, threads: threads}
 }
 
 // Promotion says what task a message becomes.
@@ -92,10 +93,6 @@ func (p *Promoter) Promote(ctx context.Context, caller auth.Principal, actor pro
 	if err != nil {
 		return Promoted{}, err
 	}
-	thread, err := p.threadOf(ctx, q, conv, msg)
-	if err != nil {
-		return Promoted{}, err
-	}
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		title = firstLine(msg.Body, maxTitleRunes)
@@ -103,25 +100,25 @@ func (p *Promoter) Promote(ctx context.Context, caller auth.Principal, actor pro
 	if title == "" {
 		return Promoted{}, invalid("name the task: the message has no words to take a title from")
 	}
-	var replies []db.Message
-	if thread.ID.Valid {
-		if replies, err = q.ListMessagesAfter(ctx, db.ListMessagesAfterParams{ConversationID: thread.ID, AfterSeq: 0, MaxRows: maxQuotedReplies}); err != nil {
-			return Promoted{}, err
-		}
+	open, err := p.access.OpenToProject(ctx, conv)
+	if err != nil {
+		return Promoted{}, err
 	}
 	by, ok := authorOf(caller)
 	if !ok {
 		by = System
 	}
-	var linked pgtype.UUID
+	var plan promotionPlan
+	if open {
+		plan, err = p.inPlace(ctx, q, conv, msg, by)
+	} else {
+		plan = p.apart(ctx, conv, msg, by)
+	}
+	if err != nil {
+		return Promoted{}, err
+	}
 	task, err := p.tasks.Create(ctx, process.CreateParams{
-		ProjectID: project, Kind: in.Kind, Title: title,
-		Description: promotionDescription(msg, replies, MessageLink(msg)),
-		InTx: func(q *db.Queries, task db.Task) error {
-			c, err := link(ctx, q, by, msg, thread, task)
-			linked = c.ID
-			return err
-		},
+		ProjectID: project, Kind: in.Kind, Title: title, Description: plan.description, InTx: plan.inTx,
 	}, actor)
 	if isUniqueViolation(err) {
 		return Promoted{}, conflict("somebody opened this thread or made it a task a moment ago; try again")
@@ -129,7 +126,55 @@ func (p *Promoter) Promote(ctx context.Context, caller auth.Principal, actor pro
 	if err != nil {
 		return Promoted{}, err
 	}
-	return Promoted{Task: task, Conversation: linked}, nil
+	thread, err := p.threads.ForTask(ctx, task)
+	if err != nil {
+		return Promoted{}, err
+	}
+	return Promoted{Task: task, Conversation: thread.ID}, nil
+}
+
+// promotionPlan is what a promotion writes: the task's description, and what it links inside
+// the transaction that creates the task.
+type promotionPlan struct {
+	description string
+	inTx        func(q *db.Queries, task db.Task) error
+}
+
+// inPlace is a promotion where the whole project may read the conversation: the thread under the
+// message (or the one it is a reply in) becomes the task's thread, and the description quotes it.
+func (p *Promoter) inPlace(ctx context.Context, q *db.Queries, conv db.Conversation, msg db.Message, by Author) (promotionPlan, error) {
+	thread, err := p.threadOf(ctx, q, conv, msg)
+	if err != nil {
+		return promotionPlan{}, err
+	}
+	var replies []db.Message
+	if thread.ID.Valid {
+		if replies, err = q.ListMessagesAfter(ctx, db.ListMessagesAfterParams{ConversationID: thread.ID, AfterSeq: 0, MaxRows: maxQuotedReplies}); err != nil {
+			return promotionPlan{}, err
+		}
+	}
+	return promotionPlan{
+		description: promotionDescription(msg, replies, MessageLink(msg)),
+		inTx: func(q *db.Queries, task db.Task) error {
+			_, err := link(ctx, q, by, msg, thread, task)
+			return err
+		},
+	}, nil
+}
+
+// apart is a promotion out of a private channel or a DM. The task belongs to the whole project,
+// so it gets a thread of its own under its card in the task channel (opened like any other
+// task's); nothing said privately goes into it but the promoter's own message, and the private
+// conversation gets a line pointing at the task.
+func (p *Promoter) apart(ctx context.Context, conv db.Conversation, msg db.Message, by Author) promotionPlan {
+	return promotionPlan{
+		description: privateDescription(msg, by),
+		inTx: func(q *db.Queries, task db.Task) error {
+			body := fmt.Sprintf("Made into a task: “%s” (gator://tasks/%s)", task.Title, uuidString(task.ID))
+			_, err := postSystemText(ctx, q, conv, body)
+			return err
+		},
+	}
 }
 
 // project is where the task goes: the conversation's project, or for a DM outside every project
@@ -235,6 +280,15 @@ func stripMarkers(line string) string {
 		}
 		line = t
 	}
+}
+
+// privateDescription is the description of a task made from a private conversation: the
+// promoter's own message, quoted, and no one else's words.
+func privateDescription(msg db.Message, by Author) string {
+	if sameAuthor(msg, by) {
+		return quote(clip(msg.Body, maxQuotedRunes)) + "\n\nMade from a message in a private conversation."
+	}
+	return "Made from a message in a private conversation; ask the people in it for the details."
 }
 
 // promotionDescription quotes the message and the first replies under it, and links back to it.

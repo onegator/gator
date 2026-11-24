@@ -875,3 +875,76 @@ func TestSearchKeepsToReadableConversations(t *testing.T) {
 		t.Fatalf("channels named like sec: %+v", named)
 	}
 }
+
+// A message in a private channel or a DM becomes a task the whole project can follow: its
+// thread is a new one under the task's card in the task channel, it quotes nothing said in
+// private but the promoter's own words, and the private conversation gets a line pointing at it.
+func TestPromoteFromPrivateConversationsKeepsThemPrivate(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("promotepriv")
+	pid := c.project.Id.String()
+	secret := h.channel(c.member, pid, "secret", "private").Id.String()
+	h.as(c.member, func() {
+		h.do("PUT", "/conversations/"+secret+"/members/user/"+c.memberID, nil, nil)
+	})
+	_, root := h.post(c.member, secret, gen.NewMessage{Body: ptr("Export leaks salary bands")})
+	var thread gen.ConversationDetail
+	h.as(c.member, func() { h.do("GET", "/messages/"+root.Id.String()+"/thread", nil, &thread) })
+	h.post(c.member, thread.Id.String(), gen.NewMessage{Body: ptr("private reply with numbers 1234")})
+
+	var out gen.PromotedMessage
+	h.as(c.member, func() {
+		if code := h.do("POST", "/messages/"+root.Id.String()+"/promote", gen.PromoteMessage{Kind: "bug"}, &out); code != 201 {
+			t.Fatalf("promote: %d", code)
+		}
+	})
+	if out.ConversationId == thread.Id {
+		t.Fatal("the private thread became the task's thread")
+	}
+	if d := deref(out.Task.Description); strings.Contains(d, "1234") || !strings.Contains(d, "Export leaks") || strings.Contains(d, secret) {
+		t.Fatalf("description: %s", d)
+	}
+	// The project's admin, who is not in the channel, follows the task.
+	var taskThread gen.ConversationDetail
+	h.as(c.admin, func() {
+		if code := h.do("GET", "/tasks/"+out.Task.Id.String()+"/conversation", nil, &taskThread); code != 200 {
+			t.Fatalf("the project reads the task's thread: %d", code)
+		}
+	})
+	var root2 gen.Message
+	h.as(c.admin, func() { h.do("GET", "/messages/"+taskThread.ParentMessageId.String(), nil, &root2) })
+	if root2.CardType == nil || *root2.CardType != "task" {
+		t.Fatalf("the task's thread hangs under %+v, not its card", root2)
+	}
+	var page gen.MessagePage
+	h.as(c.member, func() { h.do("GET", "/conversations/"+secret+"/messages", nil, &page) })
+	last := page.Messages[len(page.Messages)-1]
+	if last.AuthorKind != gen.MessageAuthorKindSystem || !strings.Contains(last.Body, out.Task.Id.String()) {
+		t.Fatalf("no line in the private channel points at the task: %+v", last)
+	}
+
+	// From a DM outside the project: the DM's other person, outside the project, gets nothing.
+	var dm gen.ConversationDetail
+	h.as(c.member, func() {
+		h.do("POST", "/conversations/dm", gen.NewDirectMessage{Members: []openapi_types.UUID{mustOpenUUID(t, c.strangerID)}}, &dm)
+	})
+	_, said := h.post(c.stranger, dm.Id.String(), gen.NewMessage{Body: ptr("your login is broken")})
+	h.as(c.member, func() {
+		if code := h.do("POST", "/messages/"+said.Id.String()+"/promote", gen.PromoteMessage{Kind: "bug", Title: ptr("Login"), ProjectId: &c.project.Id}, &out); code != 201 {
+			t.Fatalf("promote from a DM: %d", code)
+		}
+	})
+	if strings.Contains(deref(out.Task.Description), "broken") {
+		t.Fatalf("someone else's DM words went into the task: %s", deref(out.Task.Description))
+	}
+	h.as(c.stranger, func() {
+		if code := h.do("GET", "/conversations/"+out.ConversationId.String(), nil, nil); code != 404 {
+			t.Fatalf("somebody outside the project reads the task's thread: %d", code)
+		}
+	})
+	for _, cards := range [][]gen.Message{h.cardsIn(c.member, dm.Id.String(), "task"), h.cardsIn(c.member, secret, "task")} {
+		if len(cards) != 0 {
+			t.Fatalf("a task card went into a private conversation: %+v", cards)
+		}
+	}
+}

@@ -126,6 +126,21 @@ func (a *Access) CanRead(ctx context.Context, conv db.Conversation, p auth.Princ
 	return r.Read, err
 }
 
+// OpenToProject answers whether everyone who may read conv's project may read conv: a project
+// channel or a thread under one, not a private channel or a DM. What is said in a conversation
+// that is not open to the project stays in it.
+func (a *Access) OpenToProject(ctx context.Context, conv db.Conversation) (bool, error) {
+	root, err := a.root(ctx, conv)
+	if err != nil {
+		return false, err
+	}
+	return openToProject(root), nil
+}
+
+func openToProject(root db.Conversation) bool {
+	return root.Kind != KindDM && root.Visibility == VisibilityProject && root.ProjectID.Valid
+}
+
 // UserCanRead answers whether a person, who is not the caller, may read conv: whether they may
 // be mentioned in it or told about it.
 func (a *Access) UserCanRead(ctx context.Context, conv db.Conversation, user pgtype.UUID) (bool, error) {

@@ -274,6 +274,11 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   kanału, bo wątek wisi pod wiadomością człowieka). Opis taska cytuje wiadomość i do 5 pierwszych
   odpowiedzi (bez LLM-owego streszczenia) i linkuje `gator://conversations/<id>?seq=<n>`. Wiadomość w
   DM-ie poza projektem wymaga `projectId`. Rodzaje: `feature`, `bug`, `chore`, `incident`.
+  Wiadomość z **prywatnego kanału albo DM-a** nie przenosi rozmowy: task dostaje własny wątek pod kartą
+  w kanale zadań (jak każdy task), opis cytuje tylko wiadomość samego promującego (cudzych słów z
+  prywatnej rozmowy nie ma w tasku), a w prywatnej rozmowie pojawia się systemowa linijka z linkiem
+  do taska. Inaczej członkowie projektu dostawaliby 404 na wątek własnego taska, a uczestnik DM-a spoza
+  projektu mógłby w nim pisać.
 - **Załączniki** idą przez serwer (multipart, do 25 MB), bez presigned URL-i: dostęp sprawdza ta sama
   `Access`, a klucz do bucketu nie opuszcza serwera. Magazyn: `GATOR_ATTACHMENTS_S3_*` (jak backupy)
   albo `GATOR_ATTACHMENTS_DIR`; bez nich upload odpowiada 503. Plik należy do nikogo, dopóki uploader
