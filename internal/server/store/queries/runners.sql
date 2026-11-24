@@ -78,6 +78,8 @@ WHERE id IN (
       AND (sqlc.narg(only_job)::uuid IS NULL OR j.id = sqlc.narg(only_job)::uuid)
       AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
            OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
+      -- A runner older than protocol v3 runs every job as a phase; it gets only those.
+      AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
     ORDER BY j.created_at
     LIMIT sqlc.arg(slots)
     FOR UPDATE SKIP LOCKED
@@ -144,6 +146,7 @@ WHERE id IN (
                                                   THEN r.capabilities->'projects' END), 0) = 0
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+            AND (j.kind = 'phase' OR r.protocol_version >= 3)
       )
     FOR UPDATE SKIP LOCKED
 )

@@ -225,11 +225,8 @@ func (p *Packer) where(ctx context.Context, conv db.Conversation) string {
 	case root.Kind == KindTask:
 		name = "a task's thread"
 	}
-	switch {
-	case conv.Kind == KindTask && conv.ParentMessageID.Valid:
-		return "a task's thread in " + name
-	case conv.ParentMessageID.Valid:
-		return "a thread in " + name
+	if conv.ParentMessageID.Valid {
+		return "a thread in " + name // whether it is a task's the brief says apart
 	}
 	return name
 }

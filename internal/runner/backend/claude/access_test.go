@@ -1,0 +1,84 @@
+//go:build unix
+
+package claude
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/backend"
+)
+
+// argsOf reads the arguments the fake was called with, one per line.
+func argsOf(t *testing.T, file string) []string {
+	t.Helper()
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\n---\n"), "\n")
+}
+
+func after(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// A read-only session runs in dontAsk mode with only the tools that read, Bash only for the
+// named commands, and the writing tools denied by name. The recording is of Claude Code 2.1.331
+// run with exactly these flags: Write was not there to call, a `touch` through Bash was denied,
+// and the session still ended with an answer.
+func TestReadOnlyAccessReachesTheCLI(t *testing.T) {
+	b, argsFile := fake(t, "claude-2.1.331-chat-readonly.ndjson")
+	out, evs := run(t, b, context.Background(), backend.Spec{Prompt: "look", Access: backend.Access{ReadOnly: true, Commands: []string{"gator-cli"}}})
+	args := argsOf(t, argsFile)
+	if after(args, "--permission-mode") != "dontAsk" || after(args, "--tools") != "Read,Grep,Glob,WebFetch,Bash" ||
+		after(args, "--allowedTools") != "Read,Grep,Glob,WebFetch,Bash(gator-cli:*)" || after(args, "--disallowedTools") != "Edit,Write,NotebookEdit" {
+		t.Fatalf("args: %q", args)
+	}
+	for _, a := range args {
+		if a == "bypassPermissions" {
+			t.Fatal("a read-only session must not bypass permissions")
+		}
+	}
+	if out.Status != proto.StatusDone || !strings.Contains(out.Summary, "disabled") || !strings.Contains(out.Summary, "denied") || out.Usage.CostUSD <= 0 {
+		t.Fatalf("outcome: %+v", out)
+	}
+	if !strings.Contains(strings.Join(evs, ","), "tool_call,tool_result") {
+		t.Fatalf("events: %v", evs)
+	}
+
+	// Without commands to run there is no Bash at all.
+	b, argsFile = fake(t, "claude-2.1.331-chat-readonly.ndjson")
+	run(t, b, context.Background(), backend.Spec{Prompt: "look", Access: backend.Access{ReadOnly: true}})
+	args = argsOf(t, argsFile)
+	if after(args, "--tools") != "Read,Grep,Glob,WebFetch" || strings.Contains(after(args, "--allowedTools"), "Bash") {
+		t.Fatalf("args: %q", args)
+	}
+}
+
+// What the allow-list lets through: a recorded session that ran gator-cli in dontAsk mode.
+func TestReadOnlyRunsGatorCLI(t *testing.T) {
+	b, _ := fake(t, "claude-2.1.331-chat-gator-cli.ndjson")
+	out, evs := run(t, b, context.Background(), backend.Spec{Prompt: "talk", Access: backend.Access{ReadOnly: true, Commands: []string{"gator-cli"}}})
+	if out.Status != proto.StatusDone || !strings.Contains(out.Summary, `"ok":true`) || out.ToolCalls != 1 {
+		t.Fatalf("outcome: %+v (%v)", out, evs)
+	}
+}
+
+// Full access is what every job had before tiers.
+func TestFullAccessBypassesPermissions(t *testing.T) {
+	b, argsFile := fake(t, "claude-2.1.270-tool-success.ndjson")
+	run(t, b, context.Background(), backend.Spec{Prompt: "work"})
+	args := argsOf(t, argsFile)
+	if after(args, "--permission-mode") != "bypassPermissions" || after(args, "--tools") != "" || after(args, "--disallowedTools") != "" {
+		t.Fatalf("args: %q", args)
+	}
+}

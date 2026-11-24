@@ -132,8 +132,9 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	if mcp == "" {
 		mcp = noMCP
 	}
-	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions",
-		"--strict-mcp-config", "--mcp-config", mcp}
+	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
+	args = append(args, permissionArgs(spec.Access)...)
+	args = append(args, "--strict-mcp-config", "--mcp-config", mcp)
 	if spec.SessionID != "" {
 		args = append(args, "--resume", spec.SessionID)
 	}

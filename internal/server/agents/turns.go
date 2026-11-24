@@ -8,10 +8,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/runners"
+	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -52,6 +54,11 @@ type ConsentAsker interface {
 	AskConsent(ctx context.Context, turn db.AgentTurn, home db.Conversation, task db.Task) error
 }
 
+// turnLocker runs fn with the turn held, so that nobody else starts it meanwhile. Locker is one.
+type turnLocker interface {
+	WithTurn(ctx context.Context, id pgtype.UUID, fn func(turn db.AgentTurn, q turnStore) error) error
+}
+
 // turnStore is what the starter writes. *db.Queries is one.
 type turnStore interface {
 	InsertTurn(ctx context.Context, arg db.InsertTurnParams) (db.AgentTurn, error)
@@ -67,6 +74,7 @@ type turnStore interface {
 // first try failed halfway, finishes what the first began and starts nothing twice.
 type Starter struct {
 	turns   turnStore
+	locks   turnLocker
 	homes   replyHomes
 	asks    askFinder
 	voice   speaker
@@ -75,8 +83,8 @@ type Starter struct {
 }
 
 // NewStarter builds it.
-func NewStarter(turns turnStore, homes replyHomes, asks askFinder, voice speaker, jobs jobQueue, consent ConsentAsker) *Starter {
-	return &Starter{turns: turns, homes: homes, asks: asks, voice: voice, jobs: jobs, consent: consent}
+func NewStarter(turns turnStore, locks turnLocker, homes replyHomes, asks askFinder, voice speaker, jobs jobQueue, consent ConsentAsker) *Starter {
+	return &Starter{turns: turns, locks: locks, homes: homes, asks: asks, voice: voice, jobs: jobs, consent: consent}
 }
 
 // maxInstruction bounds the question a job carries as its instruction; the conversation itself
@@ -89,13 +97,23 @@ func (s *Starter) Start(ctx context.Context, r Request) error {
 	if err != nil {
 		return err
 	}
-	turn, _, err := s.open(ctx, r, home, nil)
-	if err != nil || turn.Status != TurnQueued || turn.JobID.Valid {
-		return err // started already, or ended
+	opened, _, err := s.open(ctx, r, home, nil)
+	if err != nil {
+		return err
 	}
+	return s.locks.WithTurn(ctx, opened.ID, func(turn db.AgentTurn, turns turnStore) error {
+		if turn.Status != TurnQueued || turn.JobID.Valid {
+			return nil // started already, or ended
+		}
+		return s.start(ctx, r, home, turn, turns)
+	})
+}
+
+// start does the work of Start with the turn held: turns writes under that hold.
+func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, turn db.AgentTurn, turns turnStore) error {
 	task, err := s.asks.For(ctx, home, r.Trigger, actorOf(r))
 	if errors.Is(err, conversations.ErrInvalid) || errors.Is(err, conversations.ErrConflict) {
-		return s.end(ctx, turn, home, TurnRefused, &Refusal{Code: RefusedNoTask, Say: plain(err)})
+		return s.end(ctx, turns, turn, home, TurnRefused, &Refusal{Code: RefusedNoTask, Say: plain(err)})
 	}
 	if err != nil {
 		return err
@@ -107,7 +125,7 @@ func (s *Starter) Start(ctx context.Context, r Request) error {
 		if err != nil {
 			return err
 		}
-		if turn, err = s.turns.SetTurnReply(ctx, db.SetTurnReplyParams{ID: turn.ID, ReplyMessageID: msg.ID}); err != nil {
+		if turn, err = turns.SetTurnReply(ctx, db.SetTurnReplyParams{ID: turn.ID, ReplyMessageID: msg.ID}); err != nil {
 			return err
 		}
 	}
@@ -116,15 +134,15 @@ func (s *Starter) Start(ctx context.Context, r Request) error {
 		Instruction: clip(r.Trigger.Body, maxInstruction), CreatedBy: actorOf(r),
 	})
 	if errors.Is(err, runners.ErrBudgetExceeded) {
-		return s.end(ctx, turn, home, TurnRefused, &Refusal{Code: RefusedBudget, Say: fmt.Sprintf("@%s does not answer today: %s", r.Agent.Handle, plain(err))})
+		return s.end(ctx, turns, turn, home, TurnRefused, &Refusal{Code: RefusedBudget, Say: fmt.Sprintf("@%s does not answer today: %s", r.Agent.Handle, plain(err))})
 	}
 	if errors.Is(err, runners.ErrInvalidJob) || errors.Is(err, runners.ErrAgentsNotAllowed) {
-		return s.end(ctx, turn, home, TurnFailed, &Refusal{Say: fmt.Sprintf("@%s could not start: %s", r.Agent.Handle, plain(err))})
+		return s.end(ctx, turns, turn, home, TurnFailed, &Refusal{Say: fmt.Sprintf("@%s could not start: %s", r.Agent.Handle, plain(err))})
 	}
 	if err != nil {
 		return err
 	}
-	if turn, err = s.turns.SetTurnJob(ctx, db.SetTurnJobParams{ID: turn.ID, JobID: job.ID, Tier: grant.Tier}); err != nil {
+	if turn, err = turns.SetTurnJob(ctx, db.SetTurnJobParams{ID: turn.ID, JobID: job.ID, Tier: grant.Tier}); err != nil {
 		return err
 	}
 	if grant.NeedsConsent && s.consent != nil {
@@ -175,12 +193,12 @@ func (s *Starter) open(ctx context.Context, r Request, home db.Conversation, ref
 
 // end closes a turn that could not run, and says why: in the agent's message when it has one,
 // else as a line from Gator.
-func (s *Starter) end(ctx context.Context, turn db.AgentTurn, home db.Conversation, status string, why *Refusal) error {
+func (s *Starter) end(ctx context.Context, turns turnStore, turn db.AgentTurn, home db.Conversation, status string, why *Refusal) error {
 	var code *string
 	if status == TurnRefused {
 		code = &why.Code
 	}
-	if _, err := s.turns.SetTurnStatus(ctx, db.SetTurnStatusParams{ID: turn.ID, Status: status, Refusal: code}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := turns.SetTurnStatus(ctx, db.SetTurnStatusParams{ID: turn.ID, Status: status, Refusal: code}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	if turn.ReplyMessageID.Valid {
@@ -214,4 +232,19 @@ func clip(s string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// Locker holds turns in a transaction of their own (turnLocker).
+type Locker struct{ Pool *pgxpool.Pool }
+
+// WithTurn implements turnLocker: fn runs with the turn's row held until it returns, and what fn
+// writes through q commits with the release.
+func (l Locker) WithTurn(ctx context.Context, id pgtype.UUID, fn func(turn db.AgentTurn, q turnStore) error) error {
+	return store.InTx(ctx, l.Pool, func(q *db.Queries) error {
+		turn, err := q.LockTurn(ctx, id)
+		if err != nil {
+			return err
+		}
+		return fn(turn, q)
+	})
 }

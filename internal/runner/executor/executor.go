@@ -72,15 +72,32 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	if !ok {
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q is not available on this runner", job.Backend)}
 	}
-	ws, err := e.WS.Prepare(ctx, job)
+	access := AccessFor(job)
+	prepare := e.WS.Prepare
+	if access.ReadOnly {
+		prepare = e.WS.PrepareReadOnly
+	}
+	ws, err := prepare(ctx, job)
 	if err != nil {
 		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
 	}
-	io.Emit("workspace", map[string]any{"branch": ws.Branch, "base": ws.Base, "repo": repoName(job)})
+	io.Emit("workspace", map[string]any{"branch": ws.Branch, "base": ws.Base, "repo": repoName(job), "read_only": ws.ReadOnly})
+	env := e.agentEnv(job)
+	signing, err := ws.SignCommits(trailerFor(job))
+	if err != nil {
+		_ = ws.Cleanup(context.WithoutCancel(ctx), false)
+		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
+	}
+	env = append(env, signing...)
+	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
+		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
+			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access}
+	}
 
 	var usage proto.Usage
 	var last backend.Outcome
-	prompt, session, tools := Prompt(job, ws.HasRepo()), "", 0
+	opening := promptFor(job, ws)
+	prompt, session, tools := opening, "", 0
 	steers, objections := 0, 0
 	for {
 		runCtx, cancelRun := context.WithCancelCause(ctx)
@@ -98,8 +115,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		if job.Bounds.MaxToolCalls > 0 {
 			budget = max(job.Bounds.MaxToolCalls-tools, 1)
 		}
-		last = be.Run(runCtx, backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model,
-			MaxToolCalls: budget, MaxCostUSD: costLeft(job, usage), Env: e.agentEnv(job), DenyRead: e.DenyRead}, backend.Emit(io.Emit))
+		last = be.Run(runCtx, spec(prompt, session, budget, costLeft(job, usage)), backend.Emit(io.Emit))
 		close(done)
 		cancelRun(nil)
 		addUsage(&usage, last.Usage)
@@ -114,7 +130,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 			if session != "" {
 				prompt = SteerPrompt(msg)
 			} else {
-				prompt = Prompt(job, ws.HasRepo()) + "\n\nA person added this correction before you started: " + msg
+				prompt = opening + "\n\nA person added this correction before you started: " + msg
 			}
 			continue
 		}
@@ -135,6 +151,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	}
 
 	digest, summary := ExtractDigest(last.Summary)
+	if job.KindOrPhase() == proto.KindSummary {
+		digest, summary = nil, last.Summary // a summary is all answer: there is no work to digest
+	}
 	fin := proto.Finish{Status: last.Status, StopReason: last.Reason, SessionID: session, Summary: summary,
 		Usage: usage, Objections: objections}
 	if last.Interrupted {
@@ -151,10 +170,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 
 	// A done session that forgot its digest is asked once more, in the same session: cheap,
 	// because the context is cached, and it keeps the working state complete.
-	if fin.Status == proto.StatusDone && digest == nil && session != "" && ctx.Err() == nil {
+	if fin.Status == proto.StatusDone && digest == nil && session != "" && ctx.Err() == nil && job.KindOrPhase() != proto.KindSummary {
 		io.Emit("digest_requested", map[string]any{"session_id": session})
-		out := be.Run(ctx, backend.Spec{Dir: ws.Dir, Prompt: DigestPrompt, SessionID: session, Model: job.Model,
-			MaxToolCalls: 1, Env: e.agentEnv(job), DenyRead: e.DenyRead}, backend.Emit(io.Emit))
+		out := be.Run(ctx, spec(DigestPrompt, session, 1, 0), backend.Emit(io.Emit))
 		addUsage(&usage, out.Usage)
 		fin.Usage = usage
 		if out.Status == proto.StatusDone {
@@ -270,8 +288,8 @@ func Prompt(job proto.Job, hasRepo bool) string {
 // objection the agent cannot act on is an objection worth nothing.
 func (e *Executor) askedToContinue(ctx context.Context, job proto.Job, io client.JobIO, ws *workspace.Workspace,
 	last backend.Outcome, session string, objections int) []proto.Objection {
-	if io.TurnEnding == nil || session == "" || objections >= maxObjections {
-		return nil
+	if io.TurnEnding == nil || session == "" || objections >= maxObjections || job.KindOrPhase() != proto.KindPhase {
+		return nil // only a phase's work is anybody's to object to
 	}
 	if last.Status != proto.StatusDone || last.Interrupted || ctx.Err() != nil {
 		return nil

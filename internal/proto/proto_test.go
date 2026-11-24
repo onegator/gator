@@ -56,3 +56,33 @@ func TestTimingInvariant(t *testing.T) {
 		t.Fatalf("timing: heartbeat %s offline %s lease %s", HeartbeatInterval, OfflineAfter, LeaseTTL)
 	}
 }
+
+// A v3 job read by a v2 runner decodes as the phase job it is: the new fields are only added,
+// and a job without them is a work-tier phase job.
+func TestV3JobIsReadableWithoutItsNewFields(t *testing.T) {
+	b, err := Encode(TypeLease, 1, Lease{Jobs: []Job{{JobID: "j", Kind: KindReply, Tier: TierChat,
+		Agent: &Agent{Handle: "reviewer", DisplayName: "Reviewer"}, Turn: &Turn{ID: "t", Ask: "why?"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v2 struct {
+		Jobs []struct {
+			JobID string `json:"job_id"`
+		} `json:"jobs"`
+	}
+	env, _ := Decode(b)
+	if err := env.Into(&v2); err != nil || len(v2.Jobs) != 1 || v2.Jobs[0].JobID != "j" {
+		t.Fatalf("an older reader: %+v %v", v2, err)
+	}
+	var v3 Lease
+	if err := env.Into(&v3); err != nil || v3.Jobs[0].Turn.Ask != "why?" || !v3.Jobs[0].ReadOnly() || v3.Jobs[0].KindOrPhase() != KindReply {
+		t.Fatalf("a v3 reader: %+v %v", v3, err)
+	}
+	old := Job{JobID: "old"}
+	if old.KindOrPhase() != KindPhase || old.ReadOnly() {
+		t.Fatal("a job from an older server is a work-tier phase job")
+	}
+	if v, err := Negotiate(Version - 1); err != nil || v != Version-1 {
+		t.Fatalf("the server speaks N-1: %d %v", v, err)
+	}
+}

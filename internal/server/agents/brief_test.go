@@ -50,7 +50,7 @@ func TestTheConversationPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pack.Ask.Body != "@reviewer what do you make of it?" || pack.Asker != "admin" || pack.Where != "a task's thread in #general" {
+	if pack.Ask.Body != "@reviewer what do you make of it?" || pack.Asker != "admin" || pack.Where != "a thread in #general" {
 		t.Fatalf("ask %+v from %q in %q", pack.Ask, pack.Asker, pack.Where)
 	}
 	recent := 0
@@ -78,7 +78,7 @@ func TestTheConversationPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(brief.Ask, "admin asks you, @reviewer, in a task's thread in #general") ||
+	if !strings.HasPrefix(brief.Ask, "admin asks you, @reviewer, in a thread in #general") ||
 		!strings.Contains(brief.Repeat, "what do you make of it?") || len(brief.Docs) != 2 ||
 		brief.Docs[0].Kind != "conversation_summary" || brief.Docs[1].Kind != "conversation" {
 		t.Fatalf("brief: %+v", brief)

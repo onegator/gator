@@ -40,7 +40,9 @@ type session struct {
 	placement string
 	owner     pgtype.UUID
 	onlyJob   pgtype.UUID
-	seq       atomic.Uint64
+	// version is the protocol spoken on this connection.
+	version int
+	seq     atomic.Uint64
 
 	dispatchMu sync.Mutex
 	closeOnce  sync.Once
@@ -153,7 +155,7 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 	}
 
 	s := &session{m: m, conn: c, runnerID: row.ID, tokenID: p.TokenID, name: reg.Name, caps: reg.Capabilities, projects: projects,
-		placement: reg.Placement, owner: row.OwnerID, onlyJob: p.JobID}
+		placement: reg.Placement, owner: row.OwnerID, onlyJob: p.JobID, version: version}
 	s.ctx, s.cancel = ctx, cancel
 	m.mu.Lock()
 	if old := m.sessions[row.ID.Bytes]; old != nil {
@@ -371,6 +373,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
 			Backends: backends, Projects: projects, Slots: int32(free),
 			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
+			PhaseOnly: s.version < turnsVersion,
 		})
 		if err != nil {
 			return err
@@ -391,6 +394,10 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 	// If this send fails the leases expire and the sweeper returns the jobs to the queue.
 	return s.send(proto.TypeLease, proto.Lease{Jobs: out})
 }
+
+// turnsVersion is the protocol that knows a job's kind, tier and agent; a runner below it only
+// runs phase jobs.
+const turnsVersion = 3
 
 // placementOrLocal is the session's placement; a session built without one (a test, an old
 // row) is local, which is what every runner was before placement existed.
@@ -429,6 +436,14 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 		Phase: j.Phase, Role: j.Role, Backend: j.Backend, Model: j.Model, Instruction: j.Instruction, Bounds: b,
 		Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
 	}
+	if s.version >= turnsVersion {
+		pj.Kind, pj.Tier = j.Kind, j.Tier
+		if j.AgentID.Valid {
+			if a, err := q.GetAgent(ctx, j.AgentID); err == nil {
+				pj.Agent = &proto.Agent{Handle: a.Handle, DisplayName: a.DisplayName}
+			}
+		}
+	}
 	if t, err := q.GetTask(ctx, j.TaskID); err == nil {
 		pj.TaskTitle, pj.TaskDescription, pj.TaskOrigin = t.Title, t.Description, t.Origin
 	}
@@ -436,6 +451,12 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	pj.Guide = s.guide(ctx, q, j)
 	brief := s.brief(ctx, j)
 	pj.Context = s.handContext(ctx, q, j, brief.Docs)
+	if j.Kind == KindReply && j.TurnID.Valid {
+		pj.Turn = &proto.Turn{ID: uuidString(j.TurnID), Ask: brief.Ask, Repeat: brief.Repeat}
+		for _, d := range brief.Docs {
+			pj.Turn.Conversation = append(pj.Turn.Conversation, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+		}
+	}
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
 	}

@@ -44,7 +44,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	q := db.New(pool)
 	voice := conversations.NewVoice(pool)
 	chat := deps.Conversations
-	starter := NewStarter(q, chat.Threads, chat.Asks, voice, deps.Jobs, nil)
+	starter := NewStarter(q, Locker{Pool: pool}, chat.Threads, chat.Asks, voice, deps.Jobs, nil)
 	guards := Guards{
 		Paused,
 		Writers{Access: chat.Access},

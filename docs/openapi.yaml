@@ -1493,7 +1493,7 @@ components:
         kind: { type: string }
         phase: { type: string }
         title: { type: string }
-        origin: { type: string, description: "task | catalogue | product | knowledge | artifact | plugin" }
+        origin: { type: string, description: "conversation | task | catalogue | product | knowledge | artifact | plugin" }
         body: { type: string, description: "as it went into the prompt; empty when the document was left out" }
         bytes: { type: integer }
         fullBytes: { type: integer, description: "its length before trimming" }

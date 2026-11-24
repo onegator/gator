@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -170,5 +171,20 @@ func (w *world) spend(job pgtype.UUID, usd float64) {
 	if _, err := w.pool.Exec(w.ctx, `INSERT INTO usage_records (task_id, project_id, phase, job_id, source, cost_usd)
 		VALUES ($1, $2, $3, $4, 'runner', $5)`, j.TaskID, j.ProjectID, j.Phase, j.ID, usd); err != nil {
 		w.t.Fatal(err)
+	}
+}
+
+// settled are the messages of a conversation once ok says they are as expected, or as they are
+// after a while. Another test binary's server may be following the same outbox and answering the
+// same event a moment earlier, so what it says can land just after this test asks.
+func (w *world) settled(conv pgtype.UUID, ok func([]db.Message) bool) []db.Message {
+	w.t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		msgs := w.messagesIn(conv)
+		if ok(msgs) || time.Now().After(deadline) {
+			return msgs
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

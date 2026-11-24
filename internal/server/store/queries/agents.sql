@@ -77,3 +77,9 @@ SELECT * FROM agent_turns WHERE conversation_id = $1 AND status IN ('queued', 'r
 
 -- name: ListConversationAgentIDs :many
 SELECT member_id FROM conversation_members WHERE conversation_id = $1 AND member_kind = 'agent';
+
+-- name: LockTurn :one
+-- Holds a turn while it is started, so that two starts of one turn (a redelivered mention, two
+-- servers) take turns and the second finds the first one's job. NO KEY: the job being created
+-- references the turn, and its foreign key check must not wait for this lock.
+SELECT * FROM agent_turns WHERE id = $1 FOR NO KEY UPDATE;

@@ -494,6 +494,41 @@ func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
 	return items, nil
 }
 
+const lockTurn = `-- name: LockTurn :one
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE id = $1 FOR NO KEY UPDATE
+`
+
+// Holds a turn while it is started, so that two starts of one turn (a redelivered mention, two
+// servers) take turns and the second finds the first one's job. NO KEY: the job being created
+// references the turn, and its foreign key check must not wait for this lock.
+func (q *Queries) LockTurn(ctx context.Context, id pgtype.UUID) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, lockTurn, id)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const setTurnJob = `-- name: SetTurnJob :one
 UPDATE agent_turns SET job_id = $1, tier = $2, updated_at = now()
 WHERE id = $3 RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at

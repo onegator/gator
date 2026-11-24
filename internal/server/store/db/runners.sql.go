@@ -345,8 +345,10 @@ WHERE id IN (
       AND ($6::uuid IS NULL OR j.id = $6::uuid)
       AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
            OR $7::uuid IS NULL OR j.created_by = $7::uuid)
+      -- A runner older than protocol v3 runs every job as a phase; it gets only those.
+      AND (NOT $8::boolean OR j.kind = 'phase')
     ORDER BY j.created_at
-    LIMIT $8
+    LIMIT $9
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
@@ -360,6 +362,7 @@ type LeaseJobsParams struct {
 	Placement  string             `json:"placement"`
 	OnlyJob    pgtype.UUID        `json:"only_job"`
 	Owner      pgtype.UUID        `json:"owner"`
+	PhaseOnly  bool               `json:"phase_only"`
 	Slots      int32              `json:"slots"`
 }
 
@@ -379,6 +382,7 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 		arg.Placement,
 		arg.OnlyJob,
 		arg.Owner,
+		arg.PhaseOnly,
 		arg.Slots,
 	)
 	if err != nil {
@@ -923,6 +927,7 @@ WHERE id IN (
                                                   THEN r.capabilities->'projects' END), 0) = 0
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+            AND (j.kind = 'phase' OR r.protocol_version >= 3)
       )
     FOR UPDATE SKIP LOCKED
 )

@@ -105,7 +105,7 @@ func TestRefusalsAreSaid(t *testing.T) {
 			if turn.Status != TurnRefused || turn.Refusal == nil || *turn.Refusal != tc.code || turn.JobID.Valid {
 				t.Fatalf("turn: %+v", turn)
 			}
-			said := w.messagesIn(turn.ConversationID)
+			said := w.settled(turn.ConversationID, func(m []db.Message) bool { return len(m) > 0 })
 			if len(said) != 1 || said[0].AuthorKind != conversations.AuthorSystem || !strings.Contains(said[0].Body, tc.saying) {
 				t.Fatalf("said: %+v", said)
 			}
@@ -206,7 +206,7 @@ func TestAChainOfAgentsStops(t *testing.T) {
 			if turn.Status != TurnRefused || turn.Refusal == nil || *turn.Refusal != tc.code || turn.JobID.Valid {
 				t.Fatalf("turn: %+v", turn)
 			}
-			said := w.messagesIn(turn.ConversationID)
+			said := w.settled(turn.ConversationID, func(m []db.Message) bool { return m[len(m)-1].AuthorKind == conversations.AuthorSystem })
 			last := said[len(said)-1]
 			if last.AuthorKind != conversations.AuthorSystem || !strings.Contains(last.Body, tc.saying) {
 				t.Fatalf("the thread should say why, it says %q", last.Body)

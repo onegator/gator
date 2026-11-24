@@ -22,6 +22,18 @@ type Spec struct {
 	// DenyRead are files the agent must not open: the runner's token file. Backends pass them
 	// to agentenv.Command, which enforces it where the platform can.
 	DenyRead []string
+	// Access is what the agent may do with its tools. The zero value is everything, as a phase
+	// job always could.
+	Access Access
+}
+
+// Access is what an agent may do with its tools, in words every backend can translate into its
+// own flags. It is what the tools allow, not a sandbox: the workspace is made read-only too.
+type Access struct {
+	// ReadOnly gives the agent tools that read, search and fetch, and none that write.
+	ReadOnly bool
+	// Commands are the only commands a read-only agent may run, by name: gator-cli, to talk back.
+	Commands []string
 }
 
 // Emit streams one event.
