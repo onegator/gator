@@ -288,7 +288,8 @@ func toJob(j db.Job) gen.Job {
 		Id: toUUID(j.ID), TaskId: toUUID(j.TaskID), ProjectId: toUUID(j.ProjectID), Phase: j.Phase, Role: j.Role,
 		Backend: j.Backend, Instruction: j.Instruction, Status: gen.JobStatus(j.Status), RunnerId: toUUIDPtr(j.RunnerID),
 		Attempts: int(j.Attempts), MaxAttempts: int(j.MaxAttempts), StopReason: j.StopReason, CreatedAt: j.CreatedAt.Time,
-		Placement: gen.JobPlacement(j.Placement),
+		Placement: gen.JobPlacement(j.Placement), AgentId: toUUIDPtr(j.AgentID), TurnId: toUUIDPtr(j.TurnID),
+		Kind: gen.JobKind(j.Kind), Tier: gen.JobTier(j.Tier),
 	}
 	if j.Model != "" {
 		out.Model = &j.Model

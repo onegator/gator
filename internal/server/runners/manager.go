@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/metric"
@@ -65,6 +66,9 @@ type Config struct {
 	AgentTokenTTL time.Duration
 	// Judge may object when an agent says its turn is over. Optional.
 	Judge TurnJudge
+	// Authors names the agents of automations' work. Optional: without it every job is done by
+	// the agent of its role.
+	Authors AuthorRoles
 	// MaxObjections is how many times one job may be sent back to work. Zero takes 2: enough
 	// for a plugin to be right about something the agent missed, few enough that a plugin
 	// which is never satisfied cannot spend a person's money in a loop.
@@ -90,6 +94,12 @@ type Config struct {
 	// ProvisionDelay is the pause between queueing a cloud job and looking for a machine for
 	// it, which gives connected runners the first chance. Zero takes 2 seconds.
 	ProvisionDelay time.Duration
+}
+
+// AuthorRoles names, for the work of an automation, the role whose agent does a job of a given
+// role: error triage has @triage do an incident's implementation. automations.Authors is one.
+type AuthorRoles interface {
+	AuthorRole(automation, jobRole string) string
 }
 
 // AgentTokenIssuer mints and revokes the per-job identity. The interface keeps this package
@@ -231,7 +241,27 @@ type NewJob struct {
 	// AllowAgents records CreatedBy's consent to agents on the task before queueing, in the
 	// same transaction. Only a person can give it.
 	AllowAgents bool
+	// Agent does the job. Zero: the agent playing the job's role in the project (or, for the
+	// work of an automation, the agent the automation names for that role).
+	Agent pgtype.UUID
+	// Turn is the conversation turn the job answers, for a reply.
+	Turn pgtype.UUID
+	// Kind is KindPhase (the default), KindReply or KindSummary.
+	Kind string
+	// Tier is TierWork (the default) or TierChat. A chat job reads and answers and touches
+	// nothing, so the person who asked for it consented to that one answer: it needs no consent
+	// on the task.
+	Tier string
 }
+
+// Kinds and tiers of a job; see the jobs table (migration 00040).
+const (
+	KindPhase   = "phase"
+	KindReply   = "reply"
+	KindSummary = "summary"
+	TierWork    = "work"
+	TierChat    = "chat"
+)
 
 // CreateJob queues a job for the task's current phase and offers it to connected runners.
 func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) (db.Job, error) {
@@ -267,7 +297,13 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if d.Task.ClosedAt.Valid {
 		return db.Job{}, fmt.Errorf("%w: task is closed", ErrInvalidJob)
 	}
-	if !d.Task.AgentsAllowedAt.Valid {
+	if in.Tier == "" {
+		in.Tier = TierWork
+	}
+	if in.Kind == "" {
+		in.Kind = KindPhase
+	}
+	if in.Tier != TierChat && !d.Task.AgentsAllowedAt.Valid {
 		return db.Job{}, ErrAgentsNotAllowed
 	}
 	role := in.Role
@@ -315,16 +351,38 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if in.Bounds.MaxToolCalls <= 0 {
 		in.Bounds.MaxToolCalls = DefaultMaxToolCalls
 	}
+	if !in.Agent.Valid {
+		if in.Agent, err = m.agentFor(ctx, q, d.Task, role); err != nil {
+			return db.Job{}, err
+		}
+	}
 	bounds, _ := json.Marshal(in.Bounds)
 	job, err := q.CreateJob(ctx, db.CreateJobParams{
 		TaskID: d.Task.ID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
 		Backend: in.Backend, Instruction: in.Instruction, Bounds: bounds, MaxAttempts: int32(in.MaxAttempts),
 		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID, Model: in.Model, Placement: in.Placement,
+		AgentID: in.Agent, TurnID: in.Turn, Tier: in.Tier, Kind: in.Kind,
 	})
 	if err != nil {
 		return db.Job{}, err
 	}
 	return job, m.emitJob(ctx, q, "job.queued", job, nil)
+}
+
+// agentFor is the agent who does a job of this role on the task: the project's agent for the
+// role, or the one an automation names for its work. None is no error: a role nobody plays
+// (a project that deleted the agent, a role a template made up) still gets its job done.
+func (m *Manager) agentFor(ctx context.Context, q *db.Queries, task db.Task, role string) (pgtype.UUID, error) {
+	if a := m.cfg.Authors; a != nil && task.Automation != nil {
+		if r := a.AuthorRole(*task.Automation, role); r != "" {
+			role = r
+		}
+	}
+	agent, err := q.AgentForRole(ctx, db.AgentForRoleParams{RoleKey: &role, ProjectID: task.ProjectID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.UUID{}, nil
+	}
+	return agent.ID, err
 }
 
 // EnsureJob is the autopilot: if the task sits in a runner-owned phase of a project with

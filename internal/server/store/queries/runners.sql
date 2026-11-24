@@ -40,9 +40,13 @@ RETURNING *;
 SELECT * FROM runners WHERE id = $1;
 
 -- name: CreateJob :one
-INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement)
--- An empty placement is local, which is what every job was before it had one.
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF(sqlc.arg(placement)::text, ''), 'local'))
+INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement,
+                  agent_id, turn_id, tier, kind)
+-- An empty placement is local, which is what every job was before it had one; an empty tier is
+-- work and an empty kind a phase job, which is what every job was before agents had turns.
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF(sqlc.arg(placement)::text, ''), 'local'),
+        sqlc.narg(agent_id), sqlc.narg(turn_id), COALESCE(NULLIF(sqlc.arg(tier)::text, ''), 'work'),
+        COALESCE(NULLIF(sqlc.arg(kind)::text, ''), 'phase'))
 RETURNING *;
 
 -- name: GetJob :one

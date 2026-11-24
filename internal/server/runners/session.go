@@ -433,9 +433,7 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 		pj.TaskTitle, pj.TaskDescription, pj.TaskOrigin = t.Title, t.Description, t.Origin
 	}
 	pj.AgentToken = s.agentToken(ctx, j)
-	if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
-		pj.Guide = g
-	}
+	pj.Guide = s.guide(ctx, q, j)
 	pj.Context = s.handContext(ctx, q, j)
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
@@ -450,6 +448,27 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
 		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context))})
 	return pj
+}
+
+// guide is the prompt of the job's agent: its own instructions when a person wrote them, else
+// the project's prompt for the role it plays, else that of the job's role.
+func (s *session) guide(ctx context.Context, q *db.Queries, j db.Job) string {
+	role := j.Role
+	if j.AgentID.Valid {
+		if a, err := q.GetAgent(ctx, j.AgentID); err == nil {
+			if strings.TrimSpace(a.Instructions) != "" {
+				return a.Instructions
+			}
+			if a.RoleKey != nil && *a.RoleKey != "" {
+				role = *a.RoleKey
+			}
+		}
+	}
+	g, err := s.m.process.RoleGuide(ctx, j.ProjectID, role)
+	if err != nil {
+		s.m.log.Warn("reading the role's prompt", "job", uuidString(j.ID), "role", role, "err", err)
+	}
+	return g
 }
 
 // agentToken is the identity the agent talks back with. Minted per job and revoked when the

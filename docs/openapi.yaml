@@ -1442,13 +1442,17 @@ components:
         allowAgents: { type: boolean, default: false, description: "the caller allows agents to work on this task without asking, recorded before the job is queued, in the same step; see allowAgents" }
     Job:
       type: object
-      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt, placement]
+      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt, placement, kind, tier]
       properties:
         id: { type: string, format: uuid }
         taskId: { type: string, format: uuid }
         projectId: { type: string, format: uuid }
         phase: { type: string }
         role: { type: string }
+        agentId: { type: string, format: uuid, description: "the agent whose work this is: the one a turn named, or the agent playing the role" }
+        turnId: { type: string, format: uuid, description: "the conversation turn a reply answers" }
+        kind: { type: string, enum: [phase, reply, summary], description: "a phase of the process, an answer in a conversation, or the summary of one" }
+        tier: { type: string, enum: [chat, work], description: "chat reads and answers with no tools that write; work changes code on a gator/ branch" }
         backend: { type: string }
         placement: { type: string, enum: [local, cloud], description: "where the job runs" }
         model: { type: string }

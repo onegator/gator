@@ -94,7 +94,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
+		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
 	for _, c := range configure {
 		c(&rcfg)
 	}

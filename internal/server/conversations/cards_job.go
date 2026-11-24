@@ -13,6 +13,7 @@ import (
 type jobReader interface {
 	taskReader
 	GetJob(ctx context.Context, id pgtype.UUID) (db.Job, error)
+	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
 }
 
 // jobCards shows each job in its task's thread as one card that follows the job from queued to
@@ -37,16 +38,29 @@ func (s jobCards) Cards(ctx context.Context, e db.EventsAfterRow) ([]PlacedCard,
 	if !ok {
 		return nil, err
 	}
-	return []PlacedCard{{Task: task, Card: JobCard(job)}}, nil
+	var agent *db.Agent
+	if job.AgentID.Valid {
+		a, err := s.jobs.GetAgent(ctx, job.AgentID)
+		if err != nil && ignoreGone(err) != nil {
+			return nil, err
+		}
+		if err == nil {
+			agent = &a
+		}
+	}
+	return []PlacedCard{{Task: task, Card: JobCard(job, agent)}}, nil
 }
 
-// JobCard is the card of one job: its role and phase, its status, and Stop, Steer and the logs
-// while it runs.
-func JobCard(j db.Job) Card {
+// JobCard is the card of one job: who does it (the agent, else its role) and in which phase,
+// its status, and Stop, Steer and the logs while it runs.
+func JobCard(j db.Job, agent *db.Agent) Card {
 	id := uuidString(j.ID)
 	who := j.Role
 	if who == "" {
 		who = "agent"
+	}
+	if agent != nil {
+		who = "@" + agent.Handle
 	}
 	actions := []string{"logs"}
 	switch j.Status {
@@ -57,7 +71,7 @@ func JobCard(j db.Job) Card {
 	if j.Status == "queued" && j.UnassignableSince.Valid {
 		state = "no_runner" // queued, and no runner online can take it
 	}
-	return Card{
+	card := Card{
 		Key:  "job:" + id,
 		Type: CardJob,
 		Body: fmt.Sprintf("Job · %s in %s · %s", who, j.Phase, state),
@@ -68,6 +82,16 @@ func JobCard(j db.Job) Card {
 			"summary": j.Phase + " · " + j.Backend,
 			"actions": actions,
 			"phase":   j.Phase,
+			"role":    j.Role,
 		},
 	}
+	if agent != nil {
+		card.Data["agent"] = agentRef(*agent)
+	}
+	return card
+}
+
+// agentRef is how a card names an agent: enough to draw it without asking.
+func agentRef(a db.Agent) map[string]any {
+	return map[string]any{"id": uuidString(a.ID), "handle": a.Handle, "displayName": a.DisplayName, "avatar": a.Avatar}
 }

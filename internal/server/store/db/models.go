@@ -8,6 +8,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Agent struct {
+	ID           pgtype.UUID        `json:"id"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	Handle       string             `json:"handle"`
+	DisplayName  string             `json:"display_name"`
+	Description  string             `json:"description"`
+	Avatar       string             `json:"avatar"`
+	RoleKey      *string            `json:"role_key"`
+	Instructions string             `json:"instructions"`
+	Tier         string             `json:"tier"`
+	Policy       []byte             `json:"policy"`
+	Tools        []byte             `json:"tools"`
+	Skills       []byte             `json:"skills"`
+	Status       string             `json:"status"`
+	Source       []byte             `json:"source"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AgentCall struct {
 	ID        int64              `json:"id"`
 	JobID     pgtype.UUID        `json:"job_id"`
@@ -15,6 +35,29 @@ type AgentCall struct {
 	Command   string             `json:"command"`
 	Detail    []byte             `json:"detail"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentTurn struct {
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	ConversationID   pgtype.UUID        `json:"conversation_id"`
+	TriggerMessageID pgtype.UUID        `json:"trigger_message_id"`
+	ReplyMessageID   pgtype.UUID        `json:"reply_message_id"`
+	RequestedByKind  string             `json:"requested_by_kind"`
+	RequestedBy      pgtype.UUID        `json:"requested_by"`
+	OnBehalfOf       pgtype.UUID        `json:"on_behalf_of"`
+	ChainID          pgtype.UUID        `json:"chain_id"`
+	ParentTurnID     pgtype.UUID        `json:"parent_turn_id"`
+	EscalatedFrom    pgtype.UUID        `json:"escalated_from"`
+	Hop              int16              `json:"hop"`
+	Tier             string             `json:"tier"`
+	JobID            pgtype.UUID        `json:"job_id"`
+	Status           string             `json:"status"`
+	Refusal          *string            `json:"refusal"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
 }
 
 type ApiToken struct {
@@ -141,6 +184,16 @@ type ConversationMember struct {
 	JoinedAt       pgtype.Timestamptz `json:"joined_at"`
 }
 
+type ConversationSummary struct {
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	UptoSeq        int64              `json:"upto_seq"`
+	Summary        string             `json:"summary"`
+	Model          string             `json:"model"`
+	PendingJobID   pgtype.UUID        `json:"pending_job_id"`
+	PendingUptoSeq *int64             `json:"pending_upto_seq"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Device struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`
@@ -225,6 +278,10 @@ type Job struct {
 	ContextDocs       int32              `json:"context_docs"`
 	Objections        int32              `json:"objections"`
 	Placement         string             `json:"placement"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	TurnID            pgtype.UUID        `json:"turn_id"`
+	Tier              string             `json:"tier"`
+	Kind              string             `json:"kind"`
 }
 
 type JobContext struct {

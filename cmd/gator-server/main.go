@@ -191,6 +191,8 @@ func serve(ctx context.Context) error {
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
 		Preparer:       pluginHost,
 		Judge:          pluginHost,
+		// An automation's work is its agent's: error triage has @triage on the incident.
+		Authors: automations.Authors{},
 		// Every job gets an identity of its own to talk back with, revoked when it ends.
 		AgentTokens: auth.Tokens{Pool: db.Pool},
 		// A cloud job no connected runner can take gets a machine of its own, when configured.

@@ -34,9 +34,12 @@ func (q *Queries) CountActiveJobsForRunner(ctx context.Context, runnerID pgtype.
 }
 
 const createJob = `-- name: CreateJob :one
-INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF($12::text, ''), 'local'))
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement
+INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement,
+                  agent_id, turn_id, tier, kind)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF($12::text, ''), 'local'),
+        $13, $14, COALESCE(NULLIF($15::text, ''), 'work'),
+        COALESCE(NULLIF($16::text, ''), 'phase'))
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
 `
 
 type CreateJobParams struct {
@@ -52,9 +55,14 @@ type CreateJobParams struct {
 	CreatedBy     pgtype.UUID `json:"created_by"`
 	Model         string      `json:"model"`
 	Placement     string      `json:"placement"`
+	AgentID       pgtype.UUID `json:"agent_id"`
+	TurnID        pgtype.UUID `json:"turn_id"`
+	Tier          string      `json:"tier"`
+	Kind          string      `json:"kind"`
 }
 
-// An empty placement is local, which is what every job was before it had one.
+// An empty placement is local, which is what every job was before it had one; an empty tier is
+// work and an empty kind a phase job, which is what every job was before agents had turns.
 func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, error) {
 	row := q.db.QueryRow(ctx, createJob,
 		arg.TaskID,
@@ -69,6 +77,10 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		arg.CreatedBy,
 		arg.Model,
 		arg.Placement,
+		arg.AgentID,
+		arg.TurnID,
+		arg.Tier,
+		arg.Kind,
 	)
 	var i Job
 	err := row.Scan(
@@ -100,6 +112,10 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.ContextDocs,
 		&i.Objections,
 		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -148,7 +164,7 @@ func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) error {
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement FROM jobs WHERE id = $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -183,12 +199,16 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 		&i.ContextDocs,
 		&i.Objections,
 		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
 	)
 	return i, err
 }
 
 const getJobForUpdate = `-- name: GetJobForUpdate :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement FROM jobs WHERE id = $1 FOR UPDATE
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -223,6 +243,10 @@ func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, err
 		&i.ContextDocs,
 		&i.Objections,
 		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -325,7 +349,7 @@ WHERE id IN (
     LIMIT $8
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
 `
 
 type LeaseJobsParams struct {
@@ -393,6 +417,10 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 			&i.ContextDocs,
 			&i.Objections,
 			&i.Placement,
+			&i.AgentID,
+			&i.TurnID,
+			&i.Tier,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -566,7 +594,7 @@ func (q *Queries) ListJobEvents(ctx context.Context, arg ListJobEventsParams) ([
 }
 
 const listJobsByTask = `-- name: ListJobsByTask :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement FROM jobs WHERE task_id = $1 ORDER BY created_at
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE task_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
@@ -607,6 +635,10 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 			&i.ContextDocs,
 			&i.Objections,
 			&i.Placement,
+			&i.AgentID,
+			&i.TurnID,
+			&i.Tier,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -619,7 +651,7 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 }
 
 const listQueuedCloudJobs = `-- name: ListQueuedCloudJobs :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement FROM jobs WHERE status = 'queued' AND placement = 'cloud' ORDER BY created_at LIMIT $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE status = 'queued' AND placement = 'cloud' ORDER BY created_at LIMIT $1
 `
 
 // Cloud jobs waiting for a runner, oldest first: what a provisioner may start machines for.
@@ -661,6 +693,10 @@ func (q *Queries) ListQueuedCloudJobs(ctx context.Context, max int32) ([]Job, er
 			&i.ContextDocs,
 			&i.Objections,
 			&i.Placement,
+			&i.AgentID,
+			&i.TurnID,
+			&i.Tier,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -756,7 +792,7 @@ const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
 SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
 WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
 `
 
 type MarkJobActiveParams struct {
@@ -797,6 +833,10 @@ func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (J
 		&i.ContextDocs,
 		&i.Objections,
 		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
 	)
 	return i, err
 }
