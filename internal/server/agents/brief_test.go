@@ -197,3 +197,42 @@ func TestOutsideWordsAreNotSummarised(t *testing.T) {
 		t.Fatalf("background: stale %v\n%s", pack.Stale, pack.Background)
 	}
 }
+
+// A summary nobody is writing any more is asked for again: its job failed without a word, or it
+// never got one.
+func TestAStuckSummaryIsAskedAgain(t *testing.T) {
+	w := newWorld(t)
+	planner := w.agent("planner")
+	root := w.post(w.admin, w.general.ID, "Let us plan billing")
+	thread, _ := w.chat.Threads.Under(w.ctx, root)
+	for i := range 30 {
+		w.post(w.admin, thread.ID, fmt.Sprintf("point %02d %s", i, strings.Repeat("y", 1000)))
+	}
+	job, _ := w.q.GetJob(w.ctx, w.turnOf(planner, w.post(w.admin, thread.ID, "@planner plan", planner)).JobID)
+	summaries := func() int {
+		return w.count("SELECT count(*) FROM jobs WHERE task_id = $1 AND kind = 'summary'", job.TaskID)
+	}
+	if _, err := w.mod.Briefer.Brief(w.ctx, job); err != nil || summaries() != 1 {
+		t.Fatalf("first: %d %v", summaries(), err)
+	}
+	// Its job ended, and nobody recorded it (the finished event was lost).
+	if _, err := w.pool.Exec(w.ctx, "UPDATE jobs SET status = 'failed' WHERE task_id = $1 AND kind = 'summary'", job.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.mod.Briefer.Brief(w.ctx, job); err != nil || summaries() != 2 {
+		t.Fatalf("after its job ended: %d %v", summaries(), err)
+	}
+	// A claim that never got its job is reclaimed after two minutes, not before.
+	if _, err := w.pool.Exec(w.ctx, "UPDATE conversation_summaries SET pending_job_id = NULL WHERE conversation_id = $1", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.mod.Briefer.Brief(w.ctx, job); err != nil || summaries() != 2 {
+		t.Fatalf("a fresh claim is somebody's: %d %v", summaries(), err)
+	}
+	if _, err := w.pool.Exec(w.ctx, "UPDATE conversation_summaries SET updated_at = now() - interval '3 minutes' WHERE conversation_id = $1", thread.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.mod.Briefer.Brief(w.ctx, job); err != nil || summaries() != 3 {
+		t.Fatalf("an old claim is reclaimed: %d %v", summaries(), err)
+	}
+}

@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"github.com/onegator/gator/internal/server/conversations"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -26,7 +27,7 @@ func TestTheConsentCardLetsAWorkAgentWork(t *testing.T) {
 	worker := w.agent("worker")
 	ask := w.post(w.admin, w.general.ID, "@worker fix the flaky test", worker)
 	chat := w.turnOf(worker, ask)
-	card, err := w.q.FindCard(w.ctx, db.FindCardParams{CardKey: new("consent:" + uuidText(chat.ID)), ConversationIds: []pgtype.UUID{chat.ConversationID}})
+	card, err := w.q.FindCard(w.ctx, db.FindCardParams{CardKey: new("consent:" + conversations.UUIDString(chat.ID)), ConversationIds: []pgtype.UUID{chat.ConversationID}})
 	if err != nil {
 		t.Fatalf("no consent card: %v", err)
 	}

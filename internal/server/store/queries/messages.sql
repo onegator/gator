@@ -139,9 +139,17 @@ SELECT * FROM conversation_summaries WHERE conversation_id = $1;
 -- there covers this much already. No row: nothing to do.
 INSERT INTO conversation_summaries (conversation_id, pending_upto_seq)
 VALUES (sqlc.arg(conversation_id), sqlc.arg(upto_seq))
+-- A refresh nobody is writing any more is reclaimed: its job ended or is gone, it never got a job
+-- in two minutes, or it has been pending for an hour.
 ON CONFLICT (conversation_id) DO UPDATE
 SET pending_upto_seq = EXCLUDED.pending_upto_seq, pending_job_id = NULL, updated_at = now()
-WHERE conversation_summaries.pending_upto_seq IS NULL AND conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
+WHERE conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
+  AND (conversation_summaries.pending_upto_seq IS NULL
+       OR conversation_summaries.updated_at < now() - interval '1 hour'
+       OR (conversation_summaries.pending_job_id IS NULL AND conversation_summaries.updated_at < now() - interval '2 minutes')
+       OR (conversation_summaries.pending_job_id IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM jobs j WHERE j.id = conversation_summaries.pending_job_id
+                 AND j.status IN ('queued', 'leased', 'running', 'stalled'))))
 RETURNING *;
 
 -- name: SetSummaryJob :exec

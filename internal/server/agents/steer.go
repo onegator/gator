@@ -34,15 +34,21 @@ type jobSteerer interface {
 type Steerer struct {
 	store steerStore
 	jobs  jobSteerer
+	voice announcer
 	log   *slog.Logger
 }
 
+// announcer says something as Gator in a conversation. conversations.Voice is one.
+type announcer interface {
+	Announce(ctx context.Context, conv db.Conversation, body string) (db.Message, error)
+}
+
 // NewSteerer builds it.
-func NewSteerer(store steerStore, jobs jobSteerer, log *slog.Logger) *Steerer {
+func NewSteerer(store steerStore, jobs jobSteerer, voice announcer, log *slog.Logger) *Steerer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Steerer{store: store, jobs: jobs, log: log}
+	return &Steerer{store: store, jobs: jobs, voice: voice, log: log}
 }
 
 // Intercept implements Interceptor.
@@ -73,7 +79,11 @@ func (s *Steerer) Intercept(ctx context.Context, msg db.Message, conv db.Convers
 		case err == nil, errors.Is(err, runners.ErrJobNotActive), errors.Is(err, pgx.ErrNoRows):
 			// steered, or not started yet (it will read this), or gone
 		case errors.Is(err, runners.ErrRunnerOffline):
-			s.log.Info("a correction found its agent's runner offline", "turn", uuidText(t.ID))
+			// Not steered: say so, rather than let the person think it was heard. The job goes back
+			// to the queue when its lease runs out, and its next attempt reads this message.
+			if _, err := s.voice.Announce(ctx, conv, "The runner answering here is offline, so this did not reach the agent now; it reads it when its work starts again."); err != nil {
+				return nil, err
+			}
 		default:
 			return nil, err
 		}

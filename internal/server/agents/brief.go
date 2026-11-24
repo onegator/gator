@@ -77,7 +77,7 @@ func (b *Briefer) Brief(ctx context.Context, job db.Job) (runners.TurnBrief, err
 	}
 	if b.summaries != nil {
 		if err := b.summaries.Refresh(ctx, conv, job.TaskID, pack); err != nil {
-			b.log.Warn("asking for a conversation's summary", "conversation", uuidText(conv.ID), "err", err)
+			b.log.Warn("asking for a conversation's summary", "conversation", conversations.UUIDString(conv.ID), "err", err)
 		}
 	}
 	brief := Render(agent, pack)

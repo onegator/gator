@@ -212,13 +212,17 @@ func (d *Directory) Delete(ctx context.Context, p auth.Principal, id pgtype.UUID
 // statsWindow is the record a profile shows.
 const statsWindow = 30 * 24 * time.Hour
 
-// Stats is the agent's record over the last 30 days.
+// Stats is the agent's record over the last 30 days. A workspace agent works in every project,
+// so its record is for workspace admins: anyone else would read what other projects spent.
 func (d *Directory) Stats(ctx context.Context, p auth.Principal, id pgtype.UUID) (db.Agent, Stats, error) {
 	a, err := d.Get(ctx, p, id)
 	if err != nil {
 		return db.Agent{}, Stats{}, err
 	}
 	since := d.now().Add(-statsWindow)
+	if !a.ProjectID.Valid && p.WorkspaceRole != "admin" {
+		return a, Stats{Since: since}, nil
+	}
 	row, err := d.store.AgentStats(ctx, db.AgentStatsParams{AgentID: a.ID, Since: pgtype.Timestamptz{Time: since, Valid: true}})
 	if err != nil {
 		return db.Agent{}, Stats{}, err

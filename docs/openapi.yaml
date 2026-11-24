@@ -2784,7 +2784,7 @@ components:
         stats: { $ref: "#/components/schemas/AgentStats" }
     AgentStats:
       type: object
-      description: "Its record since a moment, 30 days by default: turns asked of it, jobs it did (phase work and answers), how many of those that ended ended done, and what they cost."
+      description: "Its record since a moment, 30 days by default: turns asked of it, jobs it did (phase work and answers), how many of those that ended ended done, and what they cost. A workspace agent's record spans every project and is shown to workspace admins only; others get zeros."
       required: [since, turns, refused, jobs, done, ended, doneShare, costUsd]
       properties:
         since: { type: string, format: date-time }

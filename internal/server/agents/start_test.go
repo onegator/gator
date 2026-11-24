@@ -181,7 +181,7 @@ func TestConsentIsAskedAgainUntilAnswered(t *testing.T) {
 	worker := w.agent("worker")
 	msg := w.post(w.admin, w.general.ID, "@worker fix it", worker)
 	turn := w.turnOf(worker, msg)
-	key := "consent:" + uuidText(turn.ID)
+	key := "consent:" + conversations.UUIDString(turn.ID)
 	if _, err := w.pool.Exec(w.ctx, "DELETE FROM messages WHERE card_key = $1", key); err != nil {
 		t.Fatal(err)
 	}

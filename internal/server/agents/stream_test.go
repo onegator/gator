@@ -47,8 +47,8 @@ func TestAnAnswerIsStreamedIntoItsMessage(t *testing.T) {
 
 	w.output(job, 1, "text", map[string]any{"text": "Reading the diff."})
 	w.output(job, 2, "tool_call", map[string]any{"name": "Read", "input": map[string]any{"file_path": "checkout.go"}})
-	s.mark(w.ctx, uuidText(job.ID))
-	s.flushOne(w.ctx, uuidText(job.ID))
+	s.mark(w.ctx, conversations.UUIDString(job.ID))
+	s.flushOne(w.ctx, conversations.UUIDString(job.ID))
 	msg, _ := w.q.GetMessage(w.ctx, turn.ReplyMessageID)
 	if msg.Body != "Reading the diff." || msg.Status != conversations.StatusStreaming {
 		t.Fatalf("while it writes: %q %s", msg.Body, msg.Status)
@@ -62,8 +62,8 @@ func TestAnAnswerIsStreamedIntoItsMessage(t *testing.T) {
 	}
 
 	w.output(job, 3, "text", map[string]any{"text": "It rounds twice.\n\n```gator-digest\n{\"changes\":[]}\n```"})
-	s.mark(w.ctx, uuidText(job.ID))
-	s.flushOne(w.ctx, uuidText(job.ID))
+	s.mark(w.ctx, conversations.UUIDString(job.ID))
+	s.flushOne(w.ctx, conversations.UUIDString(job.ID))
 	msg, _ = w.q.GetMessage(w.ctx, turn.ReplyMessageID)
 	if msg.Body != "Reading the diff.\n\nIt rounds twice." {
 		t.Fatalf("the digest is no part of the answer: %q", msg.Body)
@@ -80,8 +80,8 @@ func TestAnAnswerIsStreamedIntoItsMessage(t *testing.T) {
 	}
 	// A late flush cannot undo the end.
 	w.output(job, 4, "text", map[string]any{"text": "late"})
-	s.mark(w.ctx, uuidText(job.ID))
-	s.flushOne(w.ctx, uuidText(job.ID))
+	s.mark(w.ctx, conversations.UUIDString(job.ID))
+	s.flushOne(w.ctx, conversations.UUIDString(job.ID))
 	if again, _ := w.q.GetMessage(w.ctx, turn.ReplyMessageID); again.Body != msg.Body || again.Status != conversations.StatusFinal {
 		t.Fatalf("an ended answer was rewritten: %q", again.Body)
 	}
@@ -95,6 +95,7 @@ func TestATurnThatEndsBadlySaysSo(t *testing.T) {
 		msgStatus, turn      string
 	}{
 		{"failed", "claude error_max_turns", "", "@planner could not answer: claude error_max_turns", conversations.StatusFailed, TurnFailed},
+		{"failed", "lease expired", "Half a plan.", "Half a plan.\n\n_@planner could not answer: lease expired_", conversations.StatusFailed, TurnFailed},
 		{"stopped", "stopped: by Ada", "Half a plan.", "Half a plan.\n\n_@planner stopped (by Ada)._", conversations.StatusFinal, TurnStopped},
 		{"stopped", "", "", "_@planner stopped._", conversations.StatusFinal, TurnStopped},
 	}
@@ -108,8 +109,8 @@ func TestATurnThatEndsBadlySaysSo(t *testing.T) {
 			if tc.said != "" {
 				w.output(job, 1, "text", map[string]any{"text": tc.said})
 				s := NewStreamer(nil, w.q, w.mod.Voice, w.pool, time.Millisecond, nil)
-				s.mark(w.ctx, uuidText(job.ID))
-				s.flushOne(w.ctx, uuidText(job.ID))
+				s.mark(w.ctx, conversations.UUIDString(job.ID))
+				s.flushOne(w.ctx, conversations.UUIDString(job.ID))
 			}
 			w.finished(job, tc.status, "", tc.reason)
 			msg, _ := w.q.GetMessage(w.ctx, turn.ReplyMessageID)
@@ -121,5 +122,32 @@ func TestATurnThatEndsBadlySaysSo(t *testing.T) {
 				t.Fatal("the placeholder is no answer")
 			}
 		})
+	}
+}
+
+// A job its runner lost starts again from nothing, and so does its answer: the second attempt's
+// words are not appended to the first's.
+func TestARequeuedReplyStartsItsAnswerAgain(t *testing.T) {
+	w := newWorld(t)
+	reviewer := w.agent("reviewer")
+	turn := w.turnOf(reviewer, w.post(w.admin, w.general.ID, "@reviewer look", reviewer))
+	job, _ := w.q.GetJob(w.ctx, turn.JobID)
+	s := NewStreamer(nil, w.q, w.mod.Voice, w.pool, time.Millisecond, nil)
+	w.output(job, 1, "text", map[string]any{"text": "First attempt."})
+	s.mark(w.ctx, conversations.UUIDString(job.ID))
+	s.flushOne(w.ctx, conversations.UUIDString(job.ID))
+
+	if err := w.mod.Tracker.Handle(w.ctx, db.EventsAfterRow{Type: "job.requeued", AggregateID: job.ID}); err != nil {
+		t.Fatal(err)
+	}
+	s.restart(conversations.UUIDString(job.ID))
+	if msg, _ := w.q.GetMessage(w.ctx, turn.ReplyMessageID); msg.Body != Reading(reviewer) {
+		t.Fatalf("after a requeue: %q", msg.Body)
+	}
+	w.output(job, 2, "text", map[string]any{"text": "Second attempt."})
+	s.mark(w.ctx, conversations.UUIDString(job.ID))
+	s.flushOne(w.ctx, conversations.UUIDString(job.ID))
+	if msg, _ := w.q.GetMessage(w.ctx, turn.ReplyMessageID); msg.Body != "Second attempt." {
+		t.Fatalf("the second attempt's answer: %q", msg.Body)
 	}
 }

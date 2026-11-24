@@ -76,7 +76,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	return &Module{
 		Consent:    consent,
 		Directory:  NewDirectory(q, deps.Roles, chat.Access),
-		Dispatcher: NewDispatcher(q, guards, starter, NewSteerer(q, deps.Jobs, deps.Log)),
+		Dispatcher: NewDispatcher(q, guards, starter, NewSteerer(q, deps.Jobs, voice, deps.Log)),
 		Control:    NewControl(q, chat.Access, deps.Jobs, voice),
 		Starter:    starter,
 		Voice:      voice,

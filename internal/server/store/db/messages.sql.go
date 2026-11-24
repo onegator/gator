@@ -84,7 +84,13 @@ INSERT INTO conversation_summaries (conversation_id, pending_upto_seq)
 VALUES ($1, $2)
 ON CONFLICT (conversation_id) DO UPDATE
 SET pending_upto_seq = EXCLUDED.pending_upto_seq, pending_job_id = NULL, updated_at = now()
-WHERE conversation_summaries.pending_upto_seq IS NULL AND conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
+WHERE conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
+  AND (conversation_summaries.pending_upto_seq IS NULL
+       OR conversation_summaries.updated_at < now() - interval '1 hour'
+       OR (conversation_summaries.pending_job_id IS NULL AND conversation_summaries.updated_at < now() - interval '2 minutes')
+       OR (conversation_summaries.pending_job_id IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM jobs j WHERE j.id = conversation_summaries.pending_job_id
+                 AND j.status IN ('queued', 'leased', 'running', 'stalled'))))
 RETURNING conversation_id, upto_seq, summary, model, pending_job_id, pending_upto_seq, updated_at
 `
 
@@ -95,6 +101,8 @@ type ClaimSummaryRefreshParams struct {
 
 // Marks a newer summary as being written, unless one is already being written or the summary
 // there covers this much already. No row: nothing to do.
+// A refresh nobody is writing any more is reclaimed: its job ended or is gone, it never got a job
+// in two minutes, or it has been pending for an hour.
 func (q *Queries) ClaimSummaryRefresh(ctx context.Context, arg ClaimSummaryRefreshParams) (ConversationSummary, error) {
 	row := q.db.QueryRow(ctx, claimSummaryRefresh, arg.ConversationID, arg.UptoSeq)
 	var i ConversationSummary

@@ -68,7 +68,7 @@ func NewConsent(store consentStore, cards cardSayer, rights conversationRights, 
 	return &Consent{store: store, cards: cards, rights: rights, roles: roles, allower: allower, guards: guards, turns: turns}
 }
 
-func consentKey(turn pgtype.UUID) string { return "consent:" + uuidText(turn) }
+func consentKey(turn pgtype.UUID) string { return "consent:" + conversations.UUIDString(turn) }
 
 // consentCard is the card of a turn's question, in one of its states.
 func consentCard(turn db.AgentTurn, agent db.Agent, task db.Task, state string, by string) conversations.Card {
@@ -79,7 +79,7 @@ func consentCard(turn db.AgentTurn, agent db.Agent, task db.Task, state string, 
 		actions = []string{}
 	}
 	return conversations.Card{Key: consentKey(turn.ID), Type: CardConsent, Body: body, Data: map[string]any{
-		"ref":     conversations.Ref("turn", uuidText(turn.ID), map[string]any{"taskId": uuidText(task.ID)}),
+		"ref":     conversations.Ref("turn", conversations.UUIDString(turn.ID), map[string]any{"taskId": conversations.UUIDString(task.ID)}),
 		"title":   fmt.Sprintf("Let @%s work on this?", agent.Handle),
 		"state":   state,
 		"summary": task.Title,

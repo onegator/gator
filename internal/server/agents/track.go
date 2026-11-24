@@ -38,7 +38,7 @@ func NewTurnTracker(store trackStore, voice rewriter) *TurnTracker {
 }
 
 // Events are the outbox events it reads.
-func (*TurnTracker) Events() []string { return []string{"job.started", "job.finished"} }
+func (*TurnTracker) Events() []string { return []string{"job.started", "job.requeued", "job.finished"} }
 
 // Handle implements conversations.Handler.
 func (t *TurnTracker) Handle(ctx context.Context, e db.EventsAfterRow) error {
@@ -53,8 +53,17 @@ func (t *TurnTracker) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	if err != nil {
 		return ignoreGone(err)
 	}
-	if e.Type == "job.started" {
+	switch e.Type {
+	case "job.started":
 		return t.status(ctx, turn, TurnRunning)
+	case "job.requeued":
+		// Its runner lost it; another attempt starts from nothing, and so does the answer.
+		agent, err := t.store.GetAgent(ctx, turn.AgentID)
+		if err != nil || !turn.ReplyMessageID.Valid {
+			return err
+		}
+		_, _, err = t.voice.Rewrite(ctx, turn.ReplyMessageID, Reading(agent), conversations.StatusStreaming)
+		return err
 	}
 	if !terminalJob(job.Status) {
 		return nil // a finished event of a job requeued since
@@ -116,7 +125,11 @@ func Ending(agent db.Agent, job db.Job, said db.Message) (string, string) {
 		}
 		return note, conversations.StatusFinal
 	}
-	return fmt.Sprintf("@%s could not answer: %s", agent.Handle, orText(reason, "its job failed")), conversations.StatusFailed
+	note := fmt.Sprintf("@%s could not answer: %s", agent.Handle, orText(reason, "its job failed"))
+	if partial != "" {
+		return partial + "\n\n_" + note + "_", conversations.StatusFailed // what it had said stays
+	}
+	return note, conversations.StatusFailed
 }
 
 func terminalJob(status string) bool {

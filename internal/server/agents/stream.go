@@ -88,6 +88,8 @@ func (s *Streamer) Run(ctx context.Context) {
 			switch e.Type {
 			case "job.output":
 				s.mark(ctx, e.AggregateID)
+			case "job.requeued":
+				s.restart(e.AggregateID)
 			case "job.finished":
 				s.flushOne(ctx, e.AggregateID)
 				delete(s.replies, e.AggregateID)
@@ -98,6 +100,13 @@ func (s *Streamer) Run(ctx context.Context) {
 				s.flushOne(ctx, id)
 			}
 		}
+	}
+}
+
+// restart forgets what an attempt of a reply had said: the next attempt answers afresh.
+func (s *Streamer) restart(job string) {
+	if r, ok := s.replies[job]; ok {
+		r.text, r.dirty = nil, false
 	}
 }
 
@@ -174,13 +183,13 @@ func (s *Streamer) flushOne(ctx context.Context, job string) {
 
 // progressed tells the job's card that the agent called more tools.
 func (s *Streamer) progressed(ctx context.Context, turn db.AgentTurn) {
-	payload, _ := json.Marshal(map[string]any{"turn_id": uuidText(turn.ID)})
+	payload, _ := json.Marshal(map[string]any{"turn_id": conversations.UUIDString(turn.ID)})
 	err := store.InTx(ctx, s.pool, func(q *db.Queries) error {
 		_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: conversations.EventJobProgress, Aggregate: "job", AggregateID: turn.JobID, Payload: payload})
 		return err
 	})
 	if err != nil {
-		s.log.Warn("telling a job's card of its progress", "job", uuidText(turn.JobID), "err", err)
+		s.log.Warn("telling a job's card of its progress", "job", conversations.UUIDString(turn.JobID), "err", err)
 	}
 }
 

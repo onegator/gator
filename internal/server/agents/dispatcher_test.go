@@ -42,7 +42,7 @@ func TestAMentionStartsATurnInTheThread(t *testing.T) {
 	}
 	reply, _ := w.q.GetMessage(w.ctx, turn.ReplyMessageID)
 	if reply.AuthorKind != conversations.AuthorAgent || reply.AuthorID != reviewer.ID || reply.Status != conversations.StatusStreaming ||
-		reply.ConversationID != thread.ID || conversations.OriginOf(reply).Turn != uuidText(turn.ID) {
+		reply.ConversationID != thread.ID || conversations.OriginOf(reply).Turn != conversations.UUIDString(turn.ID) {
 		t.Fatalf("reply: %+v", reply)
 	}
 	if w.count("SELECT count(*) FROM conversation_members WHERE conversation_id = $1 AND member_kind = 'agent' AND member_id = $2", thread.ID, reviewer.ID) != 1 {
@@ -250,7 +250,7 @@ func TestADelegationToAWorkAgentAsksForConsent(t *testing.T) {
 	if turn.Tier != TierChat || job.Tier != TierChat || turn.Hop != 1 || turn.RequestedByKind != RequestedByAgent {
 		t.Fatalf("turn %+v job tier %s", turn, job.Tier)
 	}
-	card, err := w.q.FindCard(w.ctx, db.FindCardParams{CardKey: new("consent:" + uuidText(turn.ID)), ConversationIds: []pgtype.UUID{turn.ConversationID}})
+	card, err := w.q.FindCard(w.ctx, db.FindCardParams{CardKey: new("consent:" + conversations.UUIDString(turn.ID)), ConversationIds: []pgtype.UUID{turn.ConversationID}})
 	if err != nil {
 		t.Fatalf("no consent card: %v", err)
 	}

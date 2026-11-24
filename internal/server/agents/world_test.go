@@ -120,7 +120,7 @@ func (w *world) delegate(from db.AgentTurn, body string, agents ...db.Agent) db.
 // dispatch hands the message.posted event of msg to the dispatcher, as the consumer would.
 func (w *world) dispatch(msg db.Message) {
 	w.t.Helper()
-	payload, _ := json.Marshal(map[string]any{"messageId": uuidText(msg.ID)})
+	payload, _ := json.Marshal(map[string]any{"messageId": conversations.UUIDString(msg.ID)})
 	if err := w.mod.Dispatcher.Handle(w.ctx, db.EventsAfterRow{Type: conversations.EventMessagePosted, AggregateID: msg.ConversationID, Payload: payload}); err != nil {
 		w.t.Fatal(err)
 	}

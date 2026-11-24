@@ -149,6 +149,9 @@ func dmKey(ids []pgtype.UUID) string {
 	return strings.Join(keys, ",")
 }
 
+// UUIDString writes an id the way the API and the outbox do; the zero id is "".
+func UUIDString(u pgtype.UUID) string { return uuidString(u) }
+
 func uuidString(u pgtype.UUID) string {
 	if !u.Valid {
 		return ""

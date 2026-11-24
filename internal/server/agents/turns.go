@@ -136,7 +136,7 @@ func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, tu
 	grant := TierFor(r.Agent, task)
 	if !turn.ReplyMessageID.Valid {
 		msg, err := s.voice.Say(ctx, home, conversations.Speech{Agent: r.Agent.ID, Turn: turn.ID,
-			Body: Reading(r.Agent), Status: conversations.StatusStreaming, ClientID: "turn:" + uuidText(turn.ID)})
+			Body: Reading(r.Agent), Status: conversations.StatusStreaming, ClientID: "turn:" + conversations.UUIDString(turn.ID)})
 		if err != nil {
 			return turn, err
 		}

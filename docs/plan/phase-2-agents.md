@@ -216,8 +216,10 @@ Agenci workspace'u są tylko dla admina workspace'u.
 
 ## Odstępstwa od planu (zapisane przy implementacji)
 
-- **Migracje** mają numery z planu: `00039_agents.sql` (agenci, agenci domyślni, `jobs.agent_id`) i
-  `00040_agent_turns.sql` (turny, `jobs.turn_id/tier/kind`, `conversation_summaries`). Każda ma krok
+- **Migracje**: `00039_agents.sql` (agenci, agenci domyślni, `jobs.agent_id`),
+  `00040_agent_turns.sql` (turny, `jobs.turn_id/tier/kind`, `conversation_summaries`) i — po review —
+  `00041_agents_keep.sql` (agentów się odkłada, `deleted_at`, a turny trzymają się ich `ON DELETE
+  RESTRICT`; blokady uchwytu wg zakresu; `agent_turns.claimed_at`). Fazy 3–5 przesunęły się o jeden. Każda ma krok
   down; `internal/server/store/migrations_test.go` robi na osobnej bazie wejście na 00038, dane
   (projekty, taski, joby z rolami), up, down do 00038 i znów up, i sprawdza backfille za każdym razem.
 - **Unikalność uchwytu** pilnuje trigger `agents_handle_visible_once` (BEFORE INSERT/UPDATE): bierze
@@ -311,8 +313,20 @@ Agenci workspace'u są tylko dla admina workspace'u.
   je zrobił. Doszły `GET/POST /workspace/agents` dla agentów workspace'u (tylko admin workspace'u
   tworzy i edytuje). Wbudowany agent zachowuje uchwyt i rolę; usuwa się tylko własnych (409 dla
   wbudowanych).
-- **Start turnu** trzyma turn blokadą doradczą na osobnym połączeniu, a nie blokadą wiersza: zapisy
-  startu odwołują się do turnu i rozmowy, a blokada wiersza czekałaby sama na siebie. Dwa dispatchery
-  (dwa serwery, powtórzone zdarzenie) nie startują więc jednego turnu dwa razy.
+- **Start turnu** to warunkowe zajęcie (`ClaimTurn`: turn `queued` bez joba, zajęcie wygasa po 2 min),
+  a nie blokada: job jest odnajdywany po `jobs.turn_id`, wiadomość odpowiedzi po `client_id`, a pytanie
+  o consent powtarza się przy każdej dostawie, dopóki karty nie ma. Stop bierze to samo zajęcie. Turn
+  bez joba niczym nie steruje; ponowna dostawa, którą strażnik dziś odrzuca, kończy taki turn jako
+  `refused`; sweeper kończy turny, których żadna dostawa nie wystartowała, i pisze, gdy odpowiedź
+  czeka na runnera.
+- **Po review** (szczegóły w commitach): token joba ma zakres wg kindu, sprawdzany na serwerze (reply:
+  `say`, `thread show`, `task create`, `knowledge search`, `catalogue show`, `product propose`; summary:
+  nic, i nie dostaje tokenu, narzędzi ani checkoutu); słowa z zewnątrz są w znacznikach z nonce
+  pakietu i nie trafiają do streszczeń; treść DM-ów i prywatnych kanałów nie trafia do tytułu aska,
+  instrukcji joba, zapisu kontekstu ani zdarzeń, a job odpowiedzi czyta ten, kto może czytać jego
+  rozmowę; delegacja ma limit szerokości (3 na turn, 8 turnów na łańcuch), budżet łańcucha liczy
+  joby w toku po ich limicie, a agent ma własny dzienny limit (`policy.daily_budget_usd`); `say` z
+  joba fazy zaczyna łańcuch tego joba; checkout `chat` czyta gałąź ostatniej pracy taska, z metadanymi
+  git bez prawa zapisu; backend deklaruje, jakie ograniczenia utrzyma (`backend.Limited`).
 - **Punkt 10**: ekran profilu agenta należy do fazy 6a; `docs/openapi.yaml` opisuje wszystko, czego
   potrzebuje (`Agent`, `AgentProfile`, `AgentTurn`, `MessageTurn`, karty `consent` i `task_proposal`).

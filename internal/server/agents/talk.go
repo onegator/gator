@@ -87,7 +87,7 @@ func (t *Talk) Say(ctx context.Context, job db.Job, body string) (db.Message, er
 		return db.Message{}, ErrInvalid
 	}
 	if len(body) > maxSay {
-		body = body[:maxSay] + "…"
+		body = strings.ToValidUTF8(body[:maxSay], "") + "…"
 	}
 	conv, agent, err := t.Where(ctx, job)
 	if err != nil {
