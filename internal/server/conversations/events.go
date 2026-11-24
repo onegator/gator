@@ -39,10 +39,15 @@ func emit(ctx context.Context, q *db.Queries, typ string, conv pgtype.UUID, payl
 	if err != nil {
 		return err
 	}
+	return emitTo(ctx, q, typ, conv, payload, members, also)
+}
+
+// emitTo records an event about conv for these people alone.
+func emitTo(ctx context.Context, q *db.Queries, typ string, conv pgtype.UUID, payload map[string]any, people ...[]pgtype.UUID) error {
 	payload["conversationId"] = uuidString(conv)
-	payload["audience"] = audience(members, also)
+	payload["audience"] = audience(people...)
 	b, _ := json.Marshal(payload)
-	_, err = q.InsertEvent(ctx, db.InsertEventParams{Type: typ, Aggregate: Aggregate, AggregateID: conv, Payload: b})
+	_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: typ, Aggregate: Aggregate, AggregateID: conv, Payload: b})
 	return err
 }
 

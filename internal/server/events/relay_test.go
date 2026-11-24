@@ -57,3 +57,34 @@ func TestHubRoutesAProjectsEventsToItsTopic(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+// A conversation's events go to its own topic and to each person in their audience, and to
+// nobody else's.
+func TestHubRoutesAConversationsEventsToItsTopicAndItsAudience(t *testing.T) {
+	h := NewHub()
+	conv, stopConv := h.Subscribe("conversation:c1")
+	defer stopConv()
+	alice, stopAlice := h.Subscribe("user:alice")
+	defer stopAlice()
+	bob, stopBob := h.Subscribe("user:bob")
+	defer stopBob()
+
+	h.Publish(Event{ID: 9, Type: "message.posted", Aggregate: "conversation", AggregateID: "c1",
+		Payload: json.RawMessage(`{"audience":["alice"]}`)})
+
+	for name, ch := range map[string]<-chan Event{"conversation": conv, "alice": alice} {
+		select {
+		case e := <-ch:
+			if e.ID != 9 {
+				t.Fatalf("%s got %d", name, e.ID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not receive", name)
+		}
+	}
+	select {
+	case e := <-bob:
+		t.Fatalf("somebody outside the audience received %v", e)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

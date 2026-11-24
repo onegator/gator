@@ -28,7 +28,9 @@ type Event struct {
 }
 
 // Hub fans events out to topic subscribers. Topics: "inbox", "task:<id>", "job:<id>",
-// "project:<id>", "runners", "runner:<id>", "*".
+// "project:<id>", "conversation:<id>", "user:<id>", "runners", "runner:<id>", "*".
+// "user:<id>" carries the conversation events whose audience names that person; the WebSocket
+// offers it to that person alone, as "me".
 type Hub struct {
 	mu   sync.RWMutex
 	subs map[string]map[chan Event]struct{}
@@ -84,6 +86,12 @@ func (h *Hub) Publish(e Event) {
 	if e.Aggregate == "runner" {
 		topics = append(topics, "runners", "runner:"+e.AggregateID)
 	}
+	if e.Aggregate == "conversation" {
+		topics = append(topics, "conversation:"+e.AggregateID)
+		for _, id := range audience(e.Payload) {
+			topics = append(topics, "user:"+id)
+		}
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	seen := map[chan Event]bool{}
@@ -99,6 +107,15 @@ func (h *Hub) Publish(e Event) {
 			}
 		}
 	}
+}
+
+// audience reads the people a conversation event concerns from its payload.
+func audience(payload json.RawMessage) []string {
+	var p struct {
+		Audience []string `json:"audience"`
+	}
+	_ = json.Unmarshal(payload, &p)
+	return p.Audience
 }
 
 // Relay polls the outbox and publishes unpublished rows in order.

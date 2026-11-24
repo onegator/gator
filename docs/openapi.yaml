@@ -4,9 +4,15 @@ info:
   version: 0.1.0
   description: >
     HTTP surface of gator-server. Every route lives under /api/v1. Live updates are delivered
-    over the WebSocket at /api/v1/ws (topics: inbox, task:<id>, job:<id>, project:<id>). On
-    every topic, an event that belongs to a project reaches only callers who may read that
-    project; subscribing to project:<id> without that right closes the socket.
+    over the WebSocket at /api/v1/ws (topics: inbox, task:<id>, job:<id>, project:<id>,
+    conversation:<id>, me). On every topic, an event that belongs to a project reaches only
+    callers who may read that project, and an event about a conversation only callers who may
+    read that conversation; subscribing to project:<id> or conversation:<id> without that right
+    closes the socket. "me" follows what concerns the caller: conversation events whose audience
+    names them (messages and unread in conversations they are in, mentions, DMs). Conversation
+    events carry ids and seq, never message bodies; a client reads the messages after its last
+    seq. A client sends {"typing":"<conversationId>"} to say it is typing; the others in the
+    conversation get a conversation.typing event, which is never stored.
 servers:
   - url: /api/v1
 paths:
@@ -1064,6 +1070,176 @@ paths:
       parameters: [ { $ref: "#/components/parameters/taskId" } ]
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Transition" } } } } }
+  /projects/{projectId}/conversations:
+    get:
+      operationId: listProjectConversations
+      description: >-
+        A project's conversations of one kind that the caller may read: the channels open to the
+        project and those the caller is in, with the caller's unread counts. Unread counts are
+        kept for conversations the caller is in (joined); reading or posting joins one.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [channel, dm, thread, task], default: channel } }
+        - { name: archived, in: query, required: false, description: include archived channels, schema: { type: boolean } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createChannel
+      description: Opens a channel in the project; its creator owns it. People who may write in the project only (not viewers). 409 when the name is taken.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewChannel" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /conversations:
+    get:
+      operationId: listMyConversations
+      description: Every conversation the caller is in and may still read, newest activity first, with unread counts; DMs outside any project are listed here.
+      parameters:
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [channel, dm, thread, task] } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /conversations/dm:
+    post:
+      operationId: openDirectMessage
+      description: >-
+        The DM between the caller and these people (2–8 people, the caller included), opened when
+        they have none: the same people in the same scope always get the same DM (200), a new one
+        answers 201. With projectId, everyone must be in that project; without it, the DM is outside
+        every project and anyone in the workspace may be in it.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewDirectMessage" } } }
+      responses:
+        "200": { description: the DM they already had, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
+        "201": { description: opened, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /conversations/{conversationId}:
+    get:
+      operationId: getConversation
+      description: A conversation with its members and what the caller may do in it. 404 for one the caller may not read, whether or not it exists.
+      parameters: [ { $ref: "#/components/parameters/conversationId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateConversation
+      description: >-
+        Changes the topic (anyone who may write), or renames or archives a channel (project admins
+        and the channel's owners). #general keeps its name and is never archived (409).
+      parameters: [ { $ref: "#/components/parameters/conversationId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ConversationPatch" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /conversations/{conversationId}/members/{memberKind}/{memberId}:
+    put:
+      operationId: setConversationMember
+      description: >-
+        Joins a conversation (oneself, anyone who may read it), adds someone else (anyone who may
+        write; that person must be able to read it), or changes a membership: notify is one's own,
+        role a moderator's. A DM keeps the people it was opened with (409). Agents join from phase 2.
+      parameters:
+        - { $ref: "#/components/parameters/conversationId" }
+        - { $ref: "#/components/parameters/memberKind" }
+        - { $ref: "#/components/parameters/memberId" }
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/ConversationMemberChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationMember" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeConversationMember
+      description: Leaves a conversation, or (moderators) takes someone out of it. Nobody leaves a DM (409).
+      parameters:
+        - { $ref: "#/components/parameters/conversationId" }
+        - { $ref: "#/components/parameters/memberKind" }
+        - { $ref: "#/components/parameters/memberId" }
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /conversations/{conversationId}/messages:
+    get:
+      operationId: listMessages
+      description: >-
+        One page of messages in seq order. Without beforeSeq or afterSeq, the newest page; with
+        beforeSeq, the page just older than it; with afterSeq, the messages after it (what a client
+        reads after message.posted). hasMore says there is more in the direction asked.
+      parameters:
+        - { $ref: "#/components/parameters/conversationId" }
+        - { name: beforeSeq, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: afterSeq, in: query, required: false, schema: { type: integer, format: int64, minimum: 0 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MessagePage" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: postMessage
+      description: >-
+        Posts a message. Its seq is the next in the conversation, without gaps. A clientId already
+        posted in this conversation answers that message with 200 and writes nothing. Mentioned
+        people who cannot read the conversation are left out. Posting joins the conversation.
+        Emits message.posted (and message.replied on the root's conversation for a reply).
+      parameters: [ { $ref: "#/components/parameters/conversationId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewMessage" } } }
+      responses:
+        "200": { description: already posted with this clientId, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "201": { description: posted, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /conversations/{conversationId}/read:
+    post:
+      operationId: markConversationRead
+      description: Moves the caller's read marker up to seq (never back, never past the newest message); reading joins the conversation. Emits conversation.read to the caller alone.
+      parameters: [ { $ref: "#/components/parameters/conversationId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReadMarker" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationMember" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /messages/{messageId}:
+    get:
+      operationId: getMessage
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /messages/{messageId}/thread:
+    get:
+      operationId: getMessageThread
+      description: >-
+        The thread under a message, opened the first time somebody asks (with the message's author
+        in it). The thread under a task's card is the task's conversation. Replies have no threads
+        of their own (400).
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1073,6 +1249,10 @@ components:
     pluginName: { name: pluginName, in: path, required: true, schema: { type: string } }
     invitationId: { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
     automationKey: { name: automationKey, in: path, required: true, schema: { type: string } }
+    conversationId: { name: conversationId, in: path, required: true, schema: { type: string, format: uuid } }
+    messageId: { name: messageId, in: path, required: true, schema: { type: string, format: uuid } }
+    memberKind: { name: memberKind, in: path, required: true, schema: { type: string, enum: [user, agent] } }
+    memberId: { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error:
       description: error
@@ -2091,3 +2271,144 @@ components:
         actorId: { type: string, format: uuid }
         reason: { type: string }
         createdAt: { type: string, format: date-time }
+    Conversation:
+      type: object
+      required: [id, kind, topic, visibility, archived, createdAt, lastSeq, joined, lastReadSeq, unread, unreadMentions]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: absent for a DM outside every project }
+        kind: { type: string, enum: [channel, dm, thread, task] }
+        name: { type: string, description: channels only }
+        topic: { type: string }
+        visibility: { type: string, enum: [project, private] }
+        parentMessageId: { type: string, format: uuid, description: "a thread's (or task thread's) root message" }
+        taskId: { type: string, format: uuid, description: "kind task: the task this is the thread of" }
+        componentKey: { type: string }
+        archived: { type: boolean }
+        archivedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        lastMessageAt: { type: string, format: date-time }
+        lastSeq: { type: integer, format: int64, description: the seq of the newest message }
+        joined: { type: boolean, description: whether the caller is in it }
+        lastReadSeq: { type: integer, format: int64 }
+        notify: { type: string, enum: [all, mentions, none], description: "the caller's setting, when joined" }
+        unread: { type: integer, format: int64, description: "messages after the caller's read marker; 0 when not joined" }
+        unreadMentions: { type: integer, format: int64, description: unread messages that mention the caller }
+    ConversationDetail:
+      allOf:
+        - $ref: "#/components/schemas/Conversation"
+        - type: object
+          required: [members, rights]
+          properties:
+            members: { type: array, items: { $ref: "#/components/schemas/ConversationMember" } }
+            rights: { $ref: "#/components/schemas/ConversationRights" }
+    ConversationRights:
+      type: object
+      required: [read, react, write, moderate]
+      description: what the caller may do; a viewer reads and reacts but does not write
+      properties:
+        read: { type: boolean }
+        react: { type: boolean }
+        write: { type: boolean }
+        moderate: { type: boolean, description: "rename, archive, remove others, delete their messages" }
+    ConversationMember:
+      type: object
+      required: [kind, id, role, notify, lastReadSeq, joinedAt]
+      properties:
+        kind: { type: string, enum: [user, agent] }
+        id: { type: string, format: uuid }
+        name: { type: string }
+        role: { type: string, enum: [owner, member] }
+        notify: { type: string, enum: [all, mentions, none] }
+        lastReadSeq: { type: integer, format: int64 }
+        joinedAt: { type: string, format: date-time }
+    MemberRef:
+      type: object
+      required: [kind, id]
+      properties:
+        kind: { type: string, enum: [user, agent] }
+        id: { type: string, format: uuid }
+    NewChannel:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: "1–80 of a–z, 0–9, '-' and '_'; lowercased, a leading # dropped" }
+        topic: { type: string }
+        visibility: { type: string, enum: [project, private], default: project }
+        componentKey: { type: string, description: a channel for one component of the catalogue }
+    NewDirectMessage:
+      type: object
+      required: [members]
+      properties:
+        members: { type: array, items: { type: string, format: uuid }, description: "people besides the caller (the caller may be listed too)" }
+        projectId: { type: string, format: uuid, description: "a DM inside this project; omitted, outside every project" }
+    ConversationPatch:
+      type: object
+      properties:
+        name: { type: string }
+        topic: { type: string }
+        archived: { type: boolean }
+    ConversationMemberChange:
+      type: object
+      properties:
+        notify: { type: string, enum: [all, mentions, none] }
+        role: { type: string, enum: [owner, member] }
+    ReadMarker:
+      type: object
+      required: [seq]
+      properties:
+        seq: { type: integer, format: int64, minimum: 0 }
+    NewMessage:
+      type: object
+      properties:
+        body: { type: string, description: "Markdown; up to 40000 characters" }
+        clientId: { type: string, maxLength: 200, description: "the sender's idempotency key, unique in the conversation" }
+        mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
+    Message:
+      type: object
+      required: [id, conversationId, seq, authorKind, kind, body, replyCount, status, origin, createdAt, mentions]
+      properties:
+        id: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        seq: { type: integer, format: int64 }
+        authorKind: { type: string, enum: [user, agent, system, plugin, external] }
+        authorId: { type: string, format: uuid }
+        kind: { type: string, enum: [text, card] }
+        body: { type: string, description: "Markdown; empty once deleted" }
+        cardType: { type: string, description: "task | decision | job | artifact | pr | incident | release | brain_proposal" }
+        card: { $ref: "#/components/schemas/Card" }
+        replyCount: { type: integer }
+        threadId: { type: string, format: uuid, description: "the thread under this message, once opened" }
+        status: { type: string, enum: [streaming, final, failed] }
+        origin: { type: object, additionalProperties: true, description: "where it came from outside Gator (phase 5); {} otherwise" }
+        clientId: { type: string }
+        editedAt: { type: string, format: date-time }
+        deletedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
+    Card:
+      type: object
+      required: [ref]
+      additionalProperties: true
+      description: >-
+        What a card shows. It points at an object (ref) whose current state a client reads; the
+        rest is a summary for the list. Its buttons call the endpoints the object already has.
+      properties:
+        ref: { $ref: "#/components/schemas/CardRef" }
+        title: { type: string }
+        state: { type: string }
+        summary: { type: string }
+        actions: { type: array, items: { type: string } }
+    CardRef:
+      type: object
+      required: [kind, id]
+      properties:
+        kind: { type: string, description: "task | job | artifact | pr | incident | release | brain_entry" }
+        id: { type: string }
+        taskId: { type: string, format: uuid }
+    MessagePage:
+      type: object
+      required: [messages, hasMore]
+      properties:
+        messages: { type: array, items: { $ref: "#/components/schemas/Message" } }
+        hasMore: { type: boolean }

@@ -24,6 +24,7 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/limits"
@@ -65,6 +66,8 @@ type Server struct {
 	PublicURL string
 	// Mailer delivers invitations; nil leaves that to the inviter, who gets the link.
 	Mailer invites.Mailer
+	// Conversations are channels, DMs and threads; nil: those endpoints answer 503.
+	Conversations *conversations.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -500,11 +503,17 @@ type wsSubscribe struct {
 	Subscribe []string `json:"subscribe"`
 }
 
+// wsClientMessage is what a client may send after subscribing: that it is typing.
+type wsClientMessage struct {
+	Typing string `json:"typing"`
+}
+
 // websocket streams hub events. The client sends {"subscribe":["inbox","task:<id>"]} first
 // and may send it again to change topics. "project:<id>" carries everything that happens in
-// one project, so it is offered only to those who may read that project. Whatever the topic,
-// an event that belongs to a project reaches the caller only if they may read that project
-// (see eventFilter).
+// one project and "conversation:<id>" everything said in one conversation, so each is offered
+// only to those who may read it; "me" is what concerns the caller. Whatever the topic, an event
+// that belongs to a project reaches the caller only if they may read that project, and one about
+// a conversation only if they may read that conversation (see eventFilter).
 func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	// Gator.app, the CLI and runners send no Origin and are let in. A browser always sends one,
 	// and its session cookie rides along, so a page on another site could listen in on the
@@ -525,19 +534,26 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close(websocket.StatusPolicyViolation, "first message must be {\"subscribe\":[...]}")
 		return
 	}
-	if topic, ok := s.forbiddenTopic(r, sub.Subscribe); !ok {
-		_ = c.Close(websocket.StatusPolicyViolation, "not allowed to follow "+topic)
+	topics, refused := s.hubTopics(r, sub.Subscribe)
+	if refused != "" {
+		_ = c.Close(websocket.StatusPolicyViolation, "not allowed to follow "+refused)
 		return
 	}
-	ch, stop := s.Hub.Subscribe(sub.Subscribe...)
+	ch, stop := s.Hub.Subscribe(topics...)
 	defer stop()
 	p, _ := auth.FromContext(ctx)
 	visible := newEventFilter(s, p)
+	typing := newTypingRelay(s, p)
 
 	go func() {
 		for {
-			if _, _, err := c.Read(ctx); err != nil {
+			_, b, err := c.Read(ctx)
+			if err != nil {
 				return
+			}
+			var m wsClientMessage
+			if json.Unmarshal(b, &m) == nil && m.Typing != "" {
+				typing.say(ctx, m.Typing)
 			}
 		}
 	}()
@@ -557,23 +573,43 @@ func (s *Server) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// forbiddenTopic answers the first project topic the caller may not read, if any.
-func (s *Server) forbiddenTopic(r *http.Request, topics []string) (string, bool) {
+// hubTopics turns the topics a client asked for into the hub's, or names the first one the
+// caller may not follow. "me" is the caller's own "user:<id>", which nobody asks for by name.
+func (s *Server) hubTopics(r *http.Request, topics []string) ([]string, string) {
 	p, _ := auth.FromContext(r.Context())
+	out := make([]string, 0, len(topics))
 	for _, t := range topics {
-		id, ok := strings.CutPrefix(t, "project:")
-		if !ok {
-			continue
-		}
-		var project pgtype.UUID
-		if err := project.Scan(id); err != nil {
-			return t, false
-		}
-		if err := s.Authz.Require(r.Context(), p, project, auth.RoleViewer); err != nil {
-			return t, false
+		switch {
+		case t == "me":
+			if p.Kind != auth.KindUser || !p.UserID.Valid {
+				return nil, t
+			}
+			out = append(out, "user:"+uuidString(p.UserID))
+		case strings.HasPrefix(t, "user:"):
+			return nil, t
+		case strings.HasPrefix(t, "project:"):
+			var project pgtype.UUID
+			if err := project.Scan(strings.TrimPrefix(t, "project:")); err != nil {
+				return nil, t
+			}
+			if err := s.Authz.Require(r.Context(), p, project, auth.RoleViewer); err != nil {
+				return nil, t
+			}
+			out = append(out, t)
+		case strings.HasPrefix(t, "conversation:"):
+			var conv pgtype.UUID
+			if s.Conversations == nil || conv.Scan(strings.TrimPrefix(t, "conversation:")) != nil {
+				return nil, t
+			}
+			if _, rights, err := s.Conversations.Access.RightsByID(r.Context(), conv, p); err != nil || !rights.Read {
+				return nil, t
+			}
+			out = append(out, t)
+		default:
+			out = append(out, t)
 		}
 	}
-	return "", true
+	return out, ""
 }
 
 // --- helpers ---

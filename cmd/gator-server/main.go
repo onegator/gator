@@ -21,6 +21,7 @@ import (
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/backup"
 	"github.com/onegator/gator/internal/server/config"
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/knowledge"
@@ -206,6 +207,8 @@ func serve(ctx context.Context) error {
 		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
 		PublicURL: cfg.PublicURL,
+		// Channels, DMs and threads, with the same access rules for the API, the WebSocket and search.
+		Conversations: conversations.New(db.Pool, auth.Authorizer{Pool: db.Pool}),
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:

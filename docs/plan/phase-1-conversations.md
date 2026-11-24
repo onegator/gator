@@ -133,13 +133,15 @@ w PL i EN) plus indeks GIN, a do tego `pg_trgm` na nazwy kanałów.
 ```
 GET    /projects/{projectId}/conversations?kind=channel          lista kanałów (z unread, last_message_at)
 POST   /projects/{projectId}/conversations                       nowy kanał {name, topic, visibility}
-POST   /conversations/dm                                          {members:[…]} → istniejący lub nowy DM
-GET    /conversations/{id}                                        szczegóły + członkowie
+GET    /conversations?kind=                                       rozmowy, w których jestem (też DM-y poza projektem)
+POST   /conversations/dm                                          {members:[…], projectId?} → istniejący (200) lub nowy (201) DM
+GET    /conversations/{id}                                        szczegóły + członkowie + moje uprawnienia
 PATCH  /conversations/{id}                                        name, topic, archive
 PUT    /conversations/{id}/members/{kind}/{memberId}              dołącz / zmień notify
 DELETE /conversations/{id}/members/{kind}/{memberId}
-GET    /conversations/{id}/messages?before_seq=&after_seq=&limit= paginacja po seq
-POST   /conversations/{id}/messages                               {body, client_id, attachments[]}
+GET    /conversations/{id}/messages?beforeSeq=&afterSeq=&limit=   paginacja po seq
+POST   /conversations/{id}/messages                               {body, clientId, mentions[], attachments[]}
+GET    /messages/{id}                                             jedna wiadomość (np. po zdarzeniu z WS)
 PATCH  /messages/{id}                                             edycja (autor, 24 h) 
 DELETE /messages/{id}                                             soft delete (autor albo admin projektu)
 PUT    /messages/{id}/reactions/{emoji}  /  DELETE …
@@ -224,3 +226,24 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   a kolejne fazy zwijane do jednej linii.
 - **Kanał `#general` jako śmietnik kart tasków.** Rozwiązaniem jest konfigurowalny `task_channel`
   oraz filtr „tylko rozmowy" w kliencie.
+
+## Odstępstwa od planu (zapisane przy implementacji)
+
+- **Nazwy parametrów** w API są camelCase jak w reszcie `docs/openapi.yaml` (`beforeSeq`, `afterSeq`,
+  `clientId`, `projectId`), a nie snake_case z pierwszej wersji tego dokumentu.
+- **Wzmianki** przychodzą od klienta jawnie (`mentions: [{kind, id}]`), a nie z parsowania `@imię` w
+  treści: ludzie nie mają unikalnych uchwytów. Osoba, która nie może czytać rozmowy, jest pomijana.
+- **Zdarzenia nie niosą treści wiadomości**, tylko id, `seq`, autora i `audience` (kogo dotyczą).
+  Klient dociąga wiadomości po `afterSeq`, przez te same reguły dostępu. Treść nie zostaje więc w
+  outboxie po usunięciu wiadomości, a pluginy czytające zdarzenia jej nie widzą.
+- **Temat `me`** to `user:<id>` w hubie; hub kieruje tam zdarzenia rozmów, których `audience` zawiera
+  tę osobę (członkowie rozmowy i wspomniani). Nikt nie subskrybuje `user:<id>` wprost.
+- **Typing** wysyła klient przez WebSocket (`{"typing":"<conversationId>"}`), a serwer publikuje
+  `conversation.typing` prosto do huba (najwyżej raz na 2 s na rozmowę i połączenie).
+- **Dodatkowe zdarzenia:** `conversation.updated` (temat, nazwa, archiwum), `conversation.read`
+  (tylko do czytającego, dla jego innych urządzeń), `message.replied` (licznik odpowiedzi pod
+  wiadomością-korzeniem, w rozmowie korzenia).
+- **Administrator workspace'u** moderuje kanały projektów jak admin projektu, ale prywatny kanał i
+  DM czyta tylko wtedy, gdy jest ich członkiem. Rozmowa, której nie wolno czytać, odpowiada 404.
+- **`GET /messages/{id}/thread`** otwiera wątek przy pierwszym pytaniu (idempotentnie), z autorem
+  wiadomości jako członkiem; wątki się nie zagnieżdżają (400 dla odpowiedzi).

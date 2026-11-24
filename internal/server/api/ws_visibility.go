@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -24,12 +25,15 @@ const visibilityTTL = 15 * time.Second
 // rule as the REST API and "project:<id>": project members (viewer and up), workspace admins,
 // runners other than a one-job cloud runner, and a plugin for its own project. An event about
 // something whose project cannot be found is withheld. Events that belong to no project
-// (runners coming and going) are delivered as before.
+// (runners coming and going) are delivered as before. An event about a conversation reaches the
+// caller only if they may read that conversation — a private channel or a DM is not the whole
+// project's, and workspace admins read one only when they are in it.
 type eventFilter struct {
 	authz auth.Authorizer
 	q     *db.Queries
 	p     auth.Principal
 	now   func() time.Time
+	conv  *conversationRights
 
 	readable map[string]readableAt // project id -> answer
 	owners   map[string]string     // aggregate:id -> project id ("" when none)
@@ -41,7 +45,7 @@ type readableAt struct {
 }
 
 func newEventFilter(s *Server, p auth.Principal) *eventFilter {
-	return &eventFilter{authz: s.Authz, q: db.New(s.Pool), p: p, now: time.Now,
+	return &eventFilter{authz: s.Authz, q: db.New(s.Pool), p: p, now: time.Now, conv: newConversationRights(s, p),
 		readable: map[string]readableAt{}, owners: map[string]string{}}
 }
 
@@ -51,6 +55,9 @@ var projectAggregates = map[string]bool{"task": true, "job": true, "release": tr
 
 // allow reports whether the caller may see e.
 func (f *eventFilter) allow(ctx context.Context, e events.Event) bool {
+	if e.Aggregate == conversations.Aggregate {
+		return f.conv.of(ctx, e.AggregateID).Read
+	}
 	if f.p.IsWorkspaceAdmin() {
 		return true
 	}
