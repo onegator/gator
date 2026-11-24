@@ -53,3 +53,6 @@ RETURNING *;
 -- or in the task's own thread when that thread was there first).
 SELECT * FROM messages WHERE card_key = sqlc.arg(card_key) AND conversation_id = ANY(sqlc.arg(conversation_ids)::uuid[])
 ORDER BY created_at LIMIT 1;
+
+-- name: ListCardsOfType :many
+SELECT * FROM messages WHERE conversation_id = $1 AND card_type = $2 AND kind = 'card' ORDER BY seq;

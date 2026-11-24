@@ -163,8 +163,10 @@ nie trafia do outboxu, tylko bezpośrednio do huba.
 
 ## Karty: skąd się biorą
 
-Nowy konsument outboxu `internal/server/conversations/cards.go` (z własnym kursorem w `event_cursors`,
-tak jak `product`) zamienia zdarzenia domenowe na karty w wątku taska:
+Nowy konsument outboxu `internal/server/conversations` (z własnym kursorem `conversations` w `event_cursors`,
+tak jak `product`) zamienia zdarzenia domenowe na karty w wątku taska. Każdy rodzaj karty to osobne
+źródło (`CardSource`: `cards_task.go`, `cards_decision.go`, `cards_job.go`, `cards_artifact.go`),
+a `Projector` zapisuje karty kluczem (`card_key`), więc nowy rodzaj karty to nowe źródło, bez zmian w reszcie:
 
 | Zdarzenie | Karta | Akcje w karcie (te same endpointy co dziś) |
 |---|---|---|
@@ -257,3 +259,10 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   jeden wątek na task gwarantuje `UNIQUE (task_id)`. `process_config.conversations.task_channel`
   wskazuje inny kanał niż `#general` (nieistniejący albo zarchiwizowany = `#general`). Backfill 00037
   zakłada wątki otwartym taskom bez karty w kanale (bez wiadomości-korzenia), żeby nie zalać `#general`.
+- **Karty** mają klucz w rozmowie (`messages.card_key`): `task:<id>`, `job:<id>`, `artifact:<faza>:<typ>`,
+  `decision:<faza>:<wejście w fazę>`. Zapis karty z tą samą treścią nic nie zmienia (powtórzone
+  zdarzenie nie robi nic), inna treść to `message.edited`. Karta `decision` pokazuje regułę krótkiego
+  inboxu dla jednego taska (`process.Service.DecisionFor`); gdy task przestaje czekać, karta dostaje
+  `state: resolved`, a powrót do fazy po rollbacku to nowa karta. Karty `incident`/`release`/`pr` i kanał
+  `#incidents` zostają na później (plan PR-ów fazy 1 wymienia w konsumencie tylko `task`, `decision`,
+  `job`, `artifact`); `working_state` runnera nie ma karty.

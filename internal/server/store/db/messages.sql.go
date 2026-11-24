@@ -252,6 +252,53 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 	return i, err
 }
 
+const listCardsOfType = `-- name: ListCardsOfType :many
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE conversation_id = $1 AND card_type = $2 AND kind = 'card' ORDER BY seq
+`
+
+type ListCardsOfTypeParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	CardType       *string     `json:"card_type"`
+}
+
+func (q *Queries) ListCardsOfType(ctx context.Context, arg ListCardsOfTypeParams) ([]Message, error) {
+	rows, err := q.db.Query(ctx, listCardsOfType, arg.ConversationID, arg.CardType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Message
+	for rows.Next() {
+		var i Message
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.Seq,
+			&i.AuthorKind,
+			&i.AuthorID,
+			&i.Kind,
+			&i.Body,
+			&i.CardType,
+			&i.Card,
+			&i.CardKey,
+			&i.ReplyCount,
+			&i.Status,
+			&i.Origin,
+			&i.ClientID,
+			&i.EditedAt,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMentionsOfMessages = `-- name: ListMentionsOfMessages :many
 SELECT message_id, member_kind, member_id FROM message_mentions WHERE message_id = ANY($1::uuid[])
 ORDER BY message_id, member_kind, member_id

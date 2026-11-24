@@ -515,3 +515,111 @@ func TestEveryNewTaskHasItsThread(t *testing.T) {
 		}
 	})
 }
+
+// cardsIn answers the cards of one type in a conversation.
+func (h *harness) cardsIn(token, conversation, cardType string) []gen.Message {
+	h.t.Helper()
+	var page gen.MessagePage
+	h.as(token, func() { h.do("GET", "/conversations/"+conversation+"/messages?limit=200", nil, &page) })
+	var out []gen.Message
+	for _, m := range page.Messages {
+		if m.CardType != nil && *m.CardType == cardType {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func cardState(m gen.Message) string {
+	if m.Card == nil || m.Card.State == nil {
+		return ""
+	}
+	return *m.Card.State
+}
+
+// Work shows up in the task's thread as cards: the decision its gate waits for, approved from
+// the card's own endpoint, its jobs and its documents. Each is one card brought up to date, never
+// a new card per event, and an event delivered twice changes nothing.
+func TestCardsAreUpdatedNotDuplicated(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("cards")
+	ctx := context.Background()
+	var task gen.Task
+	h.as(c.member, func() {
+		h.do("POST", "/projects/"+c.project.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "Cards"}, &task)
+	})
+	var thread gen.ConversationDetail
+	h.as(c.member, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &thread) })
+	conv := thread.Id.String()
+
+	var pending gen.Message
+	eventually(t, "a decision card for planning", func() bool {
+		cards := h.cardsIn(c.member, conv, "decision")
+		if len(cards) == 1 && cardState(cards[0]) == "pending" {
+			pending = cards[0]
+			return true
+		}
+		return false
+	})
+	if pending.Card.Actions == nil || (*pending.Card.Actions)[0] != "approve" || pending.Card.Ref.Id != task.Id.String() {
+		t.Fatalf("decision card: %+v", pending.Card)
+	}
+	h.as(c.member, func() {
+		if code := h.do("POST", "/tasks/"+task.Id.String()+"/approve", nil, nil); code != 200 {
+			t.Fatalf("approve: %d", code)
+		}
+	})
+	eventually(t, "the decision card saying it was decided", func() bool {
+		cards := h.cardsIn(c.member, conv, "decision")
+		return len(cards) == 1 && cards[0].Id == pending.Id && cardState(cards[0]) == "resolved" && cards[0].EditedAt != nil
+	})
+
+	// A job from queued to failed, its finish delivered twice.
+	var job string
+	if err := h.pool.QueryRow(ctx, `INSERT INTO jobs (task_id, project_id, phase, role, backend) VALUES ($1, $2, 'planning', 'planner', 'claude') RETURNING id`,
+		task.Id.String(), c.project.Id.String()).Scan(&job); err != nil {
+		t.Fatal(err)
+	}
+	event := func(typ, aggregate, id, payload string) {
+		t.Helper()
+		if _, err := h.pool.Exec(ctx, `INSERT INTO events (type, aggregate, aggregate_id, payload) VALUES ($1, $2, $3, $4)`, typ, aggregate, id, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event("job.queued", "job", job, `{}`)
+	eventually(t, "a job card", func() bool {
+		cards := h.cardsIn(c.member, conv, "job")
+		return len(cards) == 1 && cardState(cards[0]) == "queued"
+	})
+	if _, err := h.pool.Exec(ctx, `UPDATE jobs SET status = 'failed' WHERE id = $1`, job); err != nil {
+		t.Fatal(err)
+	}
+	event("job.finished", "job", job, `{}`)
+	event("job.finished", "job", job, `{}`)
+	eventually(t, "the job card failing", func() bool {
+		cards := h.cardsIn(c.member, conv, "job")
+		return len(cards) == 1 && cardState(cards[0]) == "failed"
+	})
+
+	// Two versions of a plan: one card at the newest; the runner's own working state: none.
+	for v := 1; v <= 2; v++ {
+		if _, err := h.pool.Exec(ctx, `INSERT INTO artifacts (task_id, phase, type, version, content) VALUES ($1, 'planning', 'plan', $2, 'x')`, task.Id.String(), v); err != nil {
+			t.Fatal(err)
+		}
+		event("artifact.created", "task", task.Id.String(), fmt.Sprintf(`{"phase":"planning","type":"plan","version":%d}`, v))
+	}
+	event("artifact.created", "task", task.Id.String(), `{"phase":"task","type":"working_state","version":1}`)
+	eventually(t, "the plan's card at v2", func() bool {
+		cards := h.cardsIn(c.member, conv, "artifact")
+		return len(cards) == 1 && cardState(cards[0]) == "v2"
+	})
+	time.Sleep(300 * time.Millisecond)
+	if n := len(h.cardsIn(c.member, conv, "artifact")); n != 1 {
+		t.Fatalf("%d artifact cards", n)
+	}
+	var page gen.MessagePage
+	h.as(c.member, func() { h.do("GET", "/conversations/"+conv+"/messages?limit=200", nil, &page) })
+	if len(page.Messages) != 3 {
+		t.Fatalf("the thread holds %d messages, want a decision, a job and a plan", len(page.Messages))
+	}
+}

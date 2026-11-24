@@ -1,0 +1,210 @@
+package conversations
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/onegator/gator/internal/server/process"
+	"github.com/onegator/gator/internal/server/store/db"
+)
+
+func ts(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }
+
+// cardMessage is a card as it sits in the database.
+func cardMessage(t *testing.T, c Card) db.Message {
+	t.Helper()
+	b, err := json.Marshal(c.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db.Message{Kind: messageCard, CardType: &c.Type, CardKey: &c.Key, Body: c.Body, Card: b}
+}
+
+func TestDecisionUpdates(t *testing.T) {
+	task := db.Task{ID: newID(1), Title: "Plan the login", Phase: "planning", PhaseEnteredAt: ts(time.Unix(1000, 0))}
+	waiting := process.Decision{Task: task, Reason: process.ReasonApproval}
+	now := DecisionCard(waiting)
+
+	moved := task
+	moved.Phase, moved.PhaseEnteredAt = "implementation", ts(time.Unix(2000, 0))
+	later := DecisionCard(process.Decision{Task: moved, Reason: process.ReasonApproval})
+
+	resolvedBefore := now
+	resolvedBefore.Data = map[string]any{"state": decisionResolved}
+
+	for _, tc := range []struct {
+		name     string
+		d        process.Decision
+		waiting  bool
+		existing []db.Message
+		want     map[string]string // key -> state
+	}{
+		{"a new wait is one pending card", waiting, true, nil, map[string]string{now.Key: decisionPending}},
+		{"the same wait again is the same card", waiting, true, []db.Message{cardMessage(t, now)}, map[string]string{now.Key: decisionPending}},
+		{"approved: the card says it was decided", waiting, false, []db.Message{cardMessage(t, now)}, map[string]string{now.Key: decisionResolved}},
+		{"moved on to another wait: old decided, new pending", process.Decision{Task: moved, Reason: process.ReasonApproval}, true,
+			[]db.Message{cardMessage(t, now)}, map[string]string{now.Key: decisionResolved, later.Key: decisionPending}},
+		{"a card already decided is left alone", waiting, false, []db.Message{cardMessage(t, resolvedBefore)}, map[string]string{}},
+		{"nothing waits and nothing was said", waiting, false, nil, map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := map[string]string{}
+			for _, c := range decisionUpdates(tc.d, tc.waiting, tc.existing) {
+				if c.Type != CardDecision {
+					t.Fatalf("type %q", c.Type)
+				}
+				if _, twice := got[c.Key]; twice {
+					t.Fatalf("card %s answered twice", c.Key)
+				}
+				got[c.Key], _ = c.Data["state"].(string)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("cards %v, want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Fatalf("cards %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+	if now.Key == later.Key {
+		t.Fatal("two waits share a card")
+	}
+}
+
+func TestDecisionCardOffersTheTasksOwnActions(t *testing.T) {
+	task := db.Task{ID: newID(1), Title: "T", Phase: "planning"}
+	for _, tc := range []struct {
+		reason process.DecisionReason
+		allow  bool
+		want   []string
+	}{
+		{process.ReasonApproval, false, []string{"approve", "rollback", "handoff", "allow_agents"}},
+		{process.ReasonApproval, true, []string{"approve", "rollback", "handoff"}},
+		{process.ReasonExternal, false, []string{"admit", "close"}},
+		{process.ReasonBlocked, false, []string{"rollback", "handoff"}},
+	} {
+		tk := task
+		if tc.allow {
+			tk.AgentsAllowedAt = ts(time.Now())
+		}
+		c := DecisionCard(process.Decision{Task: tk, Reason: tc.reason})
+		got, _ := c.Data["actions"].([]string)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: actions %v, want %v", tc.reason, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: actions %v, want %v", tc.reason, got, tc.want)
+			}
+		}
+		ref, _ := c.Data["ref"].(map[string]any)
+		if ref["kind"] != "task" || ref["id"] != uuidString(task.ID) {
+			t.Fatalf("ref %v", ref)
+		}
+	}
+}
+
+// One job keeps one card from queued to done: the key never changes with its status.
+func TestJobCardFollowsOneJob(t *testing.T) {
+	job := db.Job{ID: newID(5), TaskID: newID(1), Phase: "implementation", Role: "worker", Backend: "claude"}
+	var keys []string
+	for _, tc := range []struct {
+		status string
+		stop   bool
+	}{{"queued", true}, {"running", true}, {"stalled", true}, {"failed", false}, {"done", false}} {
+		job.Status = tc.status
+		c := JobCard(job)
+		keys = append(keys, c.Key)
+		actions, _ := c.Data["actions"].([]string)
+		hasStop := len(actions) > 0 && actions[0] == "stop"
+		if hasStop != tc.stop || c.Data["state"] != tc.status {
+			t.Fatalf("%s: %+v", tc.status, c.Data)
+		}
+	}
+	for _, k := range keys {
+		if k != keys[0] {
+			t.Fatalf("keys %v", keys)
+		}
+	}
+}
+
+func TestArtifactCardIsTheNewestVersion(t *testing.T) {
+	all := []db.Artifact{
+		{ID: newID(1), Phase: "planning", Type: "plan", Version: 1},
+		{ID: newID(2), Phase: "planning", Type: "plan", Version: 3},
+		{ID: newID(3), Phase: "planning", Type: "plan", Version: 2},
+		{ID: newID(4), Phase: "discovery", Type: "brief", Version: 9},
+	}
+	a, ok := newest(all, "planning", "plan")
+	if !ok || a.Version != 3 {
+		t.Fatalf("newest: %+v %v", a, ok)
+	}
+	c := ArtifactCard(a)
+	if c.Key != ArtifactCard(all[0]).Key || c.Data["state"] != "v3" {
+		t.Fatalf("card %+v", c)
+	}
+	if actions, _ := c.Data["actions"].([]string); len(actions) != 2 {
+		t.Fatalf("a third version can be diffed: %v", actions)
+	}
+}
+
+func TestSameJSONReadsMeaningNotSpelling(t *testing.T) {
+	if !sameJSON([]byte(`{"a": 1, "b": [1, 2]}`), []byte(`{"b":[1,2],"a":1}`)) {
+		t.Fatal("the same document spelled twice differs")
+	}
+	if sameJSON([]byte(`{"a":1}`), []byte(`{"a":2}`)) {
+		t.Fatal("different documents are the same")
+	}
+}
+
+// fakeTasks and fakeJobs stand in for the store.
+type fakeTasks map[[16]byte]db.Task
+
+func (f fakeTasks) GetTask(_ context.Context, id pgtype.UUID) (db.Task, error) {
+	t, ok := f[id.Bytes]
+	if !ok {
+		return t, pgx.ErrNoRows
+	}
+	return t, nil
+}
+
+type fakeJobs struct {
+	fakeTasks
+	jobs map[[16]byte]db.Job
+}
+
+func (f fakeJobs) GetJob(_ context.Context, id pgtype.UUID) (db.Job, error) {
+	j, ok := f.jobs[id.Bytes]
+	if !ok {
+		return j, pgx.ErrNoRows
+	}
+	return j, nil
+}
+
+func TestSourcesLeaveNoCardForWhatIsGone(t *testing.T) {
+	ctx := context.Background()
+	task := db.Task{ID: newID(1), Title: "T", Kind: "bug", Phase: "planning"}
+	tasks := fakeTasks{task.ID.Bytes: task}
+	got, err := taskCards{tasks: tasks}.Cards(ctx, db.EventsAfterRow{AggregateID: task.ID})
+	if err != nil || len(got) != 1 || !got[0].Root || got[0].Card.Key != taskCardKey(task) {
+		t.Fatalf("task card: %+v %v", got, err)
+	}
+	if got, err := (taskCards{tasks: tasks}).Cards(ctx, db.EventsAfterRow{AggregateID: newID(9)}); err != nil || len(got) != 0 {
+		t.Fatalf("a deleted task: %+v %v", got, err)
+	}
+	jobs := fakeJobs{fakeTasks: tasks, jobs: map[[16]byte]db.Job{newID(5).Bytes: {ID: newID(5), TaskID: task.ID, Status: "queued"}}}
+	got, err = jobCards{jobs: jobs}.Cards(ctx, db.EventsAfterRow{AggregateID: newID(5)})
+	if err != nil || len(got) != 1 || got[0].Root || got[0].Task.ID != task.ID {
+		t.Fatalf("job card: %+v %v", got, err)
+	}
+	if got, err := (jobCards{jobs: jobs}).Cards(ctx, db.EventsAfterRow{AggregateID: newID(6)}); err != nil || len(got) != 0 {
+		t.Fatalf("a deleted job: %+v %v", got, err)
+	}
+}
