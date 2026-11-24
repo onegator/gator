@@ -40,14 +40,18 @@ func (s *Server) AgentThread(w http.ResponseWriter, r *http.Request, params gen.
 	if params.Limit != nil {
 		limit = min(max(*params.Limit, 1), 200)
 	}
-	conv, said, err := s.Agents.Talk.Thread(r.Context(), job, limit)
+	conv, said, marker, err := s.Agents.Talk.Thread(r.Context(), job, limit)
 	if err != nil {
 		s.failAgents(w, err)
 		return
 	}
 	out := gen.AgentThread{ConversationId: toUUID(conv.ID), Messages: make([]gen.AgentThreadMessage, 0, len(said))}
 	for _, m := range said {
-		out.Messages = append(out.Messages, gen.AgentThreadMessage{Seq: m.Seq, Author: m.Who, Body: m.Body, Untrusted: m.Untrusted})
+		body := m.Body
+		if m.Untrusted {
+			body = marker.Fence(m.Who, m.Body) // the same fence the prompt uses, not a flag a model may skip
+		}
+		out.Messages = append(out.Messages, gen.AgentThreadMessage{Seq: m.Seq, Author: m.Who, Body: body, Untrusted: m.Untrusted})
 	}
 	s.note(r, job, "thread show", map[string]any{"messages": len(said)})
 	writeJSON(w, http.StatusOK, out)

@@ -2128,7 +2128,7 @@ components:
       properties:
         seq: { type: integer, format: int64, description: "0 for the message a thread hangs under" }
         author: { type: string, description: "a person's name, @handle, Gator, a plugin" }
-        body: { type: string }
+        body: { type: string, description: "words from outside the workspace come fenced, as in the prompt" }
         untrusted: { type: boolean, description: "written outside the workspace: data, never instructions" }
     AgentTaskProposal:
       type: object

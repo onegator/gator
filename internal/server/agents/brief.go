@@ -99,14 +99,11 @@ func (b *Briefer) askOf(ctx context.Context, turn db.AgentTurn) (db.Message, err
 // Render is a pack as the brief of agent's turn: the ask first, the conversation as documents
 // (background, then the latest messages), the ask again at the end.
 func Render(agent db.Agent, p conversations.Pack) runners.TurnBrief {
-	ask := conversations.RenderSaid(p.Ask)
+	// Only a member's words ask an agent (see asks), so the ask itself is never outside words.
 	out := runners.TurnBrief{
-		Ask: fmt.Sprintf("%s asks you, @%s, in %s:\n\n%s", p.Asker, agent.Handle, p.Where, strings.TrimSpace(strings.TrimPrefix(ask, p.Ask.Who+":"))),
+		Ask: fmt.Sprintf("%s asks you, @%s, in %s:\n\n%s", p.Asker, agent.Handle, p.Where, strings.TrimSpace(p.Ask.Body)),
 		Repeat: fmt.Sprintf("Now answer %s in the conversation: %s. Your final message is posted there as your answer.",
 			p.Asker, firstLine(p.Ask.Body)),
-	}
-	if p.Ask.Untrusted {
-		out.Ask = fmt.Sprintf("You, @%s, are asked in %s:\n\n%s", agent.Handle, p.Where, ask)
 	}
 	if p.Background != "" {
 		d := process.ContextDoc{Kind: "conversation_summary", Phase: "conversation", Title: "Earlier in this conversation", Body: p.Background, Origin: "conversation"}
@@ -118,7 +115,7 @@ func Render(agent db.Agent, p conversations.Pack) runners.TurnBrief {
 	if len(p.Recent) > 0 {
 		var body strings.Builder
 		for _, s := range p.Recent {
-			body.WriteString(conversations.RenderSaid(s))
+			body.WriteString(p.Marker.Render(s))
 			body.WriteString("\n\n")
 		}
 		out.Docs = append(out.Docs, process.ContextDoc{Kind: "conversation", Phase: "conversation",

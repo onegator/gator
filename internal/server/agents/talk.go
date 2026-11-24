@@ -123,21 +123,22 @@ func (t *Talk) mentions(ctx context.Context, project pgtype.UUID, body string) (
 }
 
 // Thread is the conversation the job speaks in, its latest messages up to limit (oldest first),
-// as the agent's prompt carries them: more of it than the prompt had room for.
-func (t *Talk) Thread(ctx context.Context, job db.Job, limit int) (db.Conversation, []conversations.Said, error) {
+// as the agent's prompt carries them — outside words fenced with the marker it answers too —:
+// more of it than the prompt had room for.
+func (t *Talk) Thread(ctx context.Context, job db.Job, limit int) (db.Conversation, []conversations.Said, conversations.Marker, error) {
 	conv, _, err := t.Where(ctx, job)
 	if err != nil {
-		return db.Conversation{}, nil, err
+		return db.Conversation{}, nil, conversations.Marker{}, err
 	}
 	pack, err := t.packer.Pack(ctx, conv, db.Message{})
 	if err != nil {
-		return db.Conversation{}, nil, err
+		return db.Conversation{}, nil, conversations.Marker{}, err
 	}
 	all := append(append([]conversations.Said{}, pack.Older...), pack.Recent...)
 	if limit > 0 && len(all) > limit {
 		all = all[len(all)-limit:]
 	}
-	return conv, all, nil
+	return conv, all, pack.Marker, nil
 }
 
 // ProposeTask puts a task the agent proposes in front of the people of its conversation.

@@ -60,6 +60,8 @@ type Pack struct {
 	// background is partly a stand-in for messages the summary does not cover yet.
 	SummarisedUpTo int64
 	Stale          bool
+	// Marker fences the outside words of this pack, here and wherever the pack is written out.
+	Marker Marker
 }
 
 // Bytes is how much of the prompt the pack takes.
@@ -100,7 +102,7 @@ func NewPacker(store packStore, recentBytes int) *Packer {
 // Pack is conv as told to an agent asked by ask. A thread starts with the message it hangs under.
 func (p *Packer) Pack(ctx context.Context, conv db.Conversation, ask db.Message) (Pack, error) {
 	names := newNamer(p.store)
-	out := Pack{Where: p.where(ctx, conv)}
+	out := Pack{Where: p.where(ctx, conv), Marker: NewMarker()}
 	var err error
 	if out.Ask, err = names.said(ctx, ask, maxMessageBytes); err != nil {
 		return Pack{}, err
@@ -180,16 +182,20 @@ func (p *Packer) background(ctx context.Context, conv db.Conversation, out *Pack
 	}
 	var extract strings.Builder
 	for _, s := range out.Older {
-		if sum.UptoSeq > 0 && s.Seq <= sum.UptoSeq {
-			continue // the summary covers it (a thread's root, seq 0, comes before everything)
+		covered := sum.UptoSeq > 0 && s.Seq <= sum.UptoSeq // a thread's root, seq 0, comes before everything
+		if covered && !s.Untrusted {
+			continue
 		}
-		out.Stale = true
+		if !s.Untrusted {
+			out.Stale = true // outside words are never summarised, so they never make it stale
+		}
 		if extract.Len() > maxExtractBytes {
 			continue
 		}
 		line := strings.ReplaceAll(clip(s.Body, extractRunes), "\n", " ")
 		if s.Untrusted {
-			line = "(untrusted) " + line
+			fmt.Fprintf(&extract, "- %s\n", out.Marker.Fence(s.Who, line))
+			continue
 		}
 		fmt.Fprintf(&extract, "- %s: %s\n", s.Who, line)
 	}
