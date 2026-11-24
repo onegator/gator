@@ -236,13 +236,17 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   `clientId`, `projectId`), a nie snake_case z pierwszej wersji tego dokumentu.
 - **Wzmianki** przychodzą od klienta jawnie (`mentions: [{kind, id}]`), a nie z parsowania `@imię` w
   treści: ludzie nie mają unikalnych uchwytów. Osoba, która nie może czytać rozmowy, jest pomijana.
-- **Zdarzenia nie niosą treści wiadomości**, tylko id, `seq`, autora i `audience` (kogo dotyczą).
-  Klient dociąga wiadomości po `afterSeq`, przez te same reguły dostępu. Treść nie zostaje więc w
-  outboxie po usunięciu wiadomości, a pluginy czytające zdarzenia jej nie widzą.
-- **Temat `me`** to `user:<id>` w hubie; hub kieruje tam zdarzenia rozmów, których `audience` zawiera
-  tę osobę (członkowie rozmowy i wspomniani). Nikt nie subskrybuje `user:<id>` wprost.
+- **Zdarzenia nie niosą treści wiadomości**, tylko id, `seq` i autora. Klient dociąga wiadomości po
+  `afterSeq`, przez te same reguły dostępu. Treść nie zostaje więc w outboxie po usunięciu
+  wiadomości, a pluginy czytające zdarzenia jej nie widzą.
+- **Temat `me`** to `user:<id>` w hubie. Komu zdarzenie rozmowy dotyczy, ustala relay w chwili
+  publikacji (`conversations.RelayAudience`: członkowie rozmowy z `conversation_members` plus osoby z
+  pola `also`, np. wspomniani albo właśnie usunięty), więc zdarzenie w bazie nie niesie listy członków.
+  `conversation.read` jest osobiste: trafia tylko na `user:<id>` czytającego (nie na `conversation:`,
+  `project:` ani `*`) i tylko wtedy, gdy znacznik się przesunął. Nikt nie subskrybuje `user:<id>` wprost.
 - **Typing** wysyła klient przez WebSocket (`{"typing":"<conversationId>"}`), a serwer publikuje
-  `conversation.typing` prosto do huba (najwyżej raz na 2 s na rozmowę i połączenie).
+  `conversation.typing` prosto do huba, tylko na `conversation:<id>` (`Hub.PublishTo`, więc nie budzi
+  konsumentów outboxu), najwyżej raz na 2 s na rozmowę i połączenie.
 - **Dodatkowe zdarzenia:** `conversation.updated` (temat, nazwa, archiwum), `conversation.read`
   (tylko do czytającego, dla jego innych urządzeń), `message.replied` (licznik odpowiedzi pod
   wiadomością-korzeniem, w rozmowie korzenia).

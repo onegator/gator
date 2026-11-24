@@ -70,7 +70,7 @@ func TestHubRoutesAConversationsEventsToItsTopicAndItsAudience(t *testing.T) {
 	defer stopBob()
 
 	h.Publish(Event{ID: 9, Type: "message.posted", Aggregate: "conversation", AggregateID: "c1",
-		Payload: json.RawMessage(`{"audience":["alice"]}`)})
+		Payload: json.RawMessage(`{}`), Audience: []string{"alice"}})
 
 	for name, ch := range map[string]<-chan Event{"conversation": conv, "alice": alice} {
 		select {
@@ -85,6 +85,45 @@ func TestHubRoutesAConversationsEventsToItsTopicAndItsAudience(t *testing.T) {
 	select {
 	case e := <-bob:
 		t.Fatalf("somebody outside the audience received %v", e)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// A personal event reaches its audience alone, and PublishTo the topics named alone: neither
+// wakes whoever follows the firehose or the conversation.
+func TestHubKeepsPersonalAndDirectEventsToTheirTopics(t *testing.T) {
+	h := NewHub()
+	all, stopAll := h.Subscribe("*")
+	defer stopAll()
+	conv, stopConv := h.Subscribe("conversation:c1")
+	defer stopConv()
+	alice, stopAlice := h.Subscribe("user:alice")
+	defer stopAlice()
+
+	h.Publish(Event{ID: 1, Type: "conversation.read", Aggregate: "conversation", AggregateID: "c1", ProjectID: "p1",
+		Payload: json.RawMessage(`{}`), Audience: []string{"alice"}, Personal: true})
+	select {
+	case e := <-alice:
+		if e.ID != 1 {
+			t.Fatalf("got %d", e.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the reader's own topic did not receive it")
+	}
+	h.PublishTo(Event{ID: 2, Type: "conversation.typing", Aggregate: "conversation", AggregateID: "c1"}, "conversation:c1")
+	select {
+	case e := <-conv:
+		if e.ID != 2 {
+			t.Fatalf("the conversation heard %d", e.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the conversation did not hear the typing")
+	}
+	select {
+	case e := <-all:
+		t.Fatalf("the firehose heard %v", e)
+	case <-alice:
+		t.Fatal("typing reached a personal topic")
 	case <-time.After(50 * time.Millisecond):
 	}
 }

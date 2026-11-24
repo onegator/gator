@@ -72,7 +72,8 @@ func newTypingRelay(s *Server, p auth.Principal) *typingRelay {
 }
 
 // say announces that the caller is typing in a conversation they may write in; anything else
-// is dropped without a word.
+// is dropped without a word. It reaches the conversation's topic alone: not the firehose, and so
+// no outbox consumer wakes for it.
 func (t *typingRelay) say(ctx context.Context, conversation string) {
 	if t.p.Kind != auth.KindUser || !t.p.UserID.Valid {
 		return
@@ -89,6 +90,6 @@ func (t *typingRelay) say(ctx context.Context, conversation string) {
 		"conversationId": conversation,
 		"member":         map[string]string{"kind": conversations.MemberUser, "id": uuidString(t.p.UserID)},
 	})
-	t.hub.Publish(events.Event{Type: conversations.EventTyping, Aggregate: conversations.Aggregate, AggregateID: conversation,
-		Payload: payload, CreatedAt: now})
+	t.hub.PublishTo(events.Event{Type: conversations.EventTyping, Aggregate: conversations.Aggregate, AggregateID: conversation,
+		Payload: payload, CreatedAt: now}, "conversation:"+conversation)
 }

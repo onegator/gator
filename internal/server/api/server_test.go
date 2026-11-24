@@ -24,6 +24,7 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
+	"github.com/onegator/gator/internal/server/store/db"
 )
 
 type harness struct {
@@ -78,7 +79,8 @@ func newHarness(t *testing.T) *harness {
 	cat, _ := process.DefaultCatalog()
 	svc := process.NewService(pool, process.DBTemplates{Pool: pool, Defaults: cat}, process.StaticCapabilities(nil))
 	hub := events.NewHub()
-	relay := &events.Relay{Pool: pool, Hub: hub, Interval: 50 * time.Millisecond, Log: slog.Default()}
+	relay := &events.Relay{Pool: pool, Hub: hub, Interval: 50 * time.Millisecond, Log: slog.Default(),
+		Audience: conversations.NewRelayAudience(db.New(pool))}
 	rctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	go relay.Run(rctx)

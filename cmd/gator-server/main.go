@@ -34,6 +34,7 @@ import (
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
+	dbq "github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
 	"github.com/onegator/gator/internal/version"
 )
@@ -135,7 +136,8 @@ func serve(ctx context.Context) error {
 	// A project's capabilities are those of its enabled plugins.
 	svc := process.NewService(db.Pool, process.DBTemplates{Pool: db.Pool, Defaults: catalog}, plugins.Capabilities{Pool: db.Pool})
 	hub := events.NewHub()
-	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
+	// Conversation events reach the people in the conversation (the "me" topic) as they go out.
+	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log, Audience: conversations.NewRelayAudience(dbq.New(db.Pool))}
 	go relay.Run(ctx)
 	// The catalogue of things Gator does for a project by itself once a person switches them on.
 	autos := automations.New(db.Pool, svc, hub, log)

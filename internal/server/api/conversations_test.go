@@ -1099,3 +1099,39 @@ func TestADeletedCardStaysDeleted(t *testing.T) {
 		t.Fatalf("the deleted card came back: deleted %v, card %s", deleted, raw)
 	}
 }
+
+// A read marker is the reader's business: it reaches their own devices, not the others following
+// the conversation, and reading what was already read says nothing.
+func TestReadMarkersReachOnlyTheReader(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("readprivate")
+	conv := h.channel(c.admin, c.project.Id.String(), "reads", "").Id.String()
+	h.post(c.admin, conv, gen.NewMessage{Body: ptr("hello")})
+	var others, mine *websocket.Conn
+	h.as(c.admin, func() { others = h.follow("conversation:"+conv, "me") })
+	h.as(c.member, func() { mine = h.follow("me") })
+	time.Sleep(100 * time.Millisecond)
+	for range 2 {
+		h.as(c.member, func() { h.do("POST", "/conversations/"+conv+"/read", gen.ReadMarker{Seq: 1}, nil) })
+	}
+	h.post(c.admin, conv, gen.NewMessage{Body: ptr("after")})
+	await(t, mine, "conversation.read")
+	// Events arrive in outbox order: the read would come before the message posted after it.
+	for {
+		e, ok := nextEvent(t, others, 3*time.Second)
+		if !ok {
+			t.Fatal("the message posted after the read never arrived")
+		}
+		if e.Type == "conversation.read" {
+			t.Fatalf("someone else heard the member's read marker: %s", e.Payload)
+		}
+		if e.Type == "message.posted" {
+			break
+		}
+	}
+	var reads int
+	_ = h.pool.QueryRow(context.Background(), "SELECT count(*) FROM events WHERE type = 'conversation.read' AND aggregate_id = $1", conv).Scan(&reads)
+	if reads != 1 {
+		t.Fatalf("%d read events for one move of the marker", reads)
+	}
+}

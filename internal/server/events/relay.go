@@ -25,6 +25,17 @@ type Event struct {
 	ProjectID string          `json:"projectId,omitempty"`
 	Payload   json.RawMessage `json:"payload"`
 	CreatedAt time.Time       `json:"createdAt"`
+	// Audience are the people the event concerns, by user id: it also reaches each one's
+	// "user:<id>" topic. The relay asks an AudienceResolver; it is not sent to clients.
+	Audience []string `json:"-"`
+	// Personal events reach their audience's topics alone: nobody following a conversation, a
+	// project or the firehose hears them.
+	Personal bool `json:"-"`
+}
+
+// AudienceResolver answers whom an outbox event concerns, as it is published.
+type AudienceResolver interface {
+	Audience(ctx context.Context, e Event) (users []string, personal bool, err error)
 }
 
 // Hub fans events out to topic subscribers. Topics: "inbox", "task:<id>", "job:<id>",
@@ -88,10 +99,21 @@ func (h *Hub) Publish(e Event) {
 	}
 	if e.Aggregate == "conversation" {
 		topics = append(topics, "conversation:"+e.AggregateID)
-		for _, id := range audience(e.Payload) {
-			topics = append(topics, "user:"+id)
-		}
 	}
+	if e.Personal {
+		topics = nil
+	}
+	for _, id := range e.Audience {
+		topics = append(topics, "user:"+id)
+	}
+	h.deliver(e, topics)
+}
+
+// PublishTo delivers e to these topics alone, for what never goes through the outbox (someone
+// typing): it wakes no outbox consumer, which follow "*".
+func (h *Hub) PublishTo(e Event, topics ...string) { h.deliver(e, topics) }
+
+func (h *Hub) deliver(e Event, topics []string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	seen := map[chan Event]bool{}
@@ -109,21 +131,14 @@ func (h *Hub) Publish(e Event) {
 	}
 }
 
-// audience reads the people a conversation event concerns from its payload.
-func audience(payload json.RawMessage) []string {
-	var p struct {
-		Audience []string `json:"audience"`
-	}
-	_ = json.Unmarshal(payload, &p)
-	return p.Audience
-}
-
 // Relay polls the outbox and publishes unpublished rows in order.
 type Relay struct {
 	Pool     *pgxpool.Pool
 	Hub      *Hub
 	Interval time.Duration
 	Log      *slog.Logger
+	// Audience, when set, names the people each event concerns (see Event.Audience).
+	Audience AudienceResolver
 }
 
 // Run blocks until ctx is done.
@@ -165,6 +180,12 @@ func (r *Relay) Drain(ctx context.Context) error {
 			if row.ProjectID.Valid {
 				v, _ := row.ProjectID.Value()
 				e.ProjectID, _ = v.(string)
+			}
+			if r.Audience != nil {
+				var err error
+				if e.Audience, e.Personal, err = r.Audience.Audience(ctx, e); err != nil {
+					return err // try again on the next tick rather than tell the wrong people
+				}
 			}
 			r.Hub.Publish(e)
 			if err := q.MarkEventPublished(ctx, row.ID); err != nil {

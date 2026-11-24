@@ -360,12 +360,21 @@ func (m *Messages) MarkRead(ctx context.Context, p auth.Principal, conversation 
 	}
 	var out db.ConversationMember
 	err = store.InTx(ctx, m.pool, func(q *db.Queries) error {
+		before := int64(-1) // not in it yet: joining is news
+		if prior, err := q.GetConversationMember(ctx, db.GetConversationMemberParams{ConversationID: conv.ID, MemberKind: me.Kind, MemberID: me.ID}); err == nil {
+			before = prior.LastReadSeq
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 		var err error
 		if out, err = q.MarkConversationRead(ctx, db.MarkConversationReadParams{UserID: me.ID, Seq: seq, ConversationID: conv.ID}); err != nil {
 			return err
 		}
+		if out.LastReadSeq == before {
+			return nil
+		}
 		// Only the reader's other devices care.
-		return emitTo(ctx, q, EventConversationRead, conv.ID, map[string]any{"lastReadSeq": out.LastReadSeq}, []pgtype.UUID{me.ID})
+		return emitPersonal(ctx, q, EventConversationRead, conv.ID, map[string]any{"lastReadSeq": out.LastReadSeq}, me.ID)
 	})
 	return out, err
 }
