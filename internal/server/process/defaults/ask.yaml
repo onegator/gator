@@ -1,0 +1,13 @@
+kind: ask
+# A conversation with an agent that is not about any task yet. Every job needs a task (its token,
+# budget and metrics are a task's), so a mention outside one opens this hidden kind: it is on no
+# board, in no inbox and in no lead time. "Make this a task" turns it into a feature or a bug
+# with its history, cost and working state.
+hidden: true
+max_rollbacks: 0
+phases:
+  # The agents' turns are its jobs; the phase names no role, so the autopilot leaves it alone. A
+  # person leaves it, by making it a task or closing it; no timeout, since nobody would see a
+  # hidden task blocked by one.
+  - { name: answer, owner: runner, gate: human, timeout: 0 }
+  - { name: closed, owner: human,  gate: auto, timeout: 0 }

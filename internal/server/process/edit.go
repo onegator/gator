@@ -123,6 +123,9 @@ func (s *Service) retarget(ctx context.Context, q *db.Queries, task db.Task, kin
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidEdit, err)
 	}
+	if m.Hidden() {
+		return "", ErrHiddenKind
+	}
 	return m.First().Name, nil
 }
 

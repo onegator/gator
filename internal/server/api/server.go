@@ -652,7 +652,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		errors.Is(err, process.ErrRollbackCeiling), errors.Is(err, process.ErrUnknownPhase),
 		errors.Is(err, process.ErrTerminalPhase), errors.Is(err, process.ErrKindLocked):
 		writeError(w, http.StatusConflict, err.Error(), "conflict")
-	case errors.Is(err, process.ErrInvalidUsage), errors.Is(err, process.ErrInvalidEdit):
+	case errors.Is(err, process.ErrInvalidUsage), errors.Is(err, process.ErrInvalidEdit),
+		errors.Is(err, process.ErrHiddenKind), errors.Is(err, process.ErrNotAnAsk):
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 	default:
 		s.Log.Error("request failed", "err", err)

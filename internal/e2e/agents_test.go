@@ -49,8 +49,12 @@ func TestAutopilotJobsAreSignedByTheRolesAgent(t *testing.T) {
 	_, stop := h.startRunner(backend, exec)
 	defer stop()
 	h.waitJob(job.Id.String(), "done")
-	if got := exec.last(t).Guide; got != "Read every paper." {
-		t.Fatalf("an agent with its own instructions works from them, got %q", got)
+	exec.mu.Lock()
+	defer exec.mu.Unlock()
+	for _, j := range exec.jobs {
+		if j.JobID == job.Id.String() && j.Guide != "Read every paper." {
+			t.Fatalf("an agent with its own instructions works from them, got %q", j.Guide)
+		}
 	}
 }
 

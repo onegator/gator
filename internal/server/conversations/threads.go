@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -9,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -56,6 +58,9 @@ func (t *Threads) ForTask(ctx context.Context, task db.Task) (db.Conversation, e
 	q := db.New(t.pool)
 	if conv, err := q.GetTaskConversation(ctx, task.ID); !errors.Is(err, pgx.ErrNoRows) {
 		return conv, err
+	}
+	if dm, ok := askDM(task); ok { // an ask in a DM lives in the DM, which cannot be a task's
+		return q.GetConversation(ctx, dm)
 	}
 	var channel db.Conversation
 	if !task.ClosedAt.Valid { // a task closed before it had a thread gets one quietly, without a card
@@ -154,4 +159,17 @@ func (t *Threads) open(ctx context.Context, conv db.Conversation, msg db.Message
 		return db.New(t.pool).GetThreadOfMessage(ctx, msg.ID)
 	}
 	return thread, err
+}
+
+// askDM is the DM an ask was opened for, if it was opened for one.
+func askDM(task db.Task) (pgtype.UUID, bool) {
+	if task.Kind != process.AskKind {
+		return pgtype.UUID{}, false
+	}
+	var refs map[string]string
+	var id pgtype.UUID
+	if json.Unmarshal(task.ExternalRefs, &refs) != nil || id.Scan(refs[askRef]) != nil {
+		return id, false
+	}
+	return id, id.Valid
 }
