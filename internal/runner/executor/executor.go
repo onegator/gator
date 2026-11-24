@@ -221,7 +221,8 @@ const AgentTools = `You can talk back to Gator while you work, with gator-cli (J
 - ` + "`gator-cli ask --question \"...\"`" + ` — ask a question and stop there; it reaches a person's inbox.
 - ` + "`gator-cli artifact put --type report --file -`" + ` — record a document now, so it survives a failed job.
 - ` + "`gator-cli product propose --kind lesson --title \"...\" --file -`" + ` — propose what this work taught the product; a person approves it.
-- ` + "`gator-cli catalogue show`" + ` and ` + "`gator-cli knowledge search --query \"...\"`" + ` — look things up that your prompt did not carry.`
+- ` + "`gator-cli catalogue show`" + ` and ` + "`gator-cli knowledge search --query \"...\"`" + ` — look things up that your prompt did not carry.
+- ` + "`gator-cli say --file -`" + ` — say something in the task's thread; mention @agent to ask another agent.`
 
 func Prompt(job proto.Job, hasRepo bool) string {
 	var b strings.Builder

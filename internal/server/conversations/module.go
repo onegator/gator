@@ -38,9 +38,10 @@ type Module struct {
 	Search    *Search
 	// Packer tells an agent the conversation it answers in.
 	Packer *Packer
-	// Promoter and Asks are nil without Deps.Tasks.
-	Promoter *Promoter
-	Asks     *Asks
+	// Promoter, Asks and Proposals are nil without Deps.Tasks.
+	Promoter  *Promoter
+	Asks      *Asks
+	Proposals *Proposals
 	// Attachments is nil without Deps.Blobs.
 	Attachments *Attachments
 
@@ -67,6 +68,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	if deps.Tasks != nil {
 		m.Promoter = NewPromoter(pool, access, deps.Roles, deps.Tasks, deps.Tasks, threads)
 		m.Asks = NewAsks(pool, deps.Tasks)
+		m.Proposals = NewProposals(pool, access, deps.Roles, deps.Tasks)
 	}
 	if deps.Blobs != nil {
 		m.Attachments = NewAttachments(pool, access, deps.Blobs)

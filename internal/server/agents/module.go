@@ -43,6 +43,8 @@ type Module struct {
 	Tracker *TurnTracker
 	// Control is what people do to turns: stop them.
 	Control *Control
+	// Talk is what agents say from inside their jobs.
+	Talk *Talk
 
 	pool *pgxpool.Pool
 }
@@ -70,6 +72,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Briefer:    NewBriefer(q, chat.Packer, summaries, deps.Log),
 		Summaries:  summaries,
 		Tracker:    NewTurnTracker(q, voice),
+		Talk:       NewTalk(q, chat.Threads, voice, chat.Packer, chat.Proposals),
 		pool:       pool,
 	}
 }
