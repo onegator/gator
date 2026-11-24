@@ -192,3 +192,18 @@ func TestNormalizeChannelName(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskChannelName(t *testing.T) {
+	for cfg, want := range map[string]string{
+		`{"conversations":{"task_channel":"#Work"}}`:  "work",
+		`{"conversations":{}}`:                        "",
+		`{"conversations":{"task_channel":"no way"}}`: "",
+		`{}`:     "",
+		``:       "",
+		`broken`: "",
+	} {
+		if got := taskChannelName([]byte(cfg)); got != want {
+			t.Errorf("%s: %q, want %q", cfg, got, want)
+		}
+	}
+}

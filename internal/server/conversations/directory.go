@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/auth"
-	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -589,32 +588,45 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// projectConfig is the part of process_config about conversations.
+// projectConfig is the part of process_config about conversations:
+// {"conversations": {"task_channel": "work"}}.
 type projectConfig struct {
-	// TaskChannel is the channel a new task's card goes to; #general when unset or gone.
-	TaskChannel string `json:"task_channel"`
+	Conversations struct {
+		// TaskChannel is the channel a new task's card goes to; #general when unset, gone,
+		// archived or private.
+		TaskChannel string `json:"task_channel"`
+	} `json:"conversations"`
+}
+
+// taskChannelName reads the configured task channel; "" when there is none or it is no name.
+func taskChannelName(processConfig []byte) string {
+	var cfg projectConfig
+	if len(processConfig) == 0 || json.Unmarshal(processConfig, &cfg) != nil || cfg.Conversations.TaskChannel == "" {
+		return ""
+	}
+	name, err := normalizeChannelName(cfg.Conversations.TaskChannel)
+	if err != nil {
+		return ""
+	}
+	return name
 }
 
 // TaskChannel answers the channel where a project's new tasks show up: the one its
-// process_config names (conversations.task_channel), or #general.
+// process_config names (conversations.task_channel), or #general. A task belongs to the whole
+// project, so only an open channel will do: a private one, like an archived one, is ignored.
 func (d *Directory) TaskChannel(ctx context.Context, project pgtype.UUID) (db.Conversation, error) {
 	q := db.New(d.pool)
 	p, err := q.GetProject(ctx, project)
 	if err != nil {
 		return db.Conversation{}, err
 	}
-	if cfg, err := process.ParseProjectConfig(p.ProcessConfig); err == nil && len(cfg.Conversations) > 0 {
-		var cc projectConfig
-		if json.Unmarshal(cfg.Conversations, &cc) == nil && cc.TaskChannel != "" {
-			if name, err := normalizeChannelName(cc.TaskChannel); err == nil {
-				ch, err := q.GetChannelByName(ctx, db.GetChannelByNameParams{ProjectID: project, Name: name})
-				if err == nil && !ch.ArchivedAt.Valid {
-					return ch, nil
-				}
-				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-					return db.Conversation{}, err
-				}
-			}
+	if name := taskChannelName(p.ProcessConfig); name != "" {
+		ch, err := q.GetChannelByName(ctx, db.GetChannelByNameParams{ProjectID: project, Name: name})
+		switch {
+		case err == nil && !ch.ArchivedAt.Valid && ch.Visibility == VisibilityProject:
+			return ch, nil
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return db.Conversation{}, err
 		}
 	}
 	return d.EnsureDefaultChannels(ctx, project)

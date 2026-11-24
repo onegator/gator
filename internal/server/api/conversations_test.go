@@ -948,3 +948,29 @@ func TestPromoteFromPrivateConversationsKeepsThemPrivate(t *testing.T) {
 		}
 	}
 }
+
+// A private channel named as the task channel is not used: a task belongs to the whole project,
+// and its card goes to #general instead.
+func TestAPrivateTaskChannelFallsBackToGeneral(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("privtasks")
+	pid := c.project.Id.String()
+	h.channel(c.member, pid, "hidden", "private")
+	if _, err := h.pool.Exec(context.Background(), `UPDATE projects SET process_config = '{"conversations":{"task_channel":"hidden"}}' WHERE id = $1`, pid); err != nil {
+		t.Fatal(err)
+	}
+	var task gen.Task
+	h.as(c.member, func() { h.do("POST", "/projects/"+pid+"/tasks", gen.NewTask{Kind: "bug", Title: "Where"}, &task) })
+	var thread gen.ConversationDetail
+	h.as(c.admin, func() {
+		if code := h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &thread); code != 200 {
+			t.Fatalf("the project's admin reads the task's thread: %d", code)
+		}
+	})
+	var root gen.Message
+	h.as(c.admin, func() { h.do("GET", "/messages/"+thread.ParentMessageId.String(), nil, &root) })
+	g, _ := h.general(c.admin, pid)
+	if root.ConversationId != g.Id {
+		t.Fatalf("the card went to %v, not #general", root.ConversationId)
+	}
+}
