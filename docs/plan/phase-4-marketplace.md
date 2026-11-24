@@ -15,7 +15,7 @@ rejestr kurowany przez nas, patrz założenia w [README](README.md)).
 | `agent` | `agent.yaml`, `instructions.md`, opcjonalnie `skills/`, wymagane integracje, automations | wiersz `agents` z `source.kind='marketplace'` |
 | `skill` | folder w formacie Agent Skills: `SKILL.md` (frontmatter `name`, `description`, opcjonalnie `example-prompt`), `scripts/`, `references/`, `assets/icon.png` | wiersz `skills`, przypinany do agentów |
 | `integration` | natywny plugin (binarka per platforma + manifest) **albo** definicja zdalnego serwera MCP | `plugins` / `mcp_servers` |
-| `process` | szablon kindu (`*.yaml` jak `process/defaults`) i role | wpis w `process_config` projektu lub workspace'u |
+| `process` | szablon kindu (`*.yaml` jak `internal/server/process/defaults`) i role | wpis w `process_config` projektu lub workspace'u |
 | `knowledge` | dzisiejszy knowledge pack | `knowledge_packs` (bez zmian) |
 
 ## Format rejestru

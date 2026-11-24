@@ -27,23 +27,37 @@ i kopiuje do opisu taska streszczenie oraz link do wiadomości.
 
 ## Dane (`00035_conversations.sql`)
 
+Pełna migracja: `internal/server/store/migrations/00035_conversations.sql`. Skrót:
+
 ```sql
 CREATE TABLE conversations (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id   uuid REFERENCES projects(id) ON DELETE CASCADE,   -- NULL dla DM poza projektem
+    project_id   uuid REFERENCES projects(id) ON DELETE CASCADE,   -- NULL dla DM poza projektem (i jego wątków)
     kind         text NOT NULL CHECK (kind IN ('channel', 'dm', 'thread', 'task')),
     name         text,                                              -- tylko channel; unikalny w projekcie
     topic        text NOT NULL DEFAULT '',
     visibility   text NOT NULL DEFAULT 'project' CHECK (visibility IN ('project', 'private')),
-    parent_message_id uuid,                                         -- thread: wiadomość-korzeń
+    parent_message_id uuid,                                         -- thread/task: wiadomość-korzeń
     task_id      uuid UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,-- kind='task'
     component_key text,
+    dm_key       text,                                              -- tylko dm: posortowane id uczestników
     archived_at  timestamptz,
-    created_by_kind text NOT NULL, created_by uuid,
+    created_by_kind text NOT NULL CHECK (created_by_kind IN ('user','agent','system','plugin','external')),
+    created_by   uuid,
     created_at   timestamptz NOT NULL DEFAULT now(),
     last_message_at timestamptz,
-    UNIQUE (project_id, name)
+    last_seq     bigint NOT NULL DEFAULT 0,                         -- seq najnowszej wiadomości
+    CHECK ((kind = 'channel') = (name IS NOT NULL)),
+    CHECK ((kind = 'dm') = (dm_key IS NOT NULL)),
+    CHECK ((kind = 'task') = (task_id IS NOT NULL)),
+    CHECK (kind <> 'thread' OR parent_message_id IS NOT NULL),
+    CHECK (kind IN ('dm', 'thread') OR project_id IS NOT NULL)
 );
+-- Kanał zawsze ma projekt, a inne rodzaje nie mają nazwy: indeks częściowy zamiast UNIQUE (project_id, name).
+CREATE UNIQUE INDEX conversations_channel_name_idx ON conversations (project_id, name) WHERE kind = 'channel';
+-- Jeden DM na zestaw ludzi w danym zakresie; NULL project_id to jeden zakres („poza projektami”).
+CREATE UNIQUE INDEX conversations_dm_idx ON conversations (project_id, dm_key) NULLS NOT DISTINCT WHERE kind = 'dm';
+CREATE UNIQUE INDEX conversations_parent_idx ON conversations (parent_message_id) WHERE parent_message_id IS NOT NULL;
 
 CREATE TABLE conversation_members (
     conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -66,6 +80,7 @@ CREATE TABLE messages (
     body            text NOT NULL DEFAULT '',        -- Markdown (podzbiór)
     card_type       text,
     card            jsonb,
+    card_key        text,                            -- o czym jest karta ("job:<id>"); karta jest aktualizowana, nie dublowana
     reply_count     integer NOT NULL DEFAULT 0,
     status          text NOT NULL DEFAULT 'final' CHECK (status IN ('streaming', 'final', 'failed')),
     origin          jsonb NOT NULL DEFAULT '{}',     -- np. {"source":"slack","ts":"…"} (faza 5)
@@ -73,36 +88,42 @@ CREATE TABLE messages (
     edited_at       timestamptz,
     deleted_at      timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
+    CHECK ((kind = 'card') = (card_type IS NOT NULL)),
+    CHECK (kind = 'card' OR (card IS NULL AND card_key IS NULL)),
     UNIQUE (conversation_id, seq),
-    UNIQUE (conversation_id, client_id)
+    UNIQUE (conversation_id, client_id),
+    UNIQUE (conversation_id, card_key)
 );
-ALTER TABLE conversations ADD FOREIGN KEY (parent_message_id) REFERENCES messages(id) ON DELETE CASCADE;
+ALTER TABLE conversations ADD CONSTRAINT conversations_parent_message_fk
+    FOREIGN KEY (parent_message_id) REFERENCES messages(id) ON DELETE CASCADE;
 
 CREATE TABLE message_mentions (
     message_id  uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    member_kind text NOT NULL, member_id uuid NOT NULL,
+    member_kind text NOT NULL CHECK (member_kind IN ('user', 'agent')), member_id uuid NOT NULL,
     PRIMARY KEY (message_id, member_kind, member_id)
 );
 
 CREATE TABLE message_reactions (
     message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    member_kind text NOT NULL, member_id uuid NOT NULL,
-    emoji text NOT NULL,
+    member_kind text NOT NULL CHECK (member_kind IN ('user', 'agent')), member_id uuid NOT NULL,
+    emoji text NOT NULL CHECK (length(emoji) BETWEEN 1 AND 64),
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (message_id, member_kind, member_id, emoji)
 );
 
 CREATE TABLE message_attachments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    message_id uuid REFERENCES messages(id) ON DELETE CASCADE,  -- NULL do wysłania wiadomości, która go niesie
+    uploaded_by uuid REFERENCES users(id) ON DELETE SET NULL,
     name text NOT NULL, content_type text NOT NULL, size_bytes bigint NOT NULL,
-    storage_key text NOT NULL,                  -- S3-compatible jak backupy, albo dysk lokalny
+    storage_key text NOT NULL UNIQUE,           -- S3-compatible albo dysk lokalny
     created_at timestamptz NOT NULL DEFAULT now()
 );
 ```
 
-`seq` nadawany jest w transakcji przez `UPDATE conversations SET last_seq = last_seq + 1 RETURNING`
-(dodatkowa kolumna `last_seq`), co daje kolejność bez luk na conversation.
+`seq` nadawany jest w transakcji przez `UPDATE conversations SET last_seq = last_seq + 1 RETURNING last_seq`,
+co blokuje wiersz rozmowy do końca transakcji i daje kolejność bez luk na conversation.
 
 `00036_message_search.sql`: `tsvector` generowany z `body` (konfiguracja `simple`, bo zespoły piszą
 w PL i EN) plus indeks GIN, a do tego `pg_trgm` na nazwy kanałów.

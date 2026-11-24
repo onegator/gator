@@ -10,7 +10,7 @@ working_state).
 
 ## Tożsamość agenta
 
-Dzisiejsze role (`process/roles/*.md`) stają się **agentami domyślnymi** każdego projektu:
+Dzisiejsze role (`internal/server/process/roles/*.md`) stają się **agentami domyślnymi** każdego projektu:
 `@researcher`, `@planner`, `@worker`, `@reviewer`, `@security`, `@curator`. Szablon procesu dalej
 mówi `role: reviewer`, a serwer rozwiązuje to do agenta projektu z `role_key = 'reviewer'`. Projekt
 może podmienić agenta dla roli (np. własny `@backend-reviewer`), nie ruszając szablonu.
@@ -41,7 +41,7 @@ CREATE TABLE agents (
     description   text NOT NULL DEFAULT '',      -- jedna linia, widoczna w @autocomplete
     avatar        text NOT NULL DEFAULT '',      -- SF Symbol, emoji albo url
     role_key      text,                          -- researcher|planner|worker|reviewer|… (do szablonów procesu)
-    instructions  text NOT NULL DEFAULT '',      -- pusty = prompt roli z process/roles
+    instructions  text NOT NULL DEFAULT '',      -- pusty = prompt roli z internal/server/process/roles
     tier          text NOT NULL DEFAULT 'chat' CHECK (tier IN ('chat', 'work')),
     policy        jsonb NOT NULL DEFAULT '{}',   -- {backend, model, max_cost_usd}; brak = process_config.policy
     tools         jsonb NOT NULL DEFAULT '[]',   -- nazwy serwerów MCP / pluginów (faza 4)
@@ -85,7 +85,7 @@ Migracja 00037 tworzy agentów domyślnych dla istniejących projektów (z `role
 ## Rozmowa bez taska: kind `ask`
 
 Każdy job potrzebuje taska (`jobs.task_id NOT NULL`, token joba ma zakres taska, budżety i metryki
-liczą się per task). Zamiast to rozluźniać, dodajemy szablon `process/defaults/ask.yaml`:
+liczą się per task). Zamiast to rozluźniać, dodajemy szablon `internal/server/process/defaults/ask.yaml`:
 
 ```yaml
 kind: ask
