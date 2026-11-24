@@ -47,6 +47,22 @@ refused to anyone who may not read that project.
 
 `/admin` is a minimal HTML panel for M1 and debugging; it goes away once Gator.app covers it.
 
+## Conversations
+
+People of a project talk in channels (`#general` comes with every project), DMs (inside a project
+or outside every one) and threads under a message; every task has its thread, under its card in
+the project's task channel (`process_config.conversations.task_channel`, `#general` by default).
+Work shows up there as cards that follow their object: the task, the decision its gate waits for
+(approved with the same `/tasks/{id}/approve`), its jobs and its documents. "Make this a task"
+(`POST /messages/{id}/promote`) turns a message and its thread into a task. The rules live in
+`internal/server/conversations`: `Access` decides who reads and writes (a viewer reads and reacts,
+a private channel is its members', a DM its people's) for the API, the WebSocket and search
+alike. Messages are numbered per conversation without gaps (`seq`); a repeated `clientId` answers
+the first message. Live: `conversation:<id>` and `me` on the WebSocket; events carry ids and seq,
+never message bodies. A mention, a DM or a reply in one's thread is pushed. Files people send (up
+to 25 MB) are kept in `GATOR_ATTACHMENTS_S3_*` (endpoint, bucket, access key, secret key, prefix,
+insecure) or `GATOR_ATTACHMENTS_DIR`; with neither set the server takes none.
+
 ## Identity and access
 
 - Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`, e.g. Google) with PKCE and a

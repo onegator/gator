@@ -151,7 +151,7 @@ func serve(ctx context.Context) error {
 	} else if apns != nil {
 		sender = apns
 	}
-	go notify.New(db.Pool, svc, sender, hub, log, 0).Run(ctx)
+	notifier := notify.New(db.Pool, svc, sender, hub, log, 0)
 	// Finished work proposes what the product learned; a person approves it.
 	curator := product.NewCurator(db.Pool, hub, log, 0)
 	// Once a project has learned more than a prompt can carry, a curator proposes a shorter
@@ -212,6 +212,8 @@ func serve(ctx context.Context) error {
 	}
 	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs})
 	go chat.Consumer(hub, log, 0).Run(ctx)
+	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
+	go notifier.WithChat(chat.Access).Run(ctx)
 
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,

@@ -96,3 +96,9 @@ SELECT * FROM message_attachments WHERE id = $1;
 -- name: ListAttachmentsOfMessages :many
 SELECT * FROM message_attachments WHERE message_id = ANY(sqlc.arg(message_ids)::uuid[])
 ORDER BY message_id, created_at;
+
+-- name: ListThreadParticipants :many
+-- The people a thread is theirs: whoever wrote its root message or a reply in it.
+SELECT DISTINCT author_id FROM messages
+WHERE (conversation_id = sqlc.arg(conversation_id) OR id = sqlc.arg(root_id))
+  AND author_kind = 'user' AND author_id IS NOT NULL AND deleted_at IS NULL;

@@ -287,3 +287,12 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   kandydatów (otwarte rozmowy czytelnych projektów i te, w których jestem), a każdy wynik i tak
   przechodzi przez `Access`. Zapytanie w składni `websearch_to_tsquery`. `pg_trgm` służy filtrowi
   `?q=` na liście kanałów projektu (`ILIKE` po indeksie trigramowym).
+- **Powiadomienia** to reguła w `internal/server/notify/messages.go` na `message.posted`: wzmianka
+  (także poza członkami rozmowy), DM, odpowiedź w wątku, w którym się pisało (autor korzenia i
+  odpowiadający), oraz wszystko przy `notify = all`. `notify = none` wycisza rozmowę razem ze
+  wzmiankami; nikt nie dostaje pusha o własnej wiadomości, a każdy odbiorca musi móc czytać rozmowę
+  (`Access.UserCanRead`). Karty nie wysyłają pushy, bo task ma już swoje powiadomienia.
+- **`context.go`** (pakiet rozmowy dla agenta) przechodzi do fazy 2, razem z pierwszym, kto go czyta;
+  w fazie 1 nie ma jeszcze konsumenta, a jego kształt zależy od `agent_turns`.
+- **Punkt 10** (regeneracja `GatorAPI` i ekrany) należy do repozytorium `gator-app` i fazy 6a;
+  `docs/openapi.yaml` opisuje już wszystko, czego te ekrany potrzebują.

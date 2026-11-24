@@ -641,6 +641,38 @@ func (q *Queries) ListReactionsOfMessages(ctx context.Context, messageIds []pgty
 	return items, nil
 }
 
+const listThreadParticipants = `-- name: ListThreadParticipants :many
+SELECT DISTINCT author_id FROM messages
+WHERE (conversation_id = $1 OR id = $2)
+  AND author_kind = 'user' AND author_id IS NOT NULL AND deleted_at IS NULL
+`
+
+type ListThreadParticipantsParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	RootID         pgtype.UUID `json:"root_id"`
+}
+
+// The people a thread is theirs: whoever wrote its root message or a reply in it.
+func (q *Queries) ListThreadParticipants(ctx context.Context, arg ListThreadParticipantsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listThreadParticipants, arg.ConversationID, arg.RootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var author_id pgtype.UUID
+		if err := rows.Scan(&author_id); err != nil {
+			return nil, err
+		}
+		items = append(items, author_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listThreadsOfMessages = `-- name: ListThreadsOfMessages :many
 SELECT parent_message_id, id FROM conversations WHERE parent_message_id = ANY($1::uuid[])
 `

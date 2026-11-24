@@ -57,6 +57,8 @@ type Notifier struct {
 	hub     *events.Hub
 	log     *slog.Logger
 	poll    time.Duration
+	// chat, when set, has messages notify the people they concern (see WithChat).
+	chat ChatAccess
 }
 
 // New builds a notifier; PollEvery defaults to two seconds.
@@ -72,7 +74,7 @@ func New(pool *pgxpool.Pool, proc *process.Service, sender Sender, hub *events.H
 
 // watched are the events worth a notification.
 var watched = []string{"task.phase_changed", "gate.blocked", "task.requirements_changed", "job.finished",
-	"job.no_runner", "runner.offline", "summary.ready"}
+	"job.no_runner", "runner.offline", "summary.ready", "message.posted"}
 
 // Run delivers notifications until ctx ends.
 func (n *Notifier) Run(ctx context.Context) {
@@ -107,8 +109,11 @@ func (n *Notifier) drain(ctx context.Context) {
 
 func (n *Notifier) handle(ctx context.Context, row db.EventsAfterRow) error {
 	q := db.New(n.pool)
-	if row.Aggregate == "runner" {
+	switch row.Aggregate {
+	case "runner":
 		return n.handleRunner(ctx, row)
+	case "conversation":
+		return n.handleMessage(ctx, row)
 	}
 	taskID := row.AggregateID
 	if row.Aggregate == "job" {
