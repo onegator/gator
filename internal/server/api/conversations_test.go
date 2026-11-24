@@ -88,12 +88,15 @@ func awaitWhere(t *testing.T, ws *websocket.Conn, want string, ok func(events.Ev
 	}
 }
 
-// Two people talk in a channel live: one posts, the other hears it on the conversation's topic
+// Two people talk in #general live: one posts, the other hears it on the conversation's topic
 // and on "me", reads it by seq, and has it as unread until they mark it read.
-func TestTwoPeopleTalkInAChannelLive(t *testing.T) {
+func TestTwoPeopleTalkInGeneralLive(t *testing.T) {
 	h := newHarness(t)
 	c := h.crew("talk")
-	ch := h.channel(c.admin, c.project.Id.String(), "talk", "")
+	ch, ok := h.general(c.admin, c.project.Id.String())
+	if !ok {
+		t.Fatal("the project has no #general")
+	}
 	conv := ch.Id.String()
 
 	// The member joins, so unread is kept for them.
@@ -134,7 +137,7 @@ func TestTwoPeopleTalkInAChannelLive(t *testing.T) {
 				return l
 			}
 		}
-		t.Fatalf("#talk is not listed: %+v", mine)
+		t.Fatalf("#general is not listed: %+v", mine)
 		return gen.Conversation{}
 	}
 	if l := listed(); l.Unread != 1 || l.UnreadMentions != 1 {
@@ -391,4 +394,54 @@ func mustOpenUUID(t *testing.T, s string) openapi_types.UUID {
 	t.Helper()
 	u := mustUUID(t, s)
 	return openapi_types.UUID(u.Bytes)
+}
+
+// general finds a project's #general in the caller's list.
+func (h *harness) general(token, project string) (gen.Conversation, bool) {
+	h.t.Helper()
+	var list []gen.Conversation
+	h.as(token, func() { h.do("GET", "/projects/"+project+"/conversations?kind=channel", nil, &list) })
+	for _, c := range list {
+		if c.Name != nil && *c.Name == "general" {
+			return c, true
+		}
+	}
+	return gen.Conversation{}, false
+}
+
+// eventually retries ok for a few seconds: the outbox consumer acts a moment after the change.
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	t.Fatalf("%s did not happen", what)
+}
+
+// A project starts with #general and its creator in it; whoever joins the project later is put
+// in it too.
+func TestEveryProjectHasGeneral(t *testing.T) {
+	h := newHarness(t)
+	_, admin, project := h.ownProject("gen")
+	g, ok := h.general(admin, project.Id.String())
+	if !ok || !g.Joined || g.Visibility != gen.ConversationVisibilityProject {
+		t.Fatalf("#general for the creator: %+v %v", g, ok)
+	}
+	newcomerID, newcomer := h.login("member")
+	h.as(admin, func() {
+		if code := h.do("PUT", "/projects/"+project.Id.String()+"/members", map[string]string{"userId": newcomerID, "role": "member"}, nil); code != 200 && code != 204 {
+			t.Fatalf("add member: %d", code)
+		}
+	})
+	eventually(t, "the newcomer joining #general", func() bool {
+		g, ok := h.general(newcomer, project.Id.String())
+		return ok && g.Joined
+	})
+	h.as(admin, func() {
+		if code := h.do("PATCH", "/conversations/"+g.Id.String(), gen.ConversationPatch{Archived: ptr(true)}, nil); code != 409 {
+			t.Fatalf("archiving #general: %d", code)
+		}
+	})
 }

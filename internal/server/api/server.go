@@ -270,6 +270,13 @@ func (s *Server) CreateProject(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if s.Conversations != nil {
+		// A project starts with #general and its creator in it. Should this fail, the project
+		// still exists, and the channel comes with the project's first task.
+		if _, err := s.Conversations.Directory.EnsureDefaultChannels(r.Context(), pr.ID, p.UserID); err != nil {
+			s.Log.Warn("default channels", "project", pr.ID, "err", err)
+		}
+	}
 	if in.Preset != nil && *in.Preset != "" {
 		// The project exists either way: a preset that cannot be applied leaves an empty
 		// project rather than swallowing one that was already created and named.

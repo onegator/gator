@@ -30,7 +30,7 @@ Ograniczenie narzędzi dla `chat` w backendzie Claude: `--permission-mode` z jaw
 `--allowedTools` (Read, Grep, Glob, WebFetch, narzędzia MCP Gatora) i `--disallowedTools` dla reszty.
 Do zweryfikowania na aktualnej wersji CLI i nagrania w `testdata`.
 
-## Dane (`00037_agents.sql`, `00038_agent_turns.sql`)
+## Dane (`00039_agents.sql`, `00040_agent_turns.sql`)
 
 ```sql
 CREATE TABLE agents (
@@ -79,7 +79,7 @@ ALTER TABLE jobs
     ADD COLUMN tier     text NOT NULL DEFAULT 'work';
 ```
 
-Migracja 00037 tworzy agentów domyślnych dla istniejących projektów (z `role_key` i pustym
+Migracja 00039 tworzy agentów domyślnych dla istniejących projektów (z `role_key` i pustym
 `instructions`), a `jobs.agent_id` uzupełnia po `role`.
 
 ## Rozmowa bez taska: kind `ask`
@@ -183,7 +183,7 @@ Agenci workspace'u są tylko dla admina workspace'u.
 
 ## Podział na PR-y
 
-1. Migracje 00037/00038, seed agentów domyślnych, rozwiązywanie `role → agent` w autopilocie.
+1. Migracje 00039/00040, seed agentów domyślnych, rozwiązywanie `role → agent` w autopilocie.
 2. `ask.yaml` (ukryty kind) i promote `ask → feature/bug`.
 3. Dispatcher wzmianek z limitami (hop, budżet, pauza, consent) i testami tabelarycznymi.
 4. Pakiet rozmowy i streszczenia (`conversation_summaries`, generowane tanim modelem z policy

@@ -201,6 +201,10 @@ func serve(ctx context.Context) error {
 		log.Info("autopilot on: entering a runner phase queues a job")
 	}
 
+	// People talk in a project's channels; the consumer keeps them in step with the project.
+	chat := conversations.New(db.Pool, auth.Authorizer{Pool: db.Pool})
+	go chat.Consumer(hub, log, 0).Run(ctx)
+
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
 		Quality: scorecards, Automations: autos,
@@ -208,7 +212,7 @@ func serve(ctx context.Context) error {
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
 		PublicURL: cfg.PublicURL,
 		// Channels, DMs and threads, with the same access rules for the API, the WebSocket and search.
-		Conversations: conversations.New(db.Pool, auth.Authorizer{Pool: db.Pool}),
+		Conversations: chat,
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:

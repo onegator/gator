@@ -125,7 +125,7 @@ CREATE TABLE message_attachments (
 `seq` nadawany jest w transakcji przez `UPDATE conversations SET last_seq = last_seq + 1 RETURNING last_seq`,
 co blokuje wiersz rozmowy do końca transakcji i daje kolejność bez luk na conversation.
 
-`00036_message_search.sql`: `tsvector` generowany z `body` (konfiguracja `simple`, bo zespoły piszą
+`00038_message_search.sql`: `tsvector` generowany z `body` (konfiguracja `simple`, bo zespoły piszą
 w PL i EN) plus indeks GIN, a do tego `pg_trgm` na nazwy kanałów.
 
 ## API (`docs/openapi.yaml`)
@@ -203,12 +203,12 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
 
 1. Migracja 00035, zapytania sqlc, serwis conversations z testami uprawnień.
 2. Endpointy wiadomości i paginacji, WS `conversation:<id>`, zdarzenia.
-3. Kanał `#general` tworzony z projektem plus backfill dla istniejących projektów (w migracji).
-4. Wątek taska: tworzenie przy tasku, backfill dla otwartych tasków, `GET /tasks/{id}/conversation`.
+3. Kanał `#general` tworzony z projektem plus backfill dla istniejących projektów (migracja 00036).
+4. Wątek taska: tworzenie przy tasku, backfill dla otwartych tasków (migracja 00037), `GET /tasks/{id}/conversation`.
 5. Konsument kart (`task`, `decision`, `job`, `artifact`).
 6. Promote (wiadomość → task).
 7. Reakcje, edycja, usuwanie, załączniki.
-8. FTS (00036) i `/search/messages`.
+8. FTS (00038) i `/search/messages`.
 9. Powiadomienia (mentions, DM).
 10. Regeneracja `GatorAPI` w gator-app i ekrany z fazy 6a.
 
@@ -247,3 +247,8 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   DM czyta tylko wtedy, gdy jest ich członkiem. Rozmowa, której nie wolno czytać, odpowiada 404.
 - **`GET /messages/{id}/thread`** otwiera wątek przy pierwszym pytaniu (idempotentnie), z autorem
   wiadomości jako członkiem; wątki się nie zagnieżdżają (400 dla odpowiedzi).
+- **Migracje:** backfille `#general` (00036) i wątków otwartych tasków (00037) są osobnymi migracjami,
+  a FTS ma numer 00038; numery kolejnych faz przesunęły się o 2 (tabela w `README.md`).
+- **`#general` przy projekcie** tworzy `POST /projects` (twórca od razu w nim jest), a osoby dołączające
+  do projektu (`project.member_set`, `project.invitation_accepted`) dodaje do niego konsument outboxu
+  pakietu (kursor `conversations`). `#general` nie da się przemianować ani zarchiwizować (409).
