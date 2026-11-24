@@ -212,12 +212,11 @@ func (m *Messages) readers(ctx context.Context, conv db.Conversation, mentions [
 }
 
 // afterPost does what every new message brings with it, in its transaction: a person who posts
-// is in the conversation from then on, a reply moves its root's count, and the event goes out.
+// is in the conversation from then on and has read what they wrote, a reply moves its root's
+// count, and the event goes out.
 func afterPost(ctx context.Context, q *db.Queries, conv db.Conversation, msg db.Message, author Author, mentioned []Member) error {
 	if author.Kind == AuthorUser {
-		if _, err := q.AddConversationMember(ctx, db.AddConversationMemberParams{
-			ConversationID: conv.ID, MemberKind: MemberUser, MemberID: author.ID, Role: RoleMember, Notify: NotifyMentions,
-		}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err := q.JoinAsAuthor(ctx, db.JoinAsAuthorParams{ConversationID: conv.ID, UserID: author.ID, Seq: msg.Seq}); err != nil {
 			return err
 		}
 	}

@@ -974,3 +974,24 @@ func TestAPrivateTaskChannelFallsBackToGeneral(t *testing.T) {
 		t.Fatalf("the card went to %v, not #general", root.ConversationId)
 	}
 }
+
+// One's own message is not unread: posting moves one's read marker past it.
+func TestOwnMessagesAreNotUnread(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("ownunread")
+	conv := h.channel(c.admin, c.project.Id.String(), "mine", "")
+	h.post(c.member, conv.Id.String(), gen.NewMessage{Body: ptr("one")})
+	h.post(c.admin, conv.Id.String(), gen.NewMessage{Body: ptr("two")})
+	h.post(c.member, conv.Id.String(), gen.NewMessage{Body: ptr("three")})
+	for _, tc := range []struct {
+		name         string
+		token        string
+		unread, read int64
+	}{{"the member, who posted last", c.member, 0, 3}, {"the admin, before the member's last", c.admin, 1, 2}} {
+		var d gen.ConversationDetail
+		h.as(tc.token, func() { h.do("GET", "/conversations/"+conv.Id.String(), nil, &d) })
+		if d.Unread != tc.unread || d.LastReadSeq != tc.read {
+			t.Fatalf("%s: unread %d, read up to %d", tc.name, d.Unread, d.LastReadSeq)
+		}
+	}
+}

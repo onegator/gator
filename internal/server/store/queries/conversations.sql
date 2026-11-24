@@ -149,3 +149,10 @@ INSERT INTO conversation_members (conversation_id, member_kind, member_id)
 SELECT c.id, 'user', sqlc.arg(user_id) FROM conversations c
 WHERE c.project_id = sqlc.arg(project_id) AND c.kind = 'channel' AND c.name = sqlc.arg(name)::text
 ON CONFLICT DO NOTHING;
+
+-- name: JoinAsAuthor :exec
+-- Whoever posts is in the conversation from then on, and has read what they wrote.
+INSERT INTO conversation_members (conversation_id, member_kind, member_id, last_read_seq)
+VALUES (sqlc.arg(conversation_id), 'user', sqlc.arg(user_id), sqlc.arg(seq)::bigint)
+ON CONFLICT (conversation_id, member_kind, member_id)
+DO UPDATE SET last_read_seq = GREATEST(conversation_members.last_read_seq, EXCLUDED.last_read_seq);

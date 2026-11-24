@@ -392,6 +392,25 @@ func (q *Queries) GetThreadOfMessage(ctx context.Context, parentMessageID pgtype
 	return i, err
 }
 
+const joinAsAuthor = `-- name: JoinAsAuthor :exec
+INSERT INTO conversation_members (conversation_id, member_kind, member_id, last_read_seq)
+VALUES ($1, 'user', $2, $3::bigint)
+ON CONFLICT (conversation_id, member_kind, member_id)
+DO UPDATE SET last_read_seq = GREATEST(conversation_members.last_read_seq, EXCLUDED.last_read_seq)
+`
+
+type JoinAsAuthorParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	UserID         pgtype.UUID `json:"user_id"`
+	Seq            int64       `json:"seq"`
+}
+
+// Whoever posts is in the conversation from then on, and has read what they wrote.
+func (q *Queries) JoinAsAuthor(ctx context.Context, arg JoinAsAuthorParams) error {
+	_, err := q.db.Exec(ctx, joinAsAuthor, arg.ConversationID, arg.UserID, arg.Seq)
+	return err
+}
+
 const joinDefaultChannel = `-- name: JoinDefaultChannel :exec
 INSERT INTO conversation_members (conversation_id, member_kind, member_id)
 SELECT c.id, 'user', $1 FROM conversations c
