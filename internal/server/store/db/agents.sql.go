@@ -338,6 +338,26 @@ func (q *Queries) InsertTurn(ctx context.Context, arg InsertTurnParams) (AgentTu
 	return i, err
 }
 
+const jobProgress = `-- name: JobProgress :one
+SELECT count(*) FILTER (WHERE type = 'tool_call')::int AS tool_calls,
+       COALESCE((SELECT e2.payload->>'name' FROM job_events e2 WHERE e2.job_id = $1 AND e2.type = 'tool_call'
+                 ORDER BY e2.seq DESC LIMIT 1), '')::text AS last_tool
+FROM job_events WHERE job_id = $1
+`
+
+type JobProgressRow struct {
+	ToolCalls int32  `json:"tool_calls"`
+	LastTool  string `json:"last_tool"`
+}
+
+// How far an agent's job has got, from its events: how many tools it called and the last one.
+func (q *Queries) JobProgress(ctx context.Context, jobID pgtype.UUID) (JobProgressRow, error) {
+	row := q.db.QueryRow(ctx, jobProgress, jobID)
+	var i JobProgressRow
+	err := row.Scan(&i.ToolCalls, &i.LastTool)
+	return i, err
+}
+
 const listActiveTurnsIn = `-- name: ListActiveTurnsIn :many
 SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE conversation_id = $1 AND status IN ('queued', 'running') ORDER BY created_at
 `
@@ -445,6 +465,63 @@ func (q *Queries) ListConversationAgentIDs(ctx context.Context, conversationID p
 			return nil, err
 		}
 		items = append(items, member_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTurnsOfReplies = `-- name: ListTurnsOfReplies :many
+SELECT t.id, t.reply_message_id, t.agent_id, t.status, t.tier, t.job_id, t.refusal,
+       COALESCE(u.cost_usd, 0)::float8 AS cost_usd, COALESCE(u.duration_ms, 0)::bigint AS duration_ms,
+       COALESCE(u.estimated, false)::boolean AS cost_estimated
+FROM agent_turns t
+LEFT JOIN LATERAL (
+    SELECT sum(r.cost_usd) AS cost_usd, sum(r.duration_ms) AS duration_ms, bool_or(r.cost_estimated) AS estimated
+    FROM usage_records r WHERE r.job_id = t.job_id
+) u ON true
+WHERE t.reply_message_id = ANY($1::uuid[])
+`
+
+type ListTurnsOfRepliesRow struct {
+	ID             pgtype.UUID `json:"id"`
+	ReplyMessageID pgtype.UUID `json:"reply_message_id"`
+	AgentID        pgtype.UUID `json:"agent_id"`
+	Status         string      `json:"status"`
+	Tier           string      `json:"tier"`
+	JobID          pgtype.UUID `json:"job_id"`
+	Refusal        *string     `json:"refusal"`
+	CostUsd        float64     `json:"cost_usd"`
+	DurationMs     int64       `json:"duration_ms"`
+	CostEstimated  bool        `json:"cost_estimated"`
+}
+
+// What is said under an agent's answer: its turn, and what its job cost and took.
+func (q *Queries) ListTurnsOfReplies(ctx context.Context, ids []pgtype.UUID) ([]ListTurnsOfRepliesRow, error) {
+	rows, err := q.db.Query(ctx, listTurnsOfReplies, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTurnsOfRepliesRow
+	for rows.Next() {
+		var i ListTurnsOfRepliesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReplyMessageID,
+			&i.AgentID,
+			&i.Status,
+			&i.Tier,
+			&i.JobID,
+			&i.Refusal,
+			&i.CostUsd,
+			&i.DurationMs,
+			&i.CostEstimated,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

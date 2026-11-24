@@ -109,6 +109,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	t.Cleanup(stopConsumers)
 	go chat.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
+	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Automations: autos, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat}

@@ -121,7 +121,7 @@ func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, tu
 	grant := TierFor(r.Agent, task)
 	if !turn.ReplyMessageID.Valid {
 		msg, err := s.voice.Say(ctx, home, conversations.Speech{Agent: r.Agent.ID, Turn: turn.ID,
-			Body: fmt.Sprintf("@%s is reading the conversation…", r.Agent.Handle), Status: conversations.StatusStreaming})
+			Body: Reading(r.Agent), Status: conversations.StatusStreaming})
 		if err != nil {
 			return err
 		}
@@ -248,3 +248,7 @@ func (l Locker) WithTurn(ctx context.Context, id pgtype.UUID, fn func(turn db.Ag
 		return fn(turn, q)
 	})
 }
+
+// Reading is what an agent's message says from the moment it is asked until it writes: the
+// session takes seconds to start, and nobody should wonder whether it heard.
+func Reading(a db.Agent) string { return fmt.Sprintf("@%s is reading the conversation…", a.Handle) }

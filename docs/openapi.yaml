@@ -2529,8 +2529,8 @@ components:
         card: { $ref: "#/components/schemas/Card" }
         replyCount: { type: integer }
         threadId: { type: string, format: uuid, description: "the thread under this message, once opened" }
-        status: { type: string, enum: [streaming, final, failed] }
-        origin: { type: object, additionalProperties: true, description: "where it came from outside Gator (phase 5); {} otherwise" }
+        status: { type: string, enum: [streaming, final, failed], description: "streaming while an agent is still writing it (message.edited as it grows), failed when its turn could not answer" }
+        origin: { type: object, additionalProperties: true, description: "where it came from: {turn} for an agent's message, outside Gator (phase 5); {} otherwise" }
         clientId: { type: string }
         editedAt: { type: string, format: date-time }
         deletedAt: { type: string, format: date-time }
@@ -2538,6 +2538,21 @@ components:
         mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
         reactions: { type: array, items: { $ref: "#/components/schemas/Reaction" } }
         attachments: { type: array, items: { $ref: "#/components/schemas/Attachment" }, description: "none once deleted" }
+        turn: { $ref: "#/components/schemas/MessageTurn" }
+    MessageTurn:
+      type: object
+      description: "The agent's turn a message is the answer of: what a client shows under it (state, cost, time) and what Stop acts on."
+      required: [id, agentId, status, tier, costUsd, durationMs, costEstimated]
+      properties:
+        id: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, done, failed, refused, stopped] }
+        tier: { type: string, enum: [chat, work] }
+        jobId: { type: string, format: uuid }
+        refusal: { type: string, description: "why it did not run: paused | no_access | hop_limit | repeat | chain_budget | budget | no_task" }
+        costUsd: { type: number, format: double }
+        durationMs: { type: integer, format: int64 }
+        costEstimated: { type: boolean, description: "priced from list rates (a subscription), not billed" }
     Reaction:
       type: object
       required: [emoji, count, members]

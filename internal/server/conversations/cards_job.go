@@ -14,6 +14,7 @@ type jobReader interface {
 	taskReader
 	GetJob(ctx context.Context, id pgtype.UUID) (db.Job, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
+	JobProgress(ctx context.Context, jobID pgtype.UUID) (db.JobProgressRow, error)
 }
 
 // jobCards shows each job in its task's thread as one card that follows the job from queued to
@@ -25,7 +26,7 @@ type jobCards struct {
 // Events implements CardSource.
 func (jobCards) Events() []string {
 	return []string{"job.queued", "job.leased", "job.started", "job.stalled", "job.resumed", "job.requeued",
-		"job.no_runner", "job.provisioned", "job.provision_failed", "job.finished"}
+		"job.no_runner", "job.provisioned", "job.provision_failed", "job.finished", EventJobProgress}
 }
 
 // Cards implements CardSource.
@@ -51,7 +52,27 @@ func (s jobCards) Cards(ctx context.Context, e db.EventsAfterRow) ([]PlacedCard,
 			agent = &a
 		}
 	}
-	return []PlacedCard{{Task: task, Card: JobCard(job, agent)}}, nil
+	progress, err := s.jobs.JobProgress(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
+	card := JobCard(job, agent)
+	withProgress(card, progress)
+	return []PlacedCard{{Task: task, Card: card}}, nil
+}
+
+// EventJobProgress says an agent's job called more tools: its card follows. The agents package
+// writes it, a few times a second at most, while it streams a reply.
+const EventJobProgress = "job.progress"
+
+// withProgress puts on a job's card how far its agent has got: the tools it called, the last
+// one by name. The card is where a reply's tool calls go, not the answer.
+func withProgress(c Card, p db.JobProgressRow) {
+	if p.ToolCalls == 0 {
+		return
+	}
+	c.Data["progress"] = map[string]any{"toolCalls": p.ToolCalls, "lastTool": p.LastTool}
+	c.Data["summary"] = fmt.Sprintf("%s · %d tool calls, last %s", c.Data["summary"], p.ToolCalls, p.LastTool)
 }
 
 // JobCard is the card of one job: who does it (the agent, else its role) and in which phase,

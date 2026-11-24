@@ -81,6 +81,9 @@ type View struct {
 	ThreadID    pgtype.UUID
 	Reactions   []Reaction
 	Attachments []db.MessageAttachment
+	// Turn is the agent's turn this message is the answer of, with what it cost: what a client
+	// shows under the answer. Nil for anything else.
+	Turn *db.ListTurnsOfRepliesRow
 }
 
 // Reaction is one emoji on a message and who added it.
@@ -436,6 +439,13 @@ func describe(ctx context.Context, q *db.Queries, rows []db.Message) ([]View, er
 	}
 	if err := describeAttachments(ctx, q, ids, views, at); err != nil {
 		return nil, err
+	}
+	turns, err := q.ListTurnsOfReplies(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range turns {
+		views[at[t.ReplyMessageID.Bytes]].Turn = &t
 	}
 	return views, nil
 }

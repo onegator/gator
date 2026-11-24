@@ -35,6 +35,8 @@ type Module struct {
 	// Briefer tells a reply's agent its conversation: runners.Config.Briefer.
 	Briefer   *Briefer
 	Summaries *conversations.Summaries
+	// Tracker keeps turns in step with their jobs.
+	Tracker *TurnTracker
 
 	pool *pgxpool.Pool
 }
@@ -60,6 +62,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Voice:      voice,
 		Briefer:    NewBriefer(q, chat.Packer, summaries, deps.Log),
 		Summaries:  summaries,
+		Tracker:    NewTurnTracker(q, voice),
 		pool:       pool,
 	}
 }
@@ -69,5 +72,12 @@ func (m *Module) Consumer(hub *events.Hub, log *slog.Logger, poll time.Duration)
 	c := conversations.NewCursorConsumer(cursorName, m.pool, hub, log, poll)
 	c.On(m.Dispatcher, m.Dispatcher.Events()...)
 	c.On(m.Summaries.Handler(), "job.finished")
+	c.On(m.Tracker, m.Tracker.Events()...)
 	return c
+}
+
+// Streamer writes replies into their messages as agents write them, from the hub's job output.
+// Run it with go streamer.Run(ctx).
+func (m *Module) Streamer(hub *events.Hub, log *slog.Logger, every time.Duration) *Streamer {
+	return NewStreamer(hub, db.New(m.pool), m.Voice, m.pool, every, log)
 }

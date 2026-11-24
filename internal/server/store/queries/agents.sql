@@ -83,3 +83,22 @@ SELECT member_id FROM conversation_members WHERE conversation_id = $1 AND member
 -- servers) take turns and the second finds the first one's job. NO KEY: the job being created
 -- references the turn, and its foreign key check must not wait for this lock.
 SELECT * FROM agent_turns WHERE id = $1 FOR NO KEY UPDATE;
+
+-- name: ListTurnsOfReplies :many
+-- What is said under an agent's answer: its turn, and what its job cost and took.
+SELECT t.id, t.reply_message_id, t.agent_id, t.status, t.tier, t.job_id, t.refusal,
+       COALESCE(u.cost_usd, 0)::float8 AS cost_usd, COALESCE(u.duration_ms, 0)::bigint AS duration_ms,
+       COALESCE(u.estimated, false)::boolean AS cost_estimated
+FROM agent_turns t
+LEFT JOIN LATERAL (
+    SELECT sum(r.cost_usd) AS cost_usd, sum(r.duration_ms) AS duration_ms, bool_or(r.cost_estimated) AS estimated
+    FROM usage_records r WHERE r.job_id = t.job_id
+) u ON true
+WHERE t.reply_message_id = ANY(sqlc.arg(ids)::uuid[]);
+
+-- name: JobProgress :one
+-- How far an agent's job has got, from its events: how many tools it called and the last one.
+SELECT count(*) FILTER (WHERE type = 'tool_call')::int AS tool_calls,
+       COALESCE((SELECT e2.payload->>'name' FROM job_events e2 WHERE e2.job_id = $1 AND e2.type = 'tool_call'
+                 ORDER BY e2.seq DESC LIMIT 1), '')::text AS last_tool
+FROM job_events WHERE job_id = $1;

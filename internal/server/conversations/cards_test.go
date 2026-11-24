@@ -208,6 +208,10 @@ func (f fakeJobs) GetAgent(context.Context, pgtype.UUID) (db.Agent, error) {
 	return db.Agent{}, pgx.ErrNoRows
 }
 
+func (f fakeJobs) JobProgress(context.Context, pgtype.UUID) (db.JobProgressRow, error) {
+	return db.JobProgressRow{}, nil
+}
+
 func TestSourcesLeaveNoCardForWhatIsGone(t *testing.T) {
 	ctx := context.Background()
 	task := db.Task{ID: newID(1), Title: "T", Kind: "bug", Phase: "planning"}

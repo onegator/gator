@@ -217,6 +217,7 @@ func serve(ctx context.Context) error {
 	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Log: log})
 	runnerMgr.UseBriefer(team.Briefer)
 	go team.Consumer(hub, log, 0).Run(ctx)
+	go team.Streamer(hub, log, 0).Run(ctx)
 	go runnerMgr.Run(ctx)
 	if os.Getenv("GATOR_AUTOPILOT") != "0" {
 		go runnerMgr.RunAutopilot(ctx)

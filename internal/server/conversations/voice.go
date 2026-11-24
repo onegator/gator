@@ -87,8 +87,9 @@ func (v *Voice) Say(ctx context.Context, conv db.Conversation, s Speech) (db.Mes
 }
 
 // Rewrite changes what a message an agent is writing says, and whether it is still being
-// written. Saying the same again changes nothing and tells nobody; anything else is
-// message.edited. A message somebody deleted stays deleted.
+// written. Only an answer still being written is rewritten: once final or failed it says what it
+// said, so a late update cannot undo its end. Saying the same again changes nothing and tells
+// nobody; anything else is message.edited. A message somebody deleted stays deleted.
 func (v *Voice) Rewrite(ctx context.Context, message pgtype.UUID, body, status string) (db.Message, bool, error) {
 	var out db.Message
 	changed := false
@@ -98,7 +99,7 @@ func (v *Voice) Rewrite(ctx context.Context, message pgtype.UUID, body, status s
 			return err
 		}
 		out = msg
-		if msg.DeletedAt.Valid || (msg.Body == body && msg.Status == status) {
+		if msg.DeletedAt.Valid || msg.Status != StatusStreaming || (msg.Body == body && msg.Status == status) {
 			return nil
 		}
 		if out, err = q.RewriteMessage(ctx, db.RewriteMessageParams{ID: message, Body: body, Status: status}); err != nil {
