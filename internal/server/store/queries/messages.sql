@@ -130,3 +130,36 @@ SELECT * FROM messages WHERE id = $1 FOR UPDATE;
 UPDATE messages SET body = sqlc.arg(body), status = sqlc.arg(status)
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL
 RETURNING *;
+
+-- name: GetConversationSummary :one
+SELECT * FROM conversation_summaries WHERE conversation_id = $1;
+
+-- name: ClaimSummaryRefresh :one
+-- Marks a newer summary as being written, unless one is already being written or the summary
+-- there covers this much already. No row: nothing to do.
+INSERT INTO conversation_summaries (conversation_id, pending_upto_seq)
+VALUES (sqlc.arg(conversation_id), sqlc.arg(upto_seq))
+ON CONFLICT (conversation_id) DO UPDATE
+SET pending_upto_seq = EXCLUDED.pending_upto_seq, pending_job_id = NULL, updated_at = now()
+WHERE conversation_summaries.pending_upto_seq IS NULL AND conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
+RETURNING *;
+
+-- name: SetSummaryJob :exec
+UPDATE conversation_summaries SET pending_job_id = sqlc.arg(job_id), updated_at = now()
+WHERE conversation_id = sqlc.arg(conversation_id);
+
+-- name: ReleaseSummaryRefresh :exec
+-- A refresh that could not start, or whose job failed: the next pack may ask again.
+UPDATE conversation_summaries SET pending_upto_seq = NULL, pending_job_id = NULL, updated_at = now()
+WHERE conversation_id = sqlc.arg(conversation_id);
+
+-- name: FinishSummaryRefresh :execrows
+-- The summary a job wrote replaces the one there, if it covers more.
+UPDATE conversation_summaries
+SET summary = sqlc.arg(summary), model = sqlc.arg(model), upto_seq = pending_upto_seq,
+    pending_upto_seq = NULL, pending_job_id = NULL, updated_at = now()
+WHERE pending_job_id = sqlc.arg(job_id) AND pending_upto_seq > upto_seq;
+
+-- name: ReleaseSummaryJob :exec
+UPDATE conversation_summaries SET pending_upto_seq = NULL, pending_job_id = NULL, updated_at = now()
+WHERE pending_job_id = sqlc.arg(job_id);

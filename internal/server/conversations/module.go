@@ -36,6 +36,8 @@ type Module struct {
 	Threads   *Threads
 	Cards     *Projector
 	Search    *Search
+	// Packer tells an agent the conversation it answers in.
+	Packer *Packer
 	// Promoter and Asks are nil without Deps.Tasks.
 	Promoter *Promoter
 	Asks     *Asks
@@ -58,6 +60,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Threads:   threads,
 		Cards:     NewProjector(pool, threads),
 		Search:    NewSearch(pool, access),
+		Packer:    NewPacker(db.New(pool), 0),
 		pool:      pool,
 		deps:      deps,
 	}

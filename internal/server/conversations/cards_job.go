@@ -34,6 +34,9 @@ func (s jobCards) Cards(ctx context.Context, e db.EventsAfterRow) ([]PlacedCard,
 	if err != nil {
 		return nil, ignoreGone(err)
 	}
+	if job.Kind == summaryKind {
+		return nil, nil // Gator's own housekeeping on the conversation, not anybody's work
+	}
 	task, ok, err := taskOf(ctx, s.jobs, job.TaskID)
 	if !ok {
 		return nil, err

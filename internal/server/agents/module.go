@@ -24,6 +24,7 @@ type Deps struct {
 	Jobs jobQueue
 	// Now is the clock of the daily budget; nil is time.Now.
 	Now func() time.Time
+	Log *slog.Logger
 }
 
 // Module is the package's services wired to one database, for the server to hand out.
@@ -31,6 +32,9 @@ type Module struct {
 	Dispatcher *Dispatcher
 	Starter    *Starter
 	Voice      *conversations.Voice
+	// Briefer tells a reply's agent its conversation: runners.Config.Briefer.
+	Briefer   *Briefer
+	Summaries *conversations.Summaries
 
 	pool *pgxpool.Pool
 }
@@ -49,10 +53,13 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		ChainBudget{Spent: q, Policies: deps.Process, Factor: DefaultChainFactor},
 		DailyBudget{Budgets: deps.Process, Now: deps.Now},
 	}
+	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})
 	return &Module{
 		Dispatcher: NewDispatcher(q, guards, starter),
 		Starter:    starter,
 		Voice:      voice,
+		Briefer:    NewBriefer(q, chat.Packer, summaries, deps.Log),
+		Summaries:  summaries,
 		pool:       pool,
 	}
 }
@@ -61,5 +68,6 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 func (m *Module) Consumer(hub *events.Hub, log *slog.Logger, poll time.Duration) *conversations.Consumer {
 	c := conversations.NewCursorConsumer(cursorName, m.pool, hub, log, poll)
 	c.On(m.Dispatcher, m.Dispatcher.Events()...)
+	c.On(m.Summaries.Handler(), "job.finished")
 	return c
 }

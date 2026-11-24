@@ -434,19 +434,23 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	}
 	pj.AgentToken = s.agentToken(ctx, j)
 	pj.Guide = s.guide(ctx, q, j)
-	pj.Context = s.handContext(ctx, q, j)
+	brief := s.brief(ctx, j)
+	pj.Context = s.handContext(ctx, q, j, brief.Docs)
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
 	}
 	// Record what this job was handed. Context is meant to save an agent from
 	// hunting for what it needs; whether it does is a question about tokens spent
 	// against context given, and that comparison needs both numbers.
-	bytes := 0
+	bytes := len(brief.Ask) + len(brief.Repeat)
+	for _, d := range brief.Docs {
+		bytes += len(d.Body)
+	}
 	for _, d := range pj.Context {
 		bytes += len(d.Body)
 	}
 	_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
-		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context))})
+		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context) + len(brief.Docs))})
 	return pj
 }
 
@@ -490,9 +494,23 @@ func (s *session) agentToken(ctx context.Context, j db.Job) string {
 	return token
 }
 
-// handContext gathers the documents the job starts from — the core's, then the plugins' —
-// and records each one, whether or not it made it into the prompt.
-func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job) []proto.ContextDoc {
+// brief is the conversation a reply answers in, as its agent is told it; nothing for any other
+// job, or when it cannot be told.
+func (s *session) brief(ctx context.Context, j db.Job) TurnBrief {
+	if j.Kind != KindReply || s.m.cfg.Briefer == nil {
+		return TurnBrief{}
+	}
+	b, err := s.m.cfg.Briefer.Brief(ctx, j)
+	if err != nil {
+		s.m.log.Warn("telling an agent its conversation", "job", uuidString(j.ID), "err", err)
+	}
+	return b
+}
+
+// handContext gathers the documents the job starts from — the conversation a reply answers in,
+// then the core's, then the plugins' — and records each one, whether or not it made it into the
+// prompt.
+func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, conversation []process.ContextDoc) []proto.ContextDoc {
 	var out []proto.ContextDoc
 	// One counter across everything the job is handed, so the record reads in the
 	// order the prompt does.
@@ -505,6 +523,10 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job) []pr
 			s.m.log.Warn("recording what a job was handed", "job", uuidString(j.ID), "err", err)
 		}
 		pos++
+	}
+	for _, d := range conversation {
+		d.FullBytes = max(d.FullBytes, len(d.Body))
+		record(d, "conversation")
 	}
 	if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
 		for _, d := range docs {
@@ -698,17 +720,24 @@ func (s *session) closeJob(ctx context.Context, q *db.Queries, jobID pgtype.UUID
 	return s.m.emitJob(ctx, q, "job.finished", j, map[string]any{"stop_reason": reason, "summary": fin.Summary})
 }
 
-// recordWork leaves the document the job's role produces, for the phase gate to approve, and
-// says whether the agent left a digest of what it did.
+// recordWork leaves what a done job produced. A phase job leaves the document its role
+// produces, for the phase gate to approve; a reply is its message in the conversation and
+// leaves no document to approve, and a summary is the conversation's. Phase jobs and replies say
+// whether the agent left a digest of what it did, and rebuild the task's working state.
 func recordWork(ctx context.Context, q *db.Queries, j db.Job, fin proto.Finish) error {
-	content := artifactContent(j.Role, fin)
-	typ := process.ArtifactTypeFor(j.Role)
-	a, err := q.CreateArtifact(ctx, db.CreateArtifactParams{TaskID: j.TaskID, Phase: j.Phase, Type: typ, Content: &content})
-	if err != nil {
-		return err
-	}
-	if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
-		return err
+	switch j.Kind {
+	case KindSummary:
+		return nil
+	case KindPhase:
+		content := artifactContent(j.Role, fin)
+		typ := process.ArtifactTypeFor(j.Role)
+		a, err := q.CreateArtifact(ctx, db.CreateArtifactParams{TaskID: j.TaskID, Phase: j.Phase, Type: typ, Content: &content})
+		if err != nil {
+			return err
+		}
+		if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
+			return err
+		}
 	}
 	if fin.Digest != nil {
 		if err := emit(ctx, q, "job.digest", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID), "phase": j.Phase, "role": j.Role, "digest": fin.Digest}); err != nil {

@@ -172,9 +172,3 @@ func (w *world) spend(job pgtype.UUID, usd float64) {
 		w.t.Fatal(err)
 	}
 }
-
-func uuidText(u pgtype.UUID) string {
-	v, _ := u.Value()
-	s, _ := v.(string)
-	return s
-}

@@ -8,6 +8,8 @@
 // template keeps saying role: reviewer, and the project's agent for that role does the job.
 package agents
 
+import "github.com/jackc/pgx/v5/pgtype"
+
 // Tiers: what an agent may touch when it answers in a conversation.
 const (
 	// TierChat reads the repository, searches and answers, through tools that do not write.
@@ -50,4 +52,10 @@ var Defaults = []Default{
 	{Handle: "curator", DisplayName: "Curator", RoleKey: "curator", Tier: TierChat},
 	{Handle: "triage", DisplayName: "Triage", RoleKey: "triage", Tier: TierWork},
 	{Handle: "reporter", DisplayName: "Reporter", RoleKey: "reporter", Tier: TierChat},
+}
+
+func uuidText(u pgtype.UUID) string {
+	v, _ := u.Value()
+	s, _ := v.(string)
+	return s
 }

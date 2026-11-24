@@ -200,11 +200,6 @@ func serve(ctx context.Context) error {
 		Provisioner: cloud.Provisioner, RunnerTokens: auth.Tokens{Pool: db.Pool},
 		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
-	go runnerMgr.Run(ctx)
-	if os.Getenv("GATOR_AUTOPILOT") != "0" {
-		go runnerMgr.RunAutopilot(ctx)
-		log.Info("autopilot on: entering a runner phase queues a job")
-	}
 
 	// People talk in a project's channels; the consumer keeps them in step with the project.
 	// Files people send are kept in a bucket or a directory, or not at all.
@@ -219,8 +214,14 @@ func serve(ctx context.Context) error {
 	go chat.Consumer(hub, log, 0).Run(ctx)
 	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
 	// within the limits of a chain of delegations and the project's budget.
-	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr})
+	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Log: log})
+	runnerMgr.UseBriefer(team.Briefer)
 	go team.Consumer(hub, log, 0).Run(ctx)
+	go runnerMgr.Run(ctx)
+	if os.Getenv("GATOR_AUTOPILOT") != "0" {
+		go runnerMgr.RunAutopilot(ctx)
+		log.Info("autopilot on: entering a runner phase queues a job")
+	}
 	if chat.Attachments != nil {
 		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
 	}

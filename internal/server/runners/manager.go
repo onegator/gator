@@ -69,6 +69,9 @@ type Config struct {
 	// Authors names the agents of automations' work. Optional: without it every job is done by
 	// the agent of its role.
 	Authors AuthorRoles
+	// Briefer tells a reply's agent its conversation. Optional: without it a reply carries only
+	// its instruction.
+	Briefer TurnBriefer
 	// MaxObjections is how many times one job may be sent back to work. Zero takes 2: enough
 	// for a plugin to be right about something the agent missed, few enough that a plugin
 	// which is never satisfied cannot spend a person's money in a loop.
@@ -113,6 +116,20 @@ type AgentTokenIssuer interface {
 // core's own objection is the only one, and a job ends when the agent says it is done.
 type TurnJudge interface {
 	Objections(ctx context.Context, job db.Job, te proto.TurnEnding) []proto.Objection
+}
+
+// TurnBrief is what the agent of a reply is told about the conversation it answers in, in the
+// order a prompt reads it: who asks what, the conversation (its background, then its latest
+// messages) and the ask again, briefly.
+type TurnBrief struct {
+	Ask    string
+	Docs   []process.ContextDoc
+	Repeat string
+}
+
+// TurnBriefer briefs the agent of a reply. The agents package provides one.
+type TurnBriefer interface {
+	Brief(ctx context.Context, job db.Job) (TurnBrief, error)
 }
 
 // JobPreparer lets plugins add context to a job before a runner gets it.
@@ -188,6 +205,10 @@ func New(pool *pgxpool.Pool, proc *process.Service, hub *events.Hub, log *slog.L
 	return &Manager{pool: pool, process: proc, hub: hub, log: log, cfg: cfg, now: time.Now, sessions: map[[16]byte]*session{},
 		machines: map[[16]byte]*machine{}, provisions: map[[16]byte]int{}}
 }
+
+// UseBriefer has b tell replies' agents their conversations. It is wiring, for a briefer that
+// needs the manager itself to queue its summaries: call it before the manager serves runners.
+func (m *Manager) UseBriefer(b TurnBriefer) { m.cfg.Briefer = b }
 
 // Connected reports whether a runner has a live session.
 func (m *Manager) Connected(runnerID pgtype.UUID) bool {
