@@ -21,6 +21,9 @@ type Deps struct {
 	Tasks TaskCreator
 	// Blobs keeps uploaded files (BlobStoreFromEnv). Nil: no attachments.
 	Blobs BlobStore
+	// CardSources are more kinds of cards (a plugin's pull requests, an incident), written by
+	// the same projector after the built-in ones. A new kind of card is one more source here.
+	CardSources []CardSource
 }
 
 // Module is the package's services wired to one database, for the server to hand out. It does
@@ -67,14 +70,15 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 }
 
 // CardSources are the kinds of cards work leaves in conversations: each task's own card (which
-// opens its thread), the decision its gate waits for, its jobs and what its phases produced.
+// opens its thread), the decision its gate waits for, its jobs and what its phases produced, then
+// whatever Deps.CardSources adds.
 func (m *Module) CardSources() []CardSource {
 	q := db.New(m.pool)
 	sources := []CardSource{taskCards{tasks: q}, jobCards{jobs: q}, artifactCards{artifacts: q}}
 	if m.deps.Decisions != nil {
 		sources = append(sources, decisionCards{tasks: q, decisions: m.deps.Decisions, index: m.Cards})
 	}
-	return sources
+	return append(sources, m.deps.CardSources...)
 }
 
 // Consumer is the outbox consumer that keeps conversations in step with the rest of Gator:

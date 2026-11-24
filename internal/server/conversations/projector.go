@@ -105,13 +105,17 @@ func (p *Projector) rootHome(ctx context.Context, thread db.Conversation, key st
 	return q.GetConversation(ctx, root.ConversationID)
 }
 
-// TaskCards implements CardIndex.
+// TaskCards implements CardIndex. It only reads: a task with no thread yet has no cards.
 func (p *Projector) TaskCards(ctx context.Context, task db.Task, cardType string) ([]db.Message, error) {
-	thread, err := p.threads.ForTask(ctx, task)
+	q := db.New(p.pool)
+	thread, err := q.GetTaskConversation(ctx, task.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	return db.New(p.pool).ListCardsOfType(ctx, db.ListCardsOfTypeParams{ConversationID: thread.ID, CardType: &cardType})
+	return q.ListCardsOfType(ctx, db.ListCardsOfTypeParams{ConversationID: thread.ID, CardType: &cardType})
 }
 
 // taskReader is what card sources read about tasks. *db.Queries is one.

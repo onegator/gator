@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/store/db"
 )
 
 // The rules of Access hold against the real store: a viewer reads a channel but cannot open
@@ -133,5 +134,22 @@ func TestDefaultChannelsWithoutAPerson(t *testing.T) {
 	_ = f.pool.QueryRow(f.ctx, "SELECT count(*) FROM conversation_members WHERE conversation_id = $1", general.ID).Scan(&members)
 	if members != 0 {
 		t.Fatalf("%d members for nobody", members)
+	}
+}
+
+// Asking a task's cards opens nothing: a task without its thread has none.
+func TestTaskCardsOnlyRead(t *testing.T) {
+	f := newFixture(t)
+	threads := NewThreads(f.pool, f.access, f.directory)
+	cards := NewProjector(f.pool, threads)
+	task := db.Task{ID: newID(byte(unique64())), ProjectID: f.project(nil)}
+	got, err := cards.TaskCards(f.ctx, task, CardDecision)
+	if err != nil || got != nil {
+		t.Fatalf("cards of a task without a thread: %v %v", got, err)
+	}
+	var n int
+	_ = f.pool.QueryRow(f.ctx, "SELECT count(*) FROM conversations WHERE project_id = $1", task.ProjectID).Scan(&n)
+	if n != 0 {
+		t.Fatalf("reading cards opened %d conversations", n)
 	}
 }

@@ -232,3 +232,27 @@ func TestCardsHearTheSweep(t *testing.T) {
 		t.Fatalf("a job no runner can take: %v", c.Data["state"])
 	}
 }
+
+// pinCards is a kind of card the package does not know.
+type pinCards struct{}
+
+func (pinCards) Events() []string { return []string{"pin.added"} }
+func (pinCards) Cards(context.Context, db.EventsAfterRow) ([]PlacedCard, error) {
+	return nil, nil
+}
+
+// A new kind of card is one more source in Deps; the built-in ones stay.
+func TestCardSourcesAreAdditive(t *testing.T) {
+	m := New(nil, Deps{CardSources: []CardSource{pinCards{}}})
+	sources := m.CardSources()
+	if len(sources) != 4 {
+		t.Fatalf("%d sources, want the three built in (no decisions without Deps.Decisions) and the pin", len(sources))
+	}
+	if _, ok := sources[len(sources)-1].(pinCards); !ok {
+		t.Fatalf("the added source is not last: %T", sources[len(sources)-1])
+	}
+	c := m.Consumer(nil, nil, 0)
+	if len(c.handlers["pin.added"]) != 1 || len(c.handlers["job.queued"]) != 1 {
+		t.Fatalf("handlers: %d for pins, %d for jobs", len(c.handlers["pin.added"]), len(c.handlers["job.queued"]))
+	}
+}
