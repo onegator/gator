@@ -51,6 +51,22 @@ func (q *Queries) AgentForRole(ctx context.Context, arg AgentForRoleParams) (Age
 	return i, err
 }
 
+const chainCost = `-- name: ChainCost :one
+SELECT COALESCE(sum(u.cost_usd), 0)::float8
+FROM usage_records u
+JOIN jobs j ON j.id = u.job_id
+JOIN agent_turns t ON t.id = j.turn_id
+WHERE t.chain_id = $1
+`
+
+// What a chain of delegations has spent so far, in every job of every turn in it.
+func (q *Queries) ChainCost(ctx context.Context, chainID pgtype.UUID) (float64, error) {
+	row := q.db.QueryRow(ctx, chainCost, chainID)
+	var column_1 float64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getAgent = `-- name: GetAgent :one
 SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents WHERE id = $1
 `
@@ -117,6 +133,257 @@ func (q *Queries) GetAgentByHandle(ctx context.Context, arg GetAgentByHandlePara
 	return i, err
 }
 
+const getTurn = `-- name: GetTurn :one
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE id = $1
+`
+
+func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, getTurn, id)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const getTurnByJob = `-- name: GetTurnByJob :one
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE job_id = $1
+`
+
+func (q *Queries) GetTurnByJob(ctx context.Context, jobID pgtype.UUID) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, getTurnByJob, jobID)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const getTurnByTrigger = `-- name: GetTurnByTrigger :one
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE agent_id = $1 AND trigger_message_id = $2
+`
+
+type GetTurnByTriggerParams struct {
+	AgentID          pgtype.UUID `json:"agent_id"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+}
+
+func (q *Queries) GetTurnByTrigger(ctx context.Context, arg GetTurnByTriggerParams) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, getTurnByTrigger, arg.AgentID, arg.TriggerMessageID)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const getTurnForUpdate = `-- name: GetTurnForUpdate :one
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetTurnForUpdate(ctx context.Context, id pgtype.UUID) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, getTurnForUpdate, id)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const insertTurn = `-- name: InsertTurn :one
+INSERT INTO agent_turns (agent_id, project_id, conversation_id, trigger_message_id, requested_by_kind, requested_by,
+                         on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, status, refusal)
+VALUES ($1, $2, $3, $4,
+        $5, $6, $7,
+        COALESCE($8::uuid, gen_random_uuid()),
+        $9, $10, $11, $12, $13, $14)
+ON CONFLICT (agent_id, trigger_message_id) DO NOTHING
+RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+`
+
+type InsertTurnParams struct {
+	AgentID          pgtype.UUID `json:"agent_id"`
+	ProjectID        pgtype.UUID `json:"project_id"`
+	ConversationID   pgtype.UUID `json:"conversation_id"`
+	TriggerMessageID pgtype.UUID `json:"trigger_message_id"`
+	RequestedByKind  string      `json:"requested_by_kind"`
+	RequestedBy      pgtype.UUID `json:"requested_by"`
+	OnBehalfOf       pgtype.UUID `json:"on_behalf_of"`
+	ChainID          pgtype.UUID `json:"chain_id"`
+	ParentTurnID     pgtype.UUID `json:"parent_turn_id"`
+	EscalatedFrom    pgtype.UUID `json:"escalated_from"`
+	Hop              int16       `json:"hop"`
+	Tier             string      `json:"tier"`
+	Status           string      `json:"status"`
+	Refusal          *string     `json:"refusal"`
+}
+
+// One turn per agent and message that asked it: a redelivered mention finds the first (no row).
+func (q *Queries) InsertTurn(ctx context.Context, arg InsertTurnParams) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, insertTurn,
+		arg.AgentID,
+		arg.ProjectID,
+		arg.ConversationID,
+		arg.TriggerMessageID,
+		arg.RequestedByKind,
+		arg.RequestedBy,
+		arg.OnBehalfOf,
+		arg.ChainID,
+		arg.ParentTurnID,
+		arg.EscalatedFrom,
+		arg.Hop,
+		arg.Tier,
+		arg.Status,
+		arg.Refusal,
+	)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const listActiveTurnsIn = `-- name: ListActiveTurnsIn :many
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE conversation_id = $1 AND status IN ('queued', 'running') ORDER BY created_at
+`
+
+// The turns still answering in a conversation, oldest first.
+func (q *Queries) ListActiveTurnsIn(ctx context.Context, conversationID pgtype.UUID) ([]AgentTurn, error) {
+	rows, err := q.db.Query(ctx, listActiveTurnsIn, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentTurn
+	for rows.Next() {
+		var i AgentTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.ProjectID,
+			&i.ConversationID,
+			&i.TriggerMessageID,
+			&i.ReplyMessageID,
+			&i.RequestedByKind,
+			&i.RequestedBy,
+			&i.OnBehalfOf,
+			&i.ChainID,
+			&i.ParentTurnID,
+			&i.EscalatedFrom,
+			&i.Hop,
+			&i.Tier,
+			&i.JobID,
+			&i.Status,
+			&i.Refusal,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentsVisibleIn = `-- name: ListAgentsVisibleIn :many
 SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents WHERE project_id = $1 OR project_id IS NULL
 ORDER BY handle
@@ -154,6 +421,30 @@ func (q *Queries) ListAgentsVisibleIn(ctx context.Context, projectID pgtype.UUID
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationAgentIDs = `-- name: ListConversationAgentIDs :many
+SELECT member_id FROM conversation_members WHERE conversation_id = $1 AND member_kind = 'agent'
+`
+
+func (q *Queries) ListConversationAgentIDs(ctx context.Context, conversationID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listConversationAgentIDs, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var member_id pgtype.UUID
+		if err := rows.Scan(&member_id); err != nil {
+			return nil, err
+		}
+		items = append(items, member_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -201,4 +492,124 @@ func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setTurnJob = `-- name: SetTurnJob :one
+UPDATE agent_turns SET job_id = $1, tier = $2, updated_at = now()
+WHERE id = $3 RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+`
+
+type SetTurnJobParams struct {
+	JobID pgtype.UUID `json:"job_id"`
+	Tier  string      `json:"tier"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetTurnJob(ctx context.Context, arg SetTurnJobParams) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, setTurnJob, arg.JobID, arg.Tier, arg.ID)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const setTurnReply = `-- name: SetTurnReply :one
+UPDATE agent_turns SET reply_message_id = $1, updated_at = now()
+WHERE id = $2 RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+`
+
+type SetTurnReplyParams struct {
+	ReplyMessageID pgtype.UUID `json:"reply_message_id"`
+	ID             pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetTurnReply(ctx context.Context, arg SetTurnReplyParams) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, setTurnReply, arg.ReplyMessageID, arg.ID)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const setTurnStatus = `-- name: SetTurnStatus :one
+UPDATE agent_turns
+SET status = $1, refusal = $2, updated_at = now(),
+    finished_at = CASE WHEN $1::text IN ('done', 'failed', 'stopped', 'refused') THEN now() ELSE finished_at END
+WHERE id = $3 AND status IN ('queued', 'running')
+RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+`
+
+type SetTurnStatusParams struct {
+	Status  string      `json:"status"`
+	Refusal *string     `json:"refusal"`
+	ID      pgtype.UUID `json:"id"`
+}
+
+// A turn moves on until it ends; an ended turn stays as it ended.
+func (q *Queries) SetTurnStatus(ctx context.Context, arg SetTurnStatusParams) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, setTurnStatus, arg.Status, arg.Refusal, arg.ID)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
 }

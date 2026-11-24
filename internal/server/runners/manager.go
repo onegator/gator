@@ -313,7 +313,13 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if role == "" {
 		return db.Job{}, fmt.Errorf("%w: phase %q has no runner role; pass one explicitly", ErrInvalidJob, d.Task.Phase)
 	}
-	pol, err := m.process.JobPolicy(ctx, d.Task.ProjectID, role, m.cfg.DefaultBackend)
+	var err error
+	if !in.Agent.Valid {
+		if in.Agent, err = m.agentFor(ctx, q, d.Task, role); err != nil {
+			return db.Job{}, err
+		}
+	}
+	pol, err := m.policy(ctx, q, d.Task.ProjectID, role, in)
 	if err != nil {
 		return db.Job{}, err
 	}
@@ -351,11 +357,6 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if in.Bounds.MaxToolCalls <= 0 {
 		in.Bounds.MaxToolCalls = DefaultMaxToolCalls
 	}
-	if !in.Agent.Valid {
-		if in.Agent, err = m.agentFor(ctx, q, d.Task, role); err != nil {
-			return db.Job{}, err
-		}
-	}
 	bounds, _ := json.Marshal(in.Bounds)
 	job, err := q.CreateJob(ctx, db.CreateJobParams{
 		TaskID: d.Task.ID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
@@ -367,6 +368,28 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 		return db.Job{}, err
 	}
 	return job, m.emitJob(ctx, q, "job.queued", job, nil)
+}
+
+// policy is what the job's backend, model and cost cap default to: the role's policy, then for
+// a turn its tier's, then the policy the job's agent has of its own.
+func (m *Manager) policy(ctx context.Context, q *db.Queries, project pgtype.UUID, role string, in NewJob) (process.RolePolicy, error) {
+	var own process.RolePolicy
+	if in.Agent.Valid {
+		a, err := q.GetAgent(ctx, in.Agent)
+		if err != nil {
+			return process.RolePolicy{}, err
+		}
+		if len(a.Policy) > 0 {
+			if err := json.Unmarshal(a.Policy, &own); err != nil {
+				return process.RolePolicy{}, fmt.Errorf("%w: agent @%s has a policy that does not read: %v", ErrInvalidJob, a.Handle, err)
+			}
+		}
+	}
+	tier := ""
+	if in.Kind != KindPhase {
+		tier = in.Tier
+	}
+	return m.process.TurnPolicy(ctx, project, role, tier, own, m.cfg.DefaultBackend)
 }
 
 // agentFor is the agent who does a job of this role on the task: the project's agent for the

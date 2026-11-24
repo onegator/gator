@@ -2484,6 +2484,7 @@ components:
       required: [members]
       properties:
         members: { type: array, items: { type: string, format: uuid }, description: "people besides the caller (the caller may be listed too)" }
+        agents: { type: array, items: { type: string, format: uuid }, description: "agents of the project in the DM; every person's message there asks them (needs projectId)" }
         projectId: { type: string, format: uuid, description: "a DM inside this project; omitted, outside every project" }
     ConversationPatch:
       type: object

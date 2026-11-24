@@ -31,6 +31,7 @@ func (f HandlerFunc) Handle(ctx context.Context, e db.EventsAfterRow) error { re
 // to the handlers that watch its type. What to do with an event is the handlers' business; a new
 // kind of reaction is one more On, not a change here.
 type Consumer struct {
+	cursor   string
 	pool     *pgxpool.Pool
 	hub      *events.Hub
 	log      *slog.Logger
@@ -41,15 +42,22 @@ type Consumer struct {
 	attempts map[int64]int
 }
 
-// NewConsumer builds a consumer with no handlers; poll defaults to two seconds.
+// NewConsumer builds a consumer with no handlers on this package's cursor; poll defaults to two
+// seconds.
 func NewConsumer(pool *pgxpool.Pool, hub *events.Hub, log *slog.Logger, poll time.Duration) *Consumer {
+	return NewCursorConsumer(cursorName, pool, hub, log, poll)
+}
+
+// NewCursorConsumer builds a consumer that reads the outbox with a cursor of its own, for a
+// package whose handlers must not wait on these (or make these wait): agents answering mentions.
+func NewCursorConsumer(cursor string, pool *pgxpool.Pool, hub *events.Hub, log *slog.Logger, poll time.Duration) *Consumer {
 	if poll == 0 {
 		poll = 2 * time.Second
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Consumer{pool: pool, hub: hub, log: log, poll: poll, handlers: map[string][]Handler{}, attempts: map[int64]int{}}
+	return &Consumer{cursor: cursor, pool: pool, hub: hub, log: log, poll: poll, handlers: map[string][]Handler{}, attempts: map[int64]int{}}
 }
 
 // On has h handle every event of these types, after the handlers already registered for them.
@@ -66,8 +74,8 @@ func (c *Consumer) On(h Handler, types ...string) {
 func (c *Consumer) Run(ctx context.Context) {
 	wake, unsub := c.hub.Subscribe("*")
 	defer unsub()
-	if err := db.New(c.pool).InitEventCursor(ctx, cursorName); err != nil && ctx.Err() == nil {
-		c.log.Warn("conversations cursor", "err", err)
+	if err := db.New(c.pool).InitEventCursor(ctx, c.cursor); err != nil && ctx.Err() == nil {
+		c.log.Warn("event cursor", "cursor", c.cursor, "err", err)
 	}
 	t := time.NewTicker(c.poll)
 	defer t.Stop()
@@ -94,19 +102,19 @@ func (c *Consumer) Drain(ctx context.Context) {
 	if len(c.types) == 0 {
 		return
 	}
-	err := events.DrainCursorUntil(ctx, c.pool, cursorName, c.types, func(r db.EventsAfterRow) error {
+	err := events.DrainCursorUntil(ctx, c.pool, c.cursor, c.types, func(r db.EventsAfterRow) error {
 		for _, h := range c.handlers[r.Type] {
 			if err := h.Handle(ctx, r); err != nil {
 				if c.attempts[r.ID]++; c.attempts[r.ID] < maxAttempts {
 					return err
 				}
-				c.log.Error("conversations: giving up on an event", "event", r.Type, "id", r.ID, "err", err)
+				c.log.Error("giving up on an event", "cursor", c.cursor, "event", r.Type, "id", r.ID, "err", err)
 			}
 		}
 		delete(c.attempts, r.ID)
 		return nil
 	})
 	if err != nil && ctx.Err() == nil {
-		c.log.Warn("conversations", "err", err)
+		c.log.Warn("draining events", "cursor", c.cursor, "err", err)
 	}
 }

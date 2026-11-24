@@ -328,6 +328,35 @@ func (q *Queries) GetMessageByClientID(ctx context.Context, arg GetMessageByClie
 	return i, err
 }
 
+const getMessageForUpdate = `-- name: GetMessageForUpdate :one
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetMessageForUpdate(ctx context.Context, id pgtype.UUID) (Message, error) {
+	row := q.db.QueryRow(ctx, getMessageForUpdate, id)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const incrementReplyCount = `-- name: IncrementReplyCount :one
 UPDATE messages SET reply_count = reply_count + 1 WHERE id = $1
 RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at
@@ -801,6 +830,44 @@ func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const rewriteMessage = `-- name: RewriteMessage :one
+UPDATE messages SET body = $1, status = $2
+WHERE id = $3 AND deleted_at IS NULL
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at
+`
+
+type RewriteMessageParams struct {
+	Body   string      `json:"body"`
+	Status string      `json:"status"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+// An agent's answer as it is written: not a person's edit, so edited_at stays as it was.
+func (q *Queries) RewriteMessage(ctx context.Context, arg RewriteMessageParams) (Message, error) {
+	row := q.db.QueryRow(ctx, rewriteMessage, arg.Body, arg.Status, arg.ID)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const softDeleteMessage = `-- name: SoftDeleteMessage :one

@@ -121,3 +121,12 @@ LIMIT sqlc.arg(max_rows);
 
 -- name: DeleteAttachment :exec
 DELETE FROM message_attachments WHERE id = $1;
+
+-- name: GetMessageForUpdate :one
+SELECT * FROM messages WHERE id = $1 FOR UPDATE;
+
+-- name: RewriteMessage :one
+-- An agent's answer as it is written: not a person's edit, so edited_at stays as it was.
+UPDATE messages SET body = sqlc.arg(body), status = sqlc.arg(status)
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+RETURNING *;

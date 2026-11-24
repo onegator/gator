@@ -165,17 +165,23 @@ func (d *Directory) JoinDefaultChannels(ctx context.Context, project, user pgtyp
 	return err
 }
 
-// OpenDM answers the DM between the caller and these people, opening it when they have none:
-// the same people in the same scope always get the same DM. A DM inside a project is only for
-// people of that project; one outside is for anyone in the workspace.
-func (d *Directory) OpenDM(ctx context.Context, p auth.Principal, people []pgtype.UUID, project pgtype.UUID) (db.Conversation, bool, error) {
+// OpenDM answers the DM between the caller and these people (and agents), opening it when they
+// have none: the same members in the same scope always get the same DM. A DM inside a project is
+// only for people of that project; one outside is for anyone in the workspace. An agent is in a
+// DM only inside a project where people can mention it, and every person's message in that DM
+// asks it.
+func (d *Directory) OpenDM(ctx context.Context, p auth.Principal, people []pgtype.UUID, project pgtype.UUID, agents ...pgtype.UUID) (db.Conversation, bool, error) {
 	me, ok := memberOf(p)
 	if !ok {
 		return db.Conversation{}, false, ErrForbidden
 	}
 	ids := unique(append([]pgtype.UUID{me.ID}, people...))
-	if len(ids) < minDMMembers || len(ids) > maxDMMembers {
-		return db.Conversation{}, false, invalid("a DM has %d to %d people, you included", minDMMembers, maxDMMembers)
+	agents = unique(agents)
+	if n := len(ids) + len(agents); n < minDMMembers || n > maxDMMembers {
+		return db.Conversation{}, false, invalid("a DM has %d to %d members, you included", minDMMembers, maxDMMembers)
+	}
+	if len(agents) > 0 && !project.Valid {
+		return db.Conversation{}, false, invalid("an agent is talked to in a project: say which")
 	}
 	if project.Valid {
 		role, err := d.roles.ProjectRole(ctx, p, project)
@@ -205,7 +211,17 @@ func (d *Directory) OpenDM(ctx context.Context, p auth.Principal, people []pgtyp
 			}
 		}
 	}
+	for _, id := range agents {
+		if ok, err := agentVisible(ctx, q, project, id); err != nil {
+			return db.Conversation{}, false, err
+		} else if !ok {
+			return db.Conversation{}, false, invalid("no such agent in this project: %s", uuidString(id))
+		}
+	}
 	key := dmKey(ids)
+	if len(agents) > 0 {
+		key += "|agents:" + dmKey(agents)
+	}
 	var conv db.Conversation
 	created := false
 	err := store.InTx(ctx, d.pool, func(q *db.Queries) error {
@@ -222,6 +238,13 @@ func (d *Directory) OpenDM(ctx context.Context, p auth.Principal, people []pgtyp
 		for _, id := range ids {
 			if _, err := q.AddConversationMember(ctx, db.AddConversationMemberParams{
 				ConversationID: conv.ID, MemberKind: MemberUser, MemberID: id, Role: RoleMember, Notify: NotifyAll,
+			}); err != nil {
+				return err
+			}
+		}
+		for _, id := range agents {
+			if _, err := q.AddConversationMember(ctx, db.AddConversationMemberParams{
+				ConversationID: conv.ID, MemberKind: MemberAgent, MemberID: id, Role: RoleMember, Notify: NotifyAll,
 			}); err != nil {
 				return err
 			}
@@ -339,8 +362,11 @@ func (d *Directory) SetMember(ctx context.Context, p auth.Principal, id pgtype.U
 	if !rights.Read {
 		return db.ConversationMember{}, ErrNotFound
 	}
+	if m.Kind == MemberAgent {
+		return d.addAgent(ctx, conv, rights, m, ch)
+	}
 	if m.Kind != MemberUser {
-		return db.ConversationMember{}, invalid("only people join conversations until agents do")
+		return db.ConversationMember{}, invalid("a member is a person or an agent")
 	}
 	if ch.Notify != nil && !validNotify(*ch.Notify) {
 		return db.ConversationMember{}, invalid("notify is all, mentions or none")
@@ -417,6 +443,72 @@ func (d *Directory) SetMember(ctx context.Context, p auth.Principal, id pgtype.U
 		return emit(ctx, q, EventMemberChanged, conv.ID, map[string]any{"member": memberPayload(m), "change": change, "role": out.Role})
 	})
 	return out, err
+}
+
+// addAgent puts an agent in a conversation, for people to see it there and mention it: a writer
+// may, for an agent of the conversation's project. It has no notifications to choose and owns
+// nothing. A DM keeps the members it was opened with.
+func (d *Directory) addAgent(ctx context.Context, conv db.Conversation, rights Rights, m Member, ch MemberChange) (db.ConversationMember, error) {
+	switch {
+	case !rights.Write:
+		return db.ConversationMember{}, ErrForbidden
+	case ch.Role != nil || ch.Notify != nil:
+		return db.ConversationMember{}, invalid("an agent owns nothing and chooses no notifications")
+	case conv.Kind == KindDM:
+		return db.ConversationMember{}, conflict("a DM keeps the members it was opened with; open another for more")
+	}
+	q := db.New(d.pool)
+	ok, err := agentVisible(ctx, q, conv.ProjectID, m.ID)
+	if err != nil {
+		return db.ConversationMember{}, err
+	}
+	if !ok {
+		return db.ConversationMember{}, invalid("no such agent in this conversation's project")
+	}
+	var out db.ConversationMember
+	err = store.InTx(ctx, d.pool, func(q *db.Queries) error {
+		joined, err := joinAgent(ctx, q, conv.ID, m.ID)
+		if err != nil || !joined {
+			if err == nil {
+				out, err = q.GetConversationMember(ctx, db.GetConversationMemberParams{ConversationID: conv.ID, MemberKind: MemberAgent, MemberID: m.ID})
+			}
+			return err
+		}
+		out, err = q.GetConversationMember(ctx, db.GetConversationMemberParams{ConversationID: conv.ID, MemberKind: MemberAgent, MemberID: m.ID})
+		return err
+	})
+	return out, err
+}
+
+// joinAgent makes an agent a member of a conversation, once; it says whether it joined now.
+func joinAgent(ctx context.Context, q *db.Queries, conv, agent pgtype.UUID) (bool, error) {
+	_, err := q.AddConversationMember(ctx, db.AddConversationMemberParams{
+		ConversationID: conv, MemberKind: MemberAgent, MemberID: agent, Role: RoleMember, Notify: NotifyNone,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	m := Member{Kind: MemberAgent, ID: agent}
+	return true, emit(ctx, q, EventMemberChanged, conv, map[string]any{"member": memberPayload(m), "change": "joined", "role": RoleMember})
+}
+
+// agentVisible says whether people of a project can mention this agent: it is the project's or
+// the workspace's. Outside a project there are no agents.
+func agentVisible(ctx context.Context, q *db.Queries, project, agent pgtype.UUID) (bool, error) {
+	if !project.Valid || !agent.Valid {
+		return false, nil
+	}
+	a, err := q.GetAgent(ctx, agent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !a.ProjectID.Valid || a.ProjectID == project, nil
 }
 
 // RemoveMember takes someone out of a conversation: oneself by leaving, anyone else by a

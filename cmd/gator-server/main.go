@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/onegator/gator/internal/server/admin"
+	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
@@ -216,6 +217,10 @@ func serve(ctx context.Context) error {
 	}
 	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs})
 	go chat.Consumer(hub, log, 0).Run(ctx)
+	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
+	// within the limits of a chain of delegations and the project's budget.
+	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr})
+	go team.Consumer(hub, log, 0).Run(ctx)
 	if chat.Attachments != nil {
 		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
 	}

@@ -132,6 +132,26 @@ func (t *Threads) Of(ctx context.Context, p auth.Principal, message pgtype.UUID)
 	return t.open(ctx, conv, msg, by)
 }
 
+// Under answers where an answer to a message goes, opening it as Gator when it must: the thread
+// under a message in a channel (with the message's author in it, as when a person opens one),
+// and for a reply, a task's thread or a DM, the conversation the message is in.
+func (t *Threads) Under(ctx context.Context, msg db.Message) (db.Conversation, error) {
+	q := db.New(t.pool)
+	conv, err := q.GetConversation(ctx, msg.ConversationID)
+	if err != nil {
+		return db.Conversation{}, err
+	}
+	if conv.ParentMessageID.Valid || conv.Kind == KindTask || conv.Kind == KindDM {
+		return conv, nil // a reply, a task's thread or a DM is answered where it is
+	}
+	if existing, err := q.GetThreadOfMessage(ctx, msg.ID); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return db.Conversation{}, err
+	}
+	return t.open(ctx, conv, msg, System)
+}
+
 // open creates the thread under msg, or answers the one a concurrent request just created.
 func (t *Threads) open(ctx context.Context, conv db.Conversation, msg db.Message, by Author) (db.Conversation, error) {
 	var thread db.Conversation
