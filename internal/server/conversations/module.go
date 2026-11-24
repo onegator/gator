@@ -19,6 +19,8 @@ type Deps struct {
 	Decisions DecisionSource
 	// Tasks creates tasks (process.Service). Nil: messages cannot be made into tasks.
 	Tasks TaskCreator
+	// Blobs keeps uploaded files (BlobStoreFromEnv). Nil: no attachments.
+	Blobs BlobStore
 }
 
 // Module is the package's services wired to one database, for the server to hand out. It does
@@ -31,6 +33,8 @@ type Module struct {
 	Cards     *Projector
 	// Promoter is nil without Deps.Tasks.
 	Promoter *Promoter
+	// Attachments is nil without Deps.Blobs.
+	Attachments *Attachments
 
 	pool *pgxpool.Pool
 	deps Deps
@@ -52,6 +56,10 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	}
 	if deps.Tasks != nil {
 		m.Promoter = NewPromoter(pool, access, deps.Roles, deps.Tasks)
+	}
+	if deps.Blobs != nil {
+		m.Attachments = NewAttachments(pool, access, deps.Blobs)
+		m.Messages.attach = m.Attachments
 	}
 	return m
 }

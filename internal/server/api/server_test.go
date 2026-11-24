@@ -85,7 +85,8 @@ func newHarness(t *testing.T) *harness {
 	s := &Server{Pool: pool, Process: svc, Hub: hub, Features: []string{"inbox"}, Log: slog.Default(),
 		Automations: automations.New(pool, svc, hub, slog.Default()),
 		Tokens:      auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool},
-		Conversations: conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc})}
+		Conversations: conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
+			Blobs: conversations.DiskStore{Root: t.TempDir()}})}
 	go s.Conversations.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(rctx)
 	srv := httptest.NewServer(s.Router())
 	t.Cleanup(srv.Close)

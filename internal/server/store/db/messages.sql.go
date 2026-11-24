@@ -27,6 +27,133 @@ func (q *Queries) AddMention(ctx context.Context, arg AddMentionParams) error {
 	return err
 }
 
+const addReaction = `-- name: AddReaction :execrows
+INSERT INTO message_reactions (message_id, member_kind, member_id, emoji) VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING
+`
+
+type AddReactionParams struct {
+	MessageID  pgtype.UUID `json:"message_id"`
+	MemberKind string      `json:"member_kind"`
+	MemberID   pgtype.UUID `json:"member_id"`
+	Emoji      string      `json:"emoji"`
+}
+
+func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addReaction,
+		arg.MessageID,
+		arg.MemberKind,
+		arg.MemberID,
+		arg.Emoji,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const attachToMessage = `-- name: AttachToMessage :execrows
+UPDATE message_attachments SET message_id = $1
+WHERE id = ANY($2::uuid[]) AND conversation_id = $3
+  AND uploaded_by = $4 AND message_id IS NULL
+`
+
+type AttachToMessageParams struct {
+	MessageID      pgtype.UUID   `json:"message_id"`
+	Ids            []pgtype.UUID `json:"ids"`
+	ConversationID pgtype.UUID   `json:"conversation_id"`
+	UploadedBy     pgtype.UUID   `json:"uploaded_by"`
+}
+
+// Only files the author uploaded into this conversation and has not sent yet.
+func (q *Queries) AttachToMessage(ctx context.Context, arg AttachToMessageParams) (int64, error) {
+	result, err := q.db.Exec(ctx, attachToMessage,
+		arg.MessageID,
+		arg.Ids,
+		arg.ConversationID,
+		arg.UploadedBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createAttachment = `-- name: CreateAttachment :one
+INSERT INTO message_attachments (conversation_id, uploaded_by, name, content_type, size_bytes, storage_key)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, conversation_id, message_id, uploaded_by, name, content_type, size_bytes, storage_key, created_at
+`
+
+type CreateAttachmentParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	UploadedBy     pgtype.UUID `json:"uploaded_by"`
+	Name           string      `json:"name"`
+	ContentType    string      `json:"content_type"`
+	SizeBytes      int64       `json:"size_bytes"`
+	StorageKey     string      `json:"storage_key"`
+}
+
+func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentParams) (MessageAttachment, error) {
+	row := q.db.QueryRow(ctx, createAttachment,
+		arg.ConversationID,
+		arg.UploadedBy,
+		arg.Name,
+		arg.ContentType,
+		arg.SizeBytes,
+		arg.StorageKey,
+	)
+	var i MessageAttachment
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.MessageID,
+		&i.UploadedBy,
+		&i.Name,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.StorageKey,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const editMessage = `-- name: EditMessage :one
+UPDATE messages SET body = $1, edited_at = now()
+WHERE id = $2 AND deleted_at IS NULL
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at
+`
+
+type EditMessageParams struct {
+	Body string      `json:"body"`
+	ID   pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) EditMessage(ctx context.Context, arg EditMessageParams) (Message, error) {
+	row := q.db.QueryRow(ctx, editMessage, arg.Body, arg.ID)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const findCard = `-- name: FindCard :one
 SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE card_key = $1 AND conversation_id = ANY($2::uuid[])
 ORDER BY created_at LIMIT 1
@@ -59,6 +186,27 @@ func (q *Queries) FindCard(ctx context.Context, arg FindCardParams) (Message, er
 		&i.ClientID,
 		&i.EditedAt,
 		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getAttachment = `-- name: GetAttachment :one
+SELECT id, conversation_id, message_id, uploaded_by, name, content_type, size_bytes, storage_key, created_at FROM message_attachments WHERE id = $1
+`
+
+func (q *Queries) GetAttachment(ctx context.Context, id pgtype.UUID) (MessageAttachment, error) {
+	row := q.db.QueryRow(ctx, getAttachment, id)
+	var i MessageAttachment
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.MessageID,
+		&i.UploadedBy,
+		&i.Name,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.StorageKey,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -252,6 +400,41 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 	return i, err
 }
 
+const listAttachmentsOfMessages = `-- name: ListAttachmentsOfMessages :many
+SELECT id, conversation_id, message_id, uploaded_by, name, content_type, size_bytes, storage_key, created_at FROM message_attachments WHERE message_id = ANY($1::uuid[])
+ORDER BY message_id, created_at
+`
+
+func (q *Queries) ListAttachmentsOfMessages(ctx context.Context, messageIds []pgtype.UUID) ([]MessageAttachment, error) {
+	rows, err := q.db.Query(ctx, listAttachmentsOfMessages, messageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageAttachment
+	for rows.Next() {
+		var i MessageAttachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.MessageID,
+			&i.UploadedBy,
+			&i.Name,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.StorageKey,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCardsOfType = `-- name: ListCardsOfType :many
 SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE conversation_id = $1 AND card_type = $2 AND kind = 'card' ORDER BY seq
 `
@@ -427,6 +610,37 @@ func (q *Queries) ListMessagesBefore(ctx context.Context, arg ListMessagesBefore
 	return items, nil
 }
 
+const listReactionsOfMessages = `-- name: ListReactionsOfMessages :many
+SELECT message_id, member_kind, member_id, emoji, created_at FROM message_reactions WHERE message_id = ANY($1::uuid[])
+ORDER BY message_id, emoji, created_at
+`
+
+func (q *Queries) ListReactionsOfMessages(ctx context.Context, messageIds []pgtype.UUID) ([]MessageReaction, error) {
+	rows, err := q.db.Query(ctx, listReactionsOfMessages, messageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageReaction
+	for rows.Next() {
+		var i MessageReaction
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.MemberKind,
+			&i.MemberID,
+			&i.Emoji,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listThreadsOfMessages = `-- name: ListThreadsOfMessages :many
 SELECT parent_message_id, id FROM conversations WHERE parent_message_id = ANY($1::uuid[])
 `
@@ -455,6 +669,62 @@ func (q *Queries) ListThreadsOfMessages(ctx context.Context, messageIds []pgtype
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeReaction = `-- name: RemoveReaction :execrows
+DELETE FROM message_reactions WHERE message_id = $1 AND member_kind = $2 AND member_id = $3 AND emoji = $4
+`
+
+type RemoveReactionParams struct {
+	MessageID  pgtype.UUID `json:"message_id"`
+	MemberKind string      `json:"member_kind"`
+	MemberID   pgtype.UUID `json:"member_id"`
+	Emoji      string      `json:"emoji"`
+}
+
+func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, removeReaction,
+		arg.MessageID,
+		arg.MemberKind,
+		arg.MemberID,
+		arg.Emoji,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const softDeleteMessage = `-- name: SoftDeleteMessage :one
+UPDATE messages SET deleted_at = now(), body = ''
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at
+`
+
+// A deleted message keeps its place (its seq, its thread) and loses its words.
+func (q *Queries) SoftDeleteMessage(ctx context.Context, id pgtype.UUID) (Message, error) {
+	row := q.db.QueryRow(ctx, softDeleteMessage, id)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const updateCard = `-- name: UpdateCard :one

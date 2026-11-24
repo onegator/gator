@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +41,7 @@ type Messages struct {
 	// attach hands a message the files uploaded for it, in the posting transaction. Nil: no
 	// attachments (see Attachments).
 	attach attacher
+	now    func() time.Time
 }
 
 // attacher puts uploaded files on a message being posted.
@@ -49,7 +51,7 @@ type attacher interface {
 
 // NewMessages builds the message service.
 func NewMessages(pool *pgxpool.Pool, access *Access) *Messages {
-	return &Messages{pool: pool, access: access}
+	return &Messages{pool: pool, access: access, now: time.Now}
 }
 
 // Draft is a message about to be posted.
@@ -377,6 +379,12 @@ func describe(ctx context.Context, q *db.Queries, rows []db.Message) ([]View, er
 	}
 	for _, t := range threads {
 		views[at[t.ParentMessageID.Bytes]].ThreadID = t.ID
+	}
+	if err := describeReactions(ctx, q, ids, views, at); err != nil {
+		return nil, err
+	}
+	if err := describeAttachments(ctx, q, ids, views, at); err != nil {
+		return nil, err
 	}
 	return views, nil
 }

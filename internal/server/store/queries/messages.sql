@@ -56,3 +56,43 @@ ORDER BY created_at LIMIT 1;
 
 -- name: ListCardsOfType :many
 SELECT * FROM messages WHERE conversation_id = $1 AND card_type = $2 AND kind = 'card' ORDER BY seq;
+
+-- name: EditMessage :one
+UPDATE messages SET body = sqlc.arg(body), edited_at = now()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+RETURNING *;
+
+-- name: SoftDeleteMessage :one
+-- A deleted message keeps its place (its seq, its thread) and loses its words.
+UPDATE messages SET deleted_at = now(), body = ''
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: AddReaction :execrows
+INSERT INTO message_reactions (message_id, member_kind, member_id, emoji) VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING;
+
+-- name: RemoveReaction :execrows
+DELETE FROM message_reactions WHERE message_id = $1 AND member_kind = $2 AND member_id = $3 AND emoji = $4;
+
+-- name: ListReactionsOfMessages :many
+SELECT * FROM message_reactions WHERE message_id = ANY(sqlc.arg(message_ids)::uuid[])
+ORDER BY message_id, emoji, created_at;
+
+-- name: CreateAttachment :one
+INSERT INTO message_attachments (conversation_id, uploaded_by, name, content_type, size_bytes, storage_key)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: AttachToMessage :execrows
+-- Only files the author uploaded into this conversation and has not sent yet.
+UPDATE message_attachments SET message_id = sqlc.arg(message_id)
+WHERE id = ANY(sqlc.arg(ids)::uuid[]) AND conversation_id = sqlc.arg(conversation_id)
+  AND uploaded_by = sqlc.arg(uploaded_by) AND message_id IS NULL;
+
+-- name: GetAttachment :one
+SELECT * FROM message_attachments WHERE id = $1;
+
+-- name: ListAttachmentsOfMessages :many
+SELECT * FROM message_attachments WHERE message_id = ANY(sqlc.arg(message_ids)::uuid[])
+ORDER BY message_id, created_at;

@@ -308,6 +308,11 @@ func toDraft(in gen.NewMessage) conversations.Draft {
 			d.Mentions = append(d.Mentions, conversations.Member{Kind: string(m.Kind), ID: fromUUID(m.Id)})
 		}
 	}
+	if in.Attachments != nil {
+		for _, id := range *in.Attachments {
+			d.Attachments = append(d.Attachments, fromUUID(id))
+		}
+	}
 	return d
 }
 
@@ -364,4 +369,52 @@ func (s *Server) PromoteMessage(w http.ResponseWriter, r *http.Request, messageI
 		return
 	}
 	writeJSON(w, http.StatusCreated, gen.PromotedMessage{Task: toTask(out.Task), ConversationId: toUUID(out.Conversation)})
+}
+
+func (s *Server) EditMessage(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.MessagePatch
+	if !decode(w, r, &in) {
+		return
+	}
+	if _, err := s.Conversations.Messages.Edit(r.Context(), p, fromUUID(messageId), in.Body); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	s.respondMessage(w, r, p, fromUUID(messageId), http.StatusOK)
+}
+
+func (s *Server) DeleteMessage(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Conversations.Messages.Delete(r.Context(), p, fromUUID(messageId)); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) AddReaction(w http.ResponseWriter, r *http.Request, messageId gen.MessageId, emoji gen.Emoji) {
+	s.react(w, r, messageId, emoji, true)
+}
+
+func (s *Server) RemoveReaction(w http.ResponseWriter, r *http.Request, messageId gen.MessageId, emoji gen.Emoji) {
+	s.react(w, r, messageId, emoji, false)
+}
+
+func (s *Server) react(w http.ResponseWriter, r *http.Request, messageId gen.MessageId, emoji string, add bool) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Conversations.Messages.React(r.Context(), p, fromUUID(messageId), emoji, add); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -150,7 +150,8 @@ POST   /messages/{id}/promote                                     „zrób task"
 POST   /conversations/{id}/read                                   {seq}
 GET    /tasks/{taskId}/conversation
 GET    /search/messages?q=&project=                               FTS, tylko w dostępnych conversation
-POST   /attachments                                               upload → id (presigned albo multipart)
+POST   /attachments                                               upload (multipart: conversationId, file) → id
+GET    /attachments/{id}                                          plik dla czytających rozmowę
 ```
 
 **WebSocket:** nowe topiki `conversation:<id>` (wiadomości, edycje, reakcje, typing) i `me`
@@ -273,3 +274,11 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   kanału, bo wątek wisi pod wiadomością człowieka). Opis taska cytuje wiadomość i do 5 pierwszych
   odpowiedzi (bez LLM-owego streszczenia) i linkuje `gator://conversations/<id>?seq=<n>`. Wiadomość w
   DM-ie poza projektem wymaga `projectId`. Rodzaje: `feature`, `bug`, `chore`, `incident`.
+- **Załączniki** idą przez serwer (multipart, do 25 MB), bez presigned URL-i: dostęp sprawdza ta sama
+  `Access`, a klucz do bucketu nie opuszcza serwera. Magazyn: `GATOR_ATTACHMENTS_S3_*` (jak backupy)
+  albo `GATOR_ATTACHMENTS_DIR`; bez nich upload odpowiada 503. Plik należy do nikogo, dopóki uploader
+  nie wyśle wiadomości z jego id (`message_attachments.message_id` jest NULL do tej chwili). Obrazki
+  pokazują się inline, reszta jako pobranie, zawsze z `nosniff` i `sandbox`.
+- **Usunięcie wiadomości** zostawia jej miejsce (`seq`, wątek) i czyści treść w bazie; jej pliki nie są
+  już wydawane (sprzątanie magazynu zostaje na później). Edycja nie zmienia wzmianek. Karty nie są
+  edytowane ręcznie, a usuwa je tylko moderator.

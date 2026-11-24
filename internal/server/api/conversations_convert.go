@@ -74,13 +74,24 @@ func toMessage(v conversations.View) gen.Message {
 		AuthorId: toUUIDPtr(m.AuthorID), Kind: gen.MessageKind(m.Kind), Body: m.Body, CardType: m.CardType, Card: toCard(m),
 		ReplyCount: int(m.ReplyCount), ThreadId: toUUIDPtr(v.ThreadID), Status: gen.MessageStatus(m.Status), Origin: map[string]any{},
 		ClientId: m.ClientID, EditedAt: timePtr(m.EditedAt), DeletedAt: timePtr(m.DeletedAt), CreatedAt: m.CreatedAt.Time,
-		Mentions: make([]gen.MemberRef, 0, len(v.Mentions)),
+		Mentions: make([]gen.MemberRef, 0, len(v.Mentions)), Reactions: make([]gen.Reaction, 0, len(v.Reactions)),
+		Attachments: make([]gen.Attachment, 0, len(v.Attachments)),
 	}
 	if len(m.Origin) > 0 {
 		_ = json.Unmarshal(m.Origin, &out.Origin)
 	}
 	for _, mm := range v.Mentions {
 		out.Mentions = append(out.Mentions, gen.MemberRef{Kind: gen.MemberRefKind(mm.Kind), Id: toUUID(mm.ID)})
+	}
+	for _, r := range v.Reactions {
+		members := make([]gen.MemberRef, 0, len(r.Members))
+		for _, mm := range r.Members {
+			members = append(members, gen.MemberRef{Kind: gen.MemberRefKind(mm.Kind), Id: toUUID(mm.ID)})
+		}
+		out.Reactions = append(out.Reactions, gen.Reaction{Emoji: r.Emoji, Count: len(members), Members: members})
+	}
+	for _, a := range v.Attachments {
+		out.Attachments = append(out.Attachments, toAttachment(a))
 	}
 	return out
 }

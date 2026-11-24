@@ -1,10 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -677,5 +681,131 @@ func TestPromoteMessageToTask(t *testing.T) {
 	h.as(c.member, func() { h.do("GET", "/messages/"+lone.Id.String()+"/thread", nil, &under) })
 	if under.Id != out.ConversationId || under.TaskId == nil || *under.TaskId != out.Task.Id || out.Task.Title != "Dark mode" {
 		t.Fatalf("the lone message's thread: %+v, promoted %+v", under, out)
+	}
+}
+
+// upload sends one file into a conversation as multipart/form-data.
+func (h *harness) upload(token, conversation, name, content string) (int, gen.Attachment) {
+	h.t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("conversationId", conversation)
+	fw, _ := mw.CreateFormFile("file", name)
+	_, _ = fw.Write([]byte(content))
+	_ = mw.Close()
+	req, _ := http.NewRequest("POST", h.srv.URL+"/api/v1/attachments", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out gen.Attachment
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+func (h *harness) download(token, id string) (int, string, http.Header) {
+	h.t.Helper()
+	req, _ := http.NewRequest("GET", h.srv.URL+"/api/v1/attachments/"+id, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b), res.Header
+}
+
+// Reactions, edits, deletes and files keep to who may do what: a viewer reacts, only the author
+// edits and only for a day, the author or a moderator deletes, and a file reaches only those who
+// may read where it was sent.
+func TestReactEditDeleteAndAttach(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("changes")
+	conv := h.channel(c.admin, c.project.Id.String(), "changes", "").Id.String()
+	_, msg := h.post(c.member, conv, gen.NewMessage{Body: ptr("first draft")})
+	mid := msg.Id.String()
+
+	h.as(c.viewer, func() {
+		if code := h.do("PUT", "/messages/"+mid+"/reactions/"+url.PathEscape("👍"), nil, nil); code != 204 {
+			t.Fatalf("a viewer reacts: %d", code)
+		}
+		h.do("PUT", "/messages/"+mid+"/reactions/"+url.PathEscape("👍"), nil, nil)
+	})
+	h.as(c.admin, func() { h.do("PUT", "/messages/"+mid+"/reactions/"+url.PathEscape("👍"), nil, nil) })
+	var got gen.Message
+	h.as(c.member, func() { h.do("GET", "/messages/"+mid, nil, &got) })
+	if len(got.Reactions) != 1 || got.Reactions[0].Emoji != "👍" || got.Reactions[0].Count != 2 {
+		t.Fatalf("reactions: %+v", got.Reactions)
+	}
+	h.as(c.viewer, func() { h.do("DELETE", "/messages/"+mid+"/reactions/"+url.PathEscape("👍"), nil, nil) })
+	h.as(c.member, func() { h.do("GET", "/messages/"+mid, nil, &got) })
+	if got.Reactions[0].Count != 1 {
+		t.Fatalf("after taking one back: %+v", got.Reactions)
+	}
+
+	h.as(c.admin, func() {
+		if code := h.do("PATCH", "/messages/"+mid, gen.MessagePatch{Body: "not mine"}, nil); code != 403 {
+			t.Fatalf("someone else edited: %d", code)
+		}
+	})
+	h.as(c.member, func() {
+		if code := h.do("PATCH", "/messages/"+mid, gen.MessagePatch{Body: "second draft"}, &got); code != 200 || got.Body != "second draft" || got.EditedAt == nil {
+			t.Fatalf("edit: %d %+v", code, got)
+		}
+	})
+	if _, err := h.pool.Exec(context.Background(), "UPDATE messages SET created_at = now() - interval '25 hours' WHERE id = $1", mid); err != nil {
+		t.Fatal(err)
+	}
+	h.as(c.member, func() {
+		if code := h.do("PATCH", "/messages/"+mid, gen.MessagePatch{Body: "too late"}, nil); code != 409 {
+			t.Fatalf("an edit after a day: %d", code)
+		}
+	})
+
+	_, other := h.post(c.admin, conv, gen.NewMessage{Body: ptr("the admin's")})
+	h.as(c.member, func() {
+		if code := h.do("DELETE", "/messages/"+other.Id.String(), nil, nil); code != 403 {
+			t.Fatalf("a member deleted someone else's message: %d", code)
+		}
+	})
+	h.as(c.admin, func() {
+		if code := h.do("DELETE", "/messages/"+mid, nil, nil); code != 204 {
+			t.Fatalf("a moderator deletes: %d", code)
+		}
+		h.do("GET", "/messages/"+mid, nil, &got)
+	})
+	if got.DeletedAt == nil || got.Body != "" || got.Seq != msg.Seq {
+		t.Fatalf("deleted: %+v", got)
+	}
+
+	// A file: uploaded, sent with a message, read by those who may read the channel.
+	code, att := h.upload(c.member, conv, "notes.txt", "remember the milk")
+	if code != 201 || att.MessageId != nil || att.SizeBytes != 17 {
+		t.Fatalf("upload: %d %+v", code, att)
+	}
+	if code, _, _ := h.download(c.admin, att.Id.String()); code != 404 {
+		t.Fatalf("someone read a file not sent yet: %d", code)
+	}
+	if code, _ := h.post(c.admin, conv, gen.NewMessage{Body: ptr("mine now"), Attachments: &[]openapi_types.UUID{att.Id}}); code != 400 {
+		t.Fatalf("someone else sent the member's file: %d", code)
+	}
+	code, sent := h.post(c.member, conv, gen.NewMessage{Body: ptr("see attached"), Attachments: &[]openapi_types.UUID{att.Id}})
+	if code != 201 || len(sent.Attachments) != 1 || sent.Attachments[0].Id != att.Id {
+		t.Fatalf("post with a file: %d %+v", code, sent)
+	}
+	code, body, header := h.download(c.viewer, att.Id.String())
+	if code != 200 || body != "remember the milk" || header.Get("X-Content-Type-Options") != "nosniff" ||
+		!strings.HasPrefix(header.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("download: %d %q %v", code, body, header)
+	}
+	if code, _, _ := h.download(c.stranger, att.Id.String()); code != 404 {
+		t.Fatalf("a stranger downloaded: %d", code)
+	}
+	if code, _ := h.upload(c.viewer, conv, "x.txt", "x"); code != 403 {
+		t.Fatalf("a viewer uploaded: %d", code)
 	}
 }

@@ -1241,6 +1241,82 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
         "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: editMessage
+      description: Changes the words of one's own message, within 24 hours of posting it. Cards are not edited by hand (409). Emits message.edited.
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MessagePatch" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteMessage
+      description: >-
+        Takes a message's words (and files) away, keeping its place in the conversation: its author
+        may, and so may the conversation's moderators (project admins, a channel's owners). Deleting
+        again changes nothing. Emits message.deleted.
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      responses:
+        "204": { description: deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /messages/{messageId}/reactions/{emoji}:
+    put:
+      operationId: addReaction
+      description: Adds the caller's emoji (a Unicode emoji or a :shortcode:, URL-encoded). Viewers react too. Emits reaction.changed when something changed.
+      parameters: [ { $ref: "#/components/parameters/messageId" }, { $ref: "#/components/parameters/emoji" } ]
+      responses:
+        "204": { description: added }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeReaction
+      parameters: [ { $ref: "#/components/parameters/messageId" }, { $ref: "#/components/parameters/emoji" } ]
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /attachments:
+    post:
+      operationId: uploadAttachment
+      description: >-
+        Uploads one file (up to 25 MB) into a conversation the caller may write in, as
+        multipart/form-data with conversationId and file. The file belongs to no message until the
+        uploader posts one with its id in attachments. 503 when the server keeps no files
+        (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [conversationId, file]
+              properties:
+                conversationId: { type: string, format: uuid }
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: uploaded, content: { application/json: { schema: { $ref: "#/components/schemas/Attachment" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /attachments/{attachmentId}:
+    get:
+      operationId: downloadAttachment
+      description: The file's bytes, for whoever may read the conversation it was sent in (before it is sent, its uploader alone). Images show inline; anything else downloads.
+      parameters: [ { $ref: "#/components/parameters/attachmentId" } ]
+      responses:
+        "200": { description: the file, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /messages/{messageId}/promote:
     post:
       operationId: promoteMessage
@@ -1286,6 +1362,8 @@ components:
     messageId: { name: messageId, in: path, required: true, schema: { type: string, format: uuid } }
     memberKind: { name: memberKind, in: path, required: true, schema: { type: string, enum: [user, agent] } }
     memberId: { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
+    emoji: { name: emoji, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 64 } }
+    attachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error:
       description: error
@@ -2397,9 +2475,15 @@ components:
         body: { type: string, description: "Markdown; up to 40000 characters" }
         clientId: { type: string, maxLength: 200, description: "the sender's idempotency key, unique in the conversation" }
         mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
+        attachments: { type: array, items: { type: string, format: uuid }, description: "files the sender uploaded into this conversation (POST /attachments) and has not sent yet" }
+    MessagePatch:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string }
     Message:
       type: object
-      required: [id, conversationId, seq, authorKind, kind, body, replyCount, status, origin, createdAt, mentions]
+      required: [id, conversationId, seq, authorKind, kind, body, replyCount, status, origin, createdAt, mentions, reactions, attachments]
       properties:
         id: { type: string, format: uuid }
         conversationId: { type: string, format: uuid }
@@ -2419,6 +2503,26 @@ components:
         deletedAt: { type: string, format: date-time }
         createdAt: { type: string, format: date-time }
         mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
+        reactions: { type: array, items: { $ref: "#/components/schemas/Reaction" } }
+        attachments: { type: array, items: { $ref: "#/components/schemas/Attachment" }, description: "none once deleted" }
+    Reaction:
+      type: object
+      required: [emoji, count, members]
+      properties:
+        emoji: { type: string }
+        count: { type: integer }
+        members: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
+    Attachment:
+      type: object
+      required: [id, conversationId, name, contentType, sizeBytes, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid }
+        messageId: { type: string, format: uuid, description: absent until the message that carries it is posted }
+        name: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
     Card:
       type: object
       required: [ref]
