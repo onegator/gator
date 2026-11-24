@@ -116,7 +116,7 @@ func (a *Attachments) Open(ctx context.Context, p auth.Principal, id pgtype.UUID
 	q := db.New(a.pool)
 	att, err := q.GetAttachment(ctx, id)
 	if err != nil {
-		return att, nil, err
+		return att, nil, found(err)
 	}
 	_, rights, err := a.access.RightsByID(ctx, att.ConversationID, p)
 	if err != nil {
@@ -132,7 +132,7 @@ func (a *Attachments) Open(ctx context.Context, p auth.Principal, id pgtype.UUID
 	} else {
 		msg, err := q.GetMessage(ctx, att.MessageID)
 		if err != nil {
-			return att, nil, err
+			return att, nil, found(err)
 		}
 		if msg.DeletedAt.Valid {
 			return att, nil, ErrNotFound

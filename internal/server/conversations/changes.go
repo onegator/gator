@@ -118,7 +118,7 @@ func (m *Messages) React(ctx context.Context, p auth.Principal, id pgtype.UUID, 
 func (m *Messages) messageRights(ctx context.Context, p auth.Principal, id pgtype.UUID) (db.Message, Rights, error) {
 	msg, err := db.New(m.pool).GetMessage(ctx, id)
 	if err != nil {
-		return db.Message{}, Rights{}, err
+		return db.Message{}, Rights{}, found(err)
 	}
 	_, rights, err := m.access.RightsByID(ctx, msg.ConversationID, p)
 	if err != nil {

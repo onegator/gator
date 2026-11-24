@@ -75,9 +75,9 @@ const (
 )
 
 var (
-	// ErrNotFound answers a conversation or message that does not exist or that the caller may
-	// not read: a private conversation's existence is not given away.
-	ErrNotFound = pgx.ErrNoRows
+	// ErrNotFound answers a conversation, message or file that does not exist or that the
+	// caller may not read: a private conversation's existence is not given away.
+	ErrNotFound = errors.New("not found")
 	// ErrForbidden answers something the caller may see but not do.
 	ErrForbidden = errors.New("not allowed in this conversation")
 	// ErrInvalid answers a request that cannot be carried out as asked.
@@ -85,6 +85,15 @@ var (
 	// ErrConflict answers a request that clashes with what is already there.
 	ErrConflict = errors.New("conflict")
 )
+
+// found turns the store's "no rows" into ErrNotFound, at the edge where a lookup of something
+// the caller asked for leaves this package.
+func found(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
 
 func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))

@@ -326,7 +326,7 @@ func (m *Messages) Get(ctx context.Context, p auth.Principal, id pgtype.UUID) (V
 	q := db.New(m.pool)
 	msg, err := q.GetMessage(ctx, id)
 	if err != nil {
-		return View{}, err
+		return View{}, found(err)
 	}
 	_, rights, err := m.access.RightsByID(ctx, msg.ConversationID, p)
 	if err != nil {

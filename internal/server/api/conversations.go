@@ -26,6 +26,8 @@ func (s *Server) conversationsOff(w http.ResponseWriter) bool {
 // caller may not read answers 404, like one that does not exist.
 func (s *Server) failConversation(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, conversations.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not found", "not_found")
 	case errors.Is(err, conversations.ErrForbidden):
 		writeError(w, http.StatusForbidden, err.Error(), "forbidden")
 	case errors.Is(err, conversations.ErrInvalid):

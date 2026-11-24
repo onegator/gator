@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -205,5 +206,15 @@ func TestTaskChannelName(t *testing.T) {
 		if got := taskChannelName([]byte(cfg)); got != want {
 			t.Errorf("%s: %q, want %q", cfg, got, want)
 		}
+	}
+}
+
+func TestFoundHidesTheStore(t *testing.T) {
+	if !errors.Is(found(pgx.ErrNoRows), ErrNotFound) || errors.Is(found(pgx.ErrNoRows), pgx.ErrNoRows) {
+		t.Fatal("no rows does not leave as ErrNotFound")
+	}
+	other := errors.New("db down")
+	if found(other) != other || found(nil) != nil {
+		t.Fatal("found changed another error")
 	}
 }

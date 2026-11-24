@@ -71,7 +71,7 @@ func (p *Promoter) Promote(ctx context.Context, caller auth.Principal, actor pro
 	q := db.New(p.pool)
 	msg, err := q.GetMessage(ctx, message)
 	if err != nil {
-		return Promoted{}, err
+		return Promoted{}, found(err)
 	}
 	conv, rights, err := p.access.RightsByID(ctx, msg.ConversationID, caller)
 	if err != nil {

@@ -98,7 +98,7 @@ func (t *Threads) Of(ctx context.Context, p auth.Principal, message pgtype.UUID)
 	q := db.New(t.pool)
 	msg, err := q.GetMessage(ctx, message)
 	if err != nil {
-		return db.Conversation{}, err
+		return db.Conversation{}, found(err)
 	}
 	conv, rights, err := t.access.RightsByID(ctx, msg.ConversationID, p)
 	if err != nil {
