@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -217,7 +217,7 @@ func chatMessage(why chatReason, author, where string, conv db.Conversation, msg
 	return Message{
 		Title: title,
 		Body:  preview(msg.Body, 180),
-		Link:  fmt.Sprintf("gator://conversations/%s?seq=%d", uuidString(conv.ID), msg.Seq),
+		Link:  conversations.MessageLink(msg),
 	}
 }
 

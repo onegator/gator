@@ -55,7 +55,7 @@ func TestChatRecipients(t *testing.T) {
 
 func TestChatMessageWords(t *testing.T) {
 	conv := db.Conversation{ID: id(9)}
-	msg := db.Message{Seq: 4, Body: "Can you   look at\nthe login?"}
+	msg := db.Message{ConversationID: conv.ID, Seq: 4, Body: "Can you   look at\nthe login?"}
 	m := chatMessage(reasonMention, "Ann", "#general", conv, msg)
 	if m.Title != "Ann mentioned you in #general" || m.Body != "Can you look at the login?" || m.Link != "gator://conversations/"+uuidString(conv.ID)+"?seq=4" {
 		t.Fatalf("mention: %+v", m)
