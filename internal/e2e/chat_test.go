@@ -66,32 +66,6 @@ func (h *harness) claudeRunner(project, fixture string) string {
 	return args
 }
 
-// message reads one message as the harness's person.
-func (h *harness) message(id string) gen.Message {
-	h.t.Helper()
-	var m gen.Message
-	if code := h.do("GET", "/messages/"+id, nil, &m); code != 200 {
-		h.t.Fatalf("message %s: %d", id, code)
-	}
-	return m
-}
-
-// settledMessage waits for a message to be what ok wants.
-func (h *harness) settledMessage(id string, ok func(gen.Message) bool) gen.Message {
-	h.t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		m := h.message(id)
-		if ok(m) {
-			return m
-		}
-		if time.Now().After(deadline) {
-			h.t.Fatalf("message %s stayed %s: %q (turn %+v)", id, m.Status, m.Body, m.Turn)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
 // "@reviewer look at PR #12" in #general: the reviewer answers in the thread, in chat, read-only,
 // with what it cost under the answer, and nothing reaches the repository — even an agent that
 // tries to write (this recording tries Write and a touch; the fake tries to commit).
@@ -144,15 +118,4 @@ func TestAMentionInGeneralIsAnsweredInChat(t *testing.T) {
 		}
 		return false
 	})
-}
-
-func eventually(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !ok() {
-		if time.Now().After(deadline) {
-			t.Fatalf("never: %s", what)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
 }

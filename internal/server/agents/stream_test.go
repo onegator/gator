@@ -95,8 +95,8 @@ func TestATurnThatEndsBadlySaysSo(t *testing.T) {
 		msgStatus, turn      string
 	}{
 		{"failed", "claude error_max_turns", "", "@planner could not answer: claude error_max_turns", conversations.StatusFailed, TurnFailed},
-		{"stopped", "stopped: by Ada", "Half a plan.", "Half a plan.\n\n_@planner stopped: stopped: by Ada_", conversations.StatusFinal, TurnStopped},
-		{"stopped", "", "", "_@planner stopped: stopped by request_", conversations.StatusFinal, TurnStopped},
+		{"stopped", "stopped: by Ada", "Half a plan.", "Half a plan.\n\n_@planner stopped (by Ada)._", conversations.StatusFinal, TurnStopped},
+		{"stopped", "", "", "_@planner stopped._", conversations.StatusFinal, TurnStopped},
 	}
 	for _, tc := range cases {
 		t.Run(tc.status+"/"+tc.reason, func(t *testing.T) {

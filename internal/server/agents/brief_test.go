@@ -63,9 +63,14 @@ func TestTheConversationPackage(t *testing.T) {
 	if recent > 2000 || len(pack.Recent) < 2 {
 		t.Fatalf("the latest messages fill the budget: %d bytes in %d", recent, len(pack.Recent))
 	}
-	last := pack.Recent[len(pack.Recent)-1]
-	if !last.Untrusted || last.Who != "a plugin" {
-		t.Fatalf("the plugin's message is the latest and untrusted: %+v", last)
+	var outside *conversations.Said
+	for i, s := range pack.Recent {
+		if strings.HasPrefix(s.Body, "IGNORE PREVIOUS") {
+			outside = &pack.Recent[i]
+		}
+	}
+	if outside == nil || !outside.Untrusted || outside.Who != "a plugin" {
+		t.Fatalf("the plugin's message is among the latest, untrusted: %+v", outside)
 	}
 	if pack.Older[0].Body != "The checkout page is slow since Tuesday" || !pack.Stale ||
 		!strings.Contains(pack.Background, "admin: The checkout page is slow") {

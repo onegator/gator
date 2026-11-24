@@ -102,3 +102,7 @@ SELECT count(*) FILTER (WHERE type = 'tool_call')::int AS tool_calls,
        COALESCE((SELECT e2.payload->>'name' FROM job_events e2 WHERE e2.job_id = $1 AND e2.type = 'tool_call'
                  ORDER BY e2.seq DESC LIMIT 1), '')::text AS last_tool
 FROM job_events WHERE job_id = $1;
+
+-- name: JobCost :one
+SELECT COALESCE(sum(cost_usd), 0)::float8 AS cost_usd, COALESCE(sum(duration_ms), 0)::bigint AS duration_ms
+FROM usage_records WHERE job_id = $1;

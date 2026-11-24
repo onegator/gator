@@ -156,6 +156,21 @@ func TestAWorkAgentWorksOnlyWithConsent(t *testing.T) {
 	if turn.Tier != TierWork || job.Tier != TierWork || job.TaskID != task.ID || job.Kind != "reply" {
 		t.Fatalf("with consent @worker works on the task: turn %s job %+v", turn.Tier, job)
 	}
+	// The answer in the thread is not the phase's job: the autopilot still queues that one, the
+	// inbox does not take the reply for it, and the task's kind may still change.
+	phase, created, err := w.mgr.EnsureJob(w.ctx, task.ID)
+	if err != nil || !created || phase.Kind != "phase" || phase.Role != "planner" {
+		t.Fatalf("the autopilot: %+v %v %v", phase, created, err)
+	}
+	if worked, _ := w.q.TaskWorkedOn(w.ctx, task.ID); !worked {
+		t.Fatal("a phase job is work on the task")
+	}
+	other, _ := w.svc.Create(w.ctx, process.CreateParams{ProjectID: w.project, Kind: "bug", Title: "Other"}, process.Actor{Kind: process.ActorUser, ID: w.admin.UserID})
+	otherThread, _ := w.chat.Threads.ForTask(w.ctx, other)
+	w.post(w.admin, otherThread.ID, "@reviewer is this a bug?", w.agent("reviewer"))
+	if worked, _ := w.q.TaskWorkedOn(w.ctx, other.ID); worked {
+		t.Fatal("an agent answering in a task's thread is no work on it")
+	}
 }
 
 // A chain of agents stops: at its fourth turn, at its budget, and when an agent asks itself,
@@ -212,8 +227,8 @@ func TestAChainOfAgentsStops(t *testing.T) {
 				t.Fatalf("the thread should say why, it says %q", last.Body)
 			}
 			// A person replying starts a new chain, whatever the last one did.
-			again := w.post(w.admin, turn.ConversationID, "@worker go on", w.agent("worker"))
-			fresh := w.turnOf(w.agent("worker"), again)
+			again := w.post(w.admin, turn.ConversationID, "@curator go on", w.agent("curator"))
+			fresh := w.turnOf(w.agent("curator"), again)
 			if fresh.Status != TurnQueued || fresh.Hop != 0 || fresh.ChainID == first.ChainID {
 				t.Fatalf("a person's reply starts afresh: %+v", fresh)
 			}

@@ -338,6 +338,23 @@ func (q *Queries) InsertTurn(ctx context.Context, arg InsertTurnParams) (AgentTu
 	return i, err
 }
 
+const jobCost = `-- name: JobCost :one
+SELECT COALESCE(sum(cost_usd), 0)::float8 AS cost_usd, COALESCE(sum(duration_ms), 0)::bigint AS duration_ms
+FROM usage_records WHERE job_id = $1
+`
+
+type JobCostRow struct {
+	CostUsd    float64 `json:"cost_usd"`
+	DurationMs int64   `json:"duration_ms"`
+}
+
+func (q *Queries) JobCost(ctx context.Context, jobID pgtype.UUID) (JobCostRow, error) {
+	row := q.db.QueryRow(ctx, jobCost, jobID)
+	var i JobCostRow
+	err := row.Scan(&i.CostUsd, &i.DurationMs)
+	return i, err
+}
+
 const jobProgress = `-- name: JobProgress :one
 SELECT count(*) FILTER (WHERE type = 'tool_call')::int AS tool_calls,
        COALESCE((SELECT e2.payload->>'name' FROM job_events e2 WHERE e2.job_id = $1 AND e2.type = 'tool_call'

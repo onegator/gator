@@ -479,8 +479,8 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 			return err
 		}
 		for _, j := range jobs {
-			if j.Phase == t.Phase && !j.CreatedAt.Time.Before(t.PhaseEnteredAt.Time) {
-				return nil // this phase entry already has its job
+			if j.Kind == KindPhase && j.Phase == t.Phase && !j.CreatedAt.Time.Before(t.PhaseEnteredAt.Time) {
+				return nil // this phase entry already has its job (an agent's reply in the thread is not it)
 			}
 		}
 		d.Task = t

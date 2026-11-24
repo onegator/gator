@@ -20,8 +20,12 @@ const cursorName = "agents"
 type Deps struct {
 	Conversations *conversations.Module
 	Process       *process.Service
-	// Jobs queues the jobs that do turns (runners.Manager).
-	Jobs jobQueue
+	// Jobs queues, steers and stops the jobs that do turns (runners.Manager).
+	Jobs interface {
+		jobQueue
+		jobSteerer
+		jobStopper
+	}
 	// Now is the clock of the daily budget; nil is time.Now.
 	Now func() time.Time
 	Log *slog.Logger
@@ -37,6 +41,8 @@ type Module struct {
 	Summaries *conversations.Summaries
 	// Tracker keeps turns in step with their jobs.
 	Tracker *TurnTracker
+	// Control is what people do to turns: stop them.
+	Control *Control
 
 	pool *pgxpool.Pool
 }
@@ -57,7 +63,8 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	}
 	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})
 	return &Module{
-		Dispatcher: NewDispatcher(q, guards, starter),
+		Dispatcher: NewDispatcher(q, guards, starter, NewSteerer(q, deps.Jobs, deps.Log)),
+		Control:    NewControl(q, chat.Access, deps.Jobs, voice),
 		Starter:    starter,
 		Voice:      voice,
 		Briefer:    NewBriefer(q, chat.Packer, summaries, deps.Log),

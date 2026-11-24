@@ -10,6 +10,7 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/client"
 	"github.com/onegator/gator/internal/server/api/gen"
 )
 
@@ -141,5 +142,110 @@ func TestOnlyV3RunnersTakeReplies(t *testing.T) {
 	if conversation == 0 {
 		raw, _ := json.Marshal(pkg)
 		t.Fatalf("the conversation is recorded among what the job was handed: %s", raw)
+	}
+}
+
+// holdingExec answers like an agent that takes its time: it says something, then waits for a
+// correction or for the end, and keeps every correction it gets.
+type holdingExec struct {
+	steered chan string
+}
+
+func (e *holdingExec) Run(ctx context.Context, job proto.Job, io client.JobIO) proto.Finish {
+	io.Emit("text", map[string]string{"text": "Looking at the diff."})
+	for {
+		select {
+		case m := <-io.Steer:
+			e.steered <- m
+			io.Emit("text", map[string]string{"text": "Narrowing it down."})
+		case <-ctx.Done():
+			return proto.Finish{Status: proto.StatusStopped, StopReason: context.Cause(ctx).Error(),
+				Usage: proto.Usage{Backend: job.Backend, DurationMS: 10}}
+		}
+	}
+}
+
+// A person's reply in the thread while the agent answers reaches the running agent as a
+// correction; Stop under the answer stops it, and the answer ends with what it had said.
+func TestSteerFromTheThreadAndStopFromTheMessage(t *testing.T) {
+	h := newHarness(t)
+	backend := uniqueBackend()
+	task := h.task()
+	project := task.ProjectId.String()
+	if _, err := h.pool.Exec(context.Background(), "UPDATE projects SET process_config = $2 WHERE id = $1",
+		project, `{"autopilot":{"backend":"`+backend+`"}}`); err != nil {
+		t.Fatal(err)
+	}
+	exec := &holdingExec{steered: make(chan string, 4)}
+	h.startRunner(backend, exec)
+	general := h.generalOf(project)
+	ask := h.say(project, general.Id.String(), "@reviewer look at PR #12", "reviewer")
+	turn := h.turnOf(ask, project, "reviewer")
+	h.waitJob(*turn.Job, "running")
+	h.settledMessage(*turn.Reply, func(m gen.Message) bool { return m.Body == "Looking at the diff." })
+
+	h.say(project, turn.Conversation, "only the checkout part, please")
+	select {
+	case m := <-exec.steered:
+		if !strings.Contains(m, "only the checkout part, please") {
+			t.Fatalf("steer: %q", m)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the correction never reached the agent")
+	}
+
+	var stopped gen.AgentTurn
+	if code := h.do("POST", "/turns/"+turn.ID+"/stop", nil, &stopped); code != 202 {
+		t.Fatalf("stop: %d", code)
+	}
+	reply := h.settledMessage(*turn.Reply, func(m gen.Message) bool { return m.Status == "final" })
+	if !strings.HasPrefix(reply.Body, "Looking at the diff.\n\nNarrowing it down.") || !strings.Contains(reply.Body, "_@reviewer stopped (by ") ||
+		reply.Turn == nil || reply.Turn.Status != "stopped" {
+		t.Fatalf("the stopped answer: %q %+v", reply.Body, reply.Turn)
+	}
+	var e gen.Error
+	if code := h.do("POST", "/turns/"+turn.ID+"/stop", nil, &e); code != 409 {
+		t.Fatalf("stopping an ended turn: %d %+v", code, e)
+	}
+	var got gen.AgentTurn
+	if code := h.do("GET", "/turns/"+turn.ID, nil, &got); code != 200 || got.Status != "stopped" || got.Hop != 0 || got.Tier != "chat" {
+		t.Fatalf("turn: %d %+v", code, got)
+	}
+}
+
+// message reads one message as the harness's person.
+func (h *harness) message(id string) gen.Message {
+	h.t.Helper()
+	var m gen.Message
+	if code := h.do("GET", "/messages/"+id, nil, &m); code != 200 {
+		h.t.Fatalf("message %s: %d", id, code)
+	}
+	return m
+}
+
+// settledMessage waits for a message to be what ok wants.
+func (h *harness) settledMessage(id string, ok func(gen.Message) bool) gen.Message {
+	h.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		m := h.message(id)
+		if ok(m) {
+			return m
+		}
+		if time.Now().After(deadline) {
+			h.t.Fatalf("message %s stayed %s: %q (turn %+v)", id, m.Status, m.Body, m.Turn)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("never: %s", what)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

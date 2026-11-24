@@ -1370,11 +1370,33 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /turns/{turnId}:
+    get:
+      operationId: getTurn
+      description: "One turn of an agent: what asked it, where it answers, the chain it is part of, its job and what it cost. For anyone who may read the conversation it answers in."
+      parameters: [ { $ref: "#/components/parameters/turnId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentTurn" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /turns/{turnId}/stop:
+    post:
+      operationId: stopTurn
+      description: "Stop an answer being written (the button under a streaming message): its job is stopped and the message ends with what it had said. For anyone who may write in the conversation."
+      parameters: [ { $ref: "#/components/parameters/turnId" } ]
+      requestBody:
+        content: { application/json: { schema: { $ref: "#/components/schemas/Reason" } } }
+      responses:
+        "202": { description: "stop requested, or done for a turn with no job yet", content: { application/json: { schema: { $ref: "#/components/schemas/AgentTurn" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    turnId: { name: turnId, in: path, required: true, schema: { type: string, format: uuid } }
+    agentId: { name: agentId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
     pluginName: { name: pluginName, in: path, required: true, schema: { type: string } }
     invitationId: { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2539,6 +2561,32 @@ components:
         reactions: { type: array, items: { $ref: "#/components/schemas/Reaction" } }
         attachments: { type: array, items: { $ref: "#/components/schemas/Attachment" }, description: "none once deleted" }
         turn: { $ref: "#/components/schemas/MessageTurn" }
+    AgentTurn:
+      type: object
+      description: "One answer of one agent to one call: a mention, a message in a DM, a delegation, an escalation a person allowed. A refused call is a turn too, with its refusal."
+      required: [id, agentId, projectId, conversationId, requestedByKind, chainId, hop, tier, status, createdAt, costUsd, durationMs]
+      properties:
+        id: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid, description: where the answer goes }
+        triggerMessageId: { type: string, format: uuid, description: the message that asked }
+        replyMessageId: { type: string, format: uuid, description: the agent's answer }
+        requestedByKind: { type: string, enum: [user, agent, automation, process] }
+        requestedBy: { type: string, format: uuid, description: the person or the agent who asked }
+        onBehalfOf: { type: string, format: uuid, description: the person at the start of the chain }
+        chainId: { type: string, format: uuid, description: shared by agent-to-agent delegations }
+        parentTurnId: { type: string, format: uuid, description: the turn that delegated this one }
+        escalatedFrom: { type: string, format: uuid, description: the chat turn a person let work }
+        hop: { type: integer, description: "0 for a person's call; a chain stops at 4 turns" }
+        tier: { type: string, enum: [chat, work] }
+        jobId: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, done, failed, refused, stopped] }
+        refusal: { type: string, description: "paused | no_access | hop_limit | repeat | chain_budget | budget | no_task" }
+        costUsd: { type: number, format: double }
+        durationMs: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
     MessageTurn:
       type: object
       description: "The agent's turn a message is the answer of: what a client shows under it (state, cost, time) and what Stop acts on."

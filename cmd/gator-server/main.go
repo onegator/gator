@@ -237,6 +237,8 @@ func serve(ctx context.Context) error {
 		PublicURL: cfg.PublicURL,
 		// Channels, DMs and threads, with the same access rules for the API, the WebSocket and search.
 		Conversations: chat,
+		// The agents who answer in them.
+		Agents: team,
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:

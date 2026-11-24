@@ -168,6 +168,9 @@ func (s *Service) DecisionFor(ctx context.Context, taskID pgtype.UUID) (Decision
 	if d.Task.ClosedAt.Valid {
 		return Decision{}, false, nil
 	}
+	if hidden, err := s.HiddenKind(ctx, d.Task.ProjectID, d.Task.Kind); err != nil || hidden {
+		return Decision{}, false, err // a conversation with an agent waits on nobody
+	}
 	var status string
 	var jobID pgtype.UUID
 	unassignable := false

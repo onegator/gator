@@ -110,7 +110,7 @@ func Ending(agent db.Agent, job db.Job, said db.Message) (string, string) {
 		}
 		return fmt.Sprintf("_@%s finished without an answer._", agent.Handle), conversations.StatusFinal
 	case "stopped":
-		note := fmt.Sprintf("_@%s stopped: %s_", agent.Handle, orText(reason, "stopped by request"))
+		note := stoppedNote(agent, reason)
 		if partial != "" {
 			return partial + "\n\n" + note, conversations.StatusFinal
 		}
@@ -128,4 +128,13 @@ func orText(s, d string) string {
 		return d
 	}
 	return s
+}
+
+// stoppedNote is how an answer that was stopped ends: who stopped it, if the reason says.
+func stoppedNote(agent db.Agent, reason string) string {
+	reason = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(reason), "stopped:"))
+	if reason == "" || reason == "stopped by request" {
+		return fmt.Sprintf("_@%s stopped._", agent.Handle)
+	}
+	return fmt.Sprintf("_@%s stopped (%s)._", agent.Handle, reason)
 }

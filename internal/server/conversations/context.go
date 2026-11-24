@@ -51,7 +51,7 @@ type Pack struct {
 	Where string
 	// Background summarises what came before Recent; empty when everything fits.
 	Background string
-	// Recent are the latest messages before the ask, oldest first, word for word.
+	// Recent are the latest messages, oldest first, word for word; the ask is not among them.
 	Recent []Said
 	// Older are the messages before Recent that the background stands for, oldest first. A
 	// summarizer reads them; the agent does not.
@@ -134,14 +134,11 @@ func (p *Packer) Pack(ctx context.Context, conv db.Conversation, ask db.Message)
 	return out, p.background(ctx, conv, &out)
 }
 
-// history is what was said in conv before ask, oldest first: the message a thread hangs under,
-// then the conversation itself, without what is deleted and the answers still being written.
+// history is what was said in conv, oldest first, but the ask itself: the message a thread hangs
+// under, then the conversation as it is now — with what a person added after asking, before the
+// agent started — without what is deleted and the answers still being written.
 func (p *Packer) history(ctx context.Context, conv db.Conversation, ask db.Message) ([]db.Message, error) {
-	before := ask.Seq
-	if ask.ConversationID != conv.ID {
-		before = conv.LastSeq + 1
-	}
-	rows, err := p.store.ListMessagesBefore(ctx, db.ListMessagesBeforeParams{ConversationID: conv.ID, BeforeSeq: before, MaxRows: maxPackMessages})
+	rows, err := p.store.ListMessagesBefore(ctx, db.ListMessagesBeforeParams{ConversationID: conv.ID, BeforeSeq: conv.LastSeq + 1, MaxRows: maxPackMessages})
 	if err != nil {
 		return nil, err
 	}

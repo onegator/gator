@@ -28,10 +28,11 @@ type turnStarter interface {
 	Refuse(ctx context.Context, r Request, no Refusal) error
 }
 
-// Interceptor sees a message before it asks anyone, and may take it as something else: a person
-// steering an agent that is answering in that conversation. It answers whether it took it.
+// Interceptor sees a message before it asks anyone, and may take it as something else for some
+// of the agents it asks — a person steering an agent that is answering there. It answers the
+// agents the message still asks for a turn.
 type Interceptor interface {
-	Intercept(ctx context.Context, msg db.Message, conv db.Conversation, asked []db.Agent) (bool, error)
+	Intercept(ctx context.Context, msg db.Message, conv db.Conversation, asked []db.Agent) ([]db.Agent, error)
 }
 
 // Dispatcher answers what is said to agents: every message.posted that mentions an agent, or
@@ -83,7 +84,7 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 		return err
 	}
 	for _, in := range d.interceptors {
-		if took, err := in.Intercept(ctx, msg, conv, asked); err != nil || took {
+		if asked, err = in.Intercept(ctx, msg, conv, asked); err != nil {
 			return err
 		}
 	}
