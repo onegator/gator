@@ -21,14 +21,23 @@ func (s *Server) requireJob(w http.ResponseWriter, r *http.Request, jobID gen.Jo
 		s.fail(w, err)
 		return db.Job{}, false
 	}
-	if _, ok := s.requireProject(w, r, job.ProjectID, min); !ok {
+	p, ok := s.requireProject(w, r, job.ProjectID, min)
+	if !ok {
+		return db.Job{}, false
+	}
+	if readable, err := s.jobReadable(r.Context(), p, job); err != nil {
+		s.fail(w, err)
+		return db.Job{}, false
+	} else if !readable {
+		writeError(w, http.StatusNotFound, "not found", "not_found")
 		return db.Job{}, false
 	}
 	return job, true
 }
 
 func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
-	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer); !ok {
+	p, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer)
+	if !ok {
 		return
 	}
 	rows, err := db.New(s.Pool).ListJobsByTask(r.Context(), fromUUID(taskId))
@@ -36,7 +45,18 @@ func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapAll(rows, toJob))
+	out := make([]gen.Job, 0, len(rows))
+	for _, j := range rows {
+		readable, err := s.jobReadable(r.Context(), p, j)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if readable {
+			out = append(out, toJob(j))
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) CreateTaskJob(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {

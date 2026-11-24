@@ -79,12 +79,21 @@ func (a *Asks) For(ctx context.Context, home db.Conversation, trigger db.Message
 var errAlreadyLinked = errors.New("this thread became a task a moment ago")
 
 func (a *Asks) create(ctx context.Context, home db.Conversation, trigger db.Message, by process.Actor, link func(*db.Queries, db.Task) error) (db.Task, error) {
-	title := firstLine(trigger.Body, maxTitleRunes)
-	if title == "" {
-		title = "A conversation with an agent"
+	open, err := a.openToAll(ctx, home)
+	if err != nil {
+		return db.Task{}, err
+	}
+	// A task is the project's to read; words said in a private channel or a DM stay there, and
+	// the ask only points at them.
+	title, description := askTitle, "In a private conversation: "+MessageLink(trigger)
+	if open {
+		if t := firstLine(trigger.Body, maxTitleRunes); t != "" {
+			title = t
+		}
+		description = quote(clip(trigger.Body, maxQuotedRunes)) + "\n\nFrom the conversation: " + MessageLink(trigger)
 	}
 	p := process.CreateParams{ProjectID: home.ProjectID, Kind: process.AskKind, Title: title, Hidden: true,
-		Description: quote(clip(trigger.Body, maxQuotedRunes)) + "\n\nFrom the conversation: " + MessageLink(trigger), InTx: link}
+		Description: description, InTx: link}
 	if home.Kind == KindDM {
 		p.ExternalRefs = map[string]string{askRef: uuidString(home.ID)}
 	}
@@ -97,6 +106,21 @@ func (a *Asks) create(ctx context.Context, home db.Conversation, trigger db.Mess
 		return a.For(ctx, conv, trigger, by)
 	}
 	return task, err
+}
+
+// askTitle is an ask's title when the words that asked may not be its title.
+const askTitle = "A conversation with an agent"
+
+// openToAll says whether home is open to the whole project.
+func (a *Asks) openToAll(ctx context.Context, home db.Conversation) (bool, error) {
+	root := home
+	if home.ParentMessageID.Valid {
+		var err error
+		if root, err = db.New(a.pool).GetAccessRoot(ctx, home.ID); err != nil {
+			return false, err
+		}
+	}
+	return openToProject(root), nil
 }
 
 // open answers a task that is open, reopening a closed ask: asking again in its conversation is

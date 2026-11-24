@@ -80,7 +80,9 @@ func (b *Briefer) Brief(ctx context.Context, job db.Job) (runners.TurnBrief, err
 			b.log.Warn("asking for a conversation's summary", "conversation", uuidText(conv.ID), "err", err)
 		}
 	}
-	return Render(agent, pack), nil
+	brief := Render(agent, pack)
+	brief.Private = pack.Private
+	return brief, nil
 }
 
 // askOf is the message a turn answers: its trigger, or for a turn a person let work after a chat

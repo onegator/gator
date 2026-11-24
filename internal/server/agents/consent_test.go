@@ -48,7 +48,7 @@ func TestTheConsentCardLetsAWorkAgentWork(t *testing.T) {
 	job, _ := w.q.GetJob(w.ctx, work.JobID)
 	chatJob, _ := w.q.GetJob(w.ctx, chat.JobID)
 	task, _ := w.q.GetTask(w.ctx, job.TaskID)
-	if job.Tier != TierWork || job.TaskID != chatJob.TaskID || job.Instruction != "@worker fix the flaky test" ||
+	if job.Tier != TierWork || job.TaskID != chatJob.TaskID || job.Instruction != chatJob.Instruction ||
 		!task.AgentsAllowedAt.Valid || task.AgentsAllowedBy != w.admin.UserID {
 		t.Fatalf("job %+v, task allowed %v by %v", job, task.AgentsAllowedAt.Valid, task.AgentsAllowedBy)
 	}

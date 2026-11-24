@@ -90,10 +90,6 @@ func NewStarter(turns turnStore, homes replyHomes, asks askFinder, voice speaker
 	return &Starter{turns: turns, homes: homes, asks: asks, voice: voice, jobs: jobs, consent: consent}
 }
 
-// maxInstruction bounds the question a job carries as its instruction; the conversation itself
-// reaches the agent in its prompt.
-const maxInstruction = 2000
-
 // ClaimTTL is how long a start may hold a turn before another may take it over.
 const ClaimTTL = 2 * time.Minute
 
@@ -150,7 +146,7 @@ func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, tu
 	}
 	job, err := s.jobs.CreateJob(ctx, task.ID, runners.NewJob{
 		Agent: r.Agent.ID, Turn: turn.ID, Kind: runners.KindReply, Tier: grant.Tier, Role: roleOf(r.Agent),
-		Instruction: clip(r.Question().Body, maxInstruction), CreatedBy: actorOf(r),
+		Instruction: "Answer " + conversations.MessageLink(r.Question()), CreatedBy: actorOf(r),
 	})
 	if errors.Is(err, runners.ErrBudgetExceeded) {
 		return turn, s.end(ctx, turn, home, TurnRefused, &Refusal{Code: RefusedBudget, Say: fmt.Sprintf("@%s does not answer today: %s", r.Agent.Handle, plain(err))})

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -147,5 +149,61 @@ func TestAgentsEndpoints(t *testing.T) {
 		if a.Key == "error_triage" && deref(a.Author) != "triage" {
 			t.Fatalf("error triage is @triage's: %+v", a)
 		}
+	}
+}
+
+// What is said to an agent in a DM stays in the DM: the ask behind it, the job's instruction and
+// the record of what it was handed only point at it, and someone in the project but not in the DM
+// sees no trace of the job.
+func TestAnAgentInADMKeepsItPrivate(t *testing.T) {
+	h := newHarness(t)
+	task := h.task()
+	project := task.ProjectId.String()
+	backend := uniqueBackend()
+	if _, err := h.pool.Exec(context.Background(), "UPDATE projects SET process_config = $2 WHERE id = $1", project, `{"autopilot":{"backend":"`+backend+`"}}`); err != nil {
+		t.Fatal(err)
+	}
+	other := h.member(project, "member")
+	pid := task.ProjectId
+	agents := []openapi_types.UUID{h.agentID(project, "reviewer")}
+	var dm gen.ConversationDetail
+	if code := h.do("POST", "/conversations/dm", gen.NewDirectMessage{Members: []openapi_types.UUID{}, ProjectId: &pid, Agents: &agents}, &dm); code != 201 {
+		t.Fatalf("dm: %d", code)
+	}
+	secret := "the acquisition of Acme closes on Friday"
+	ask := h.say(project, dm.Id.String(), secret)
+	turn := h.turnOf(ask, project, "reviewer")
+	exec := &tokenExec{seen: make(chan struct{}, 1), hold: true}
+	h.startRunner(backend, exec)
+	h.waitJob(*turn.Job, "running")
+
+	var job gen.Job
+	h.do("GET", "/jobs/"+*turn.Job, nil, &job)
+	var askTask gen.TaskDetail
+	h.do("GET", "/tasks/"+job.TaskId.String(), nil, &askTask)
+	if contains(job.Instruction, "Acme") || contains(askTask.Title, "Acme") || contains(deref(askTask.Description), "Acme") {
+		t.Fatalf("private words in the job or its task: %q / %q / %q", job.Instruction, askTask.Title, deref(askTask.Description))
+	}
+	var pkg gen.ContextPackage
+	h.do("GET", "/jobs/"+*turn.Job+"/context", nil, &pkg)
+	for _, d := range pkg.Documents {
+		if contains(deref(d.Body), "Acme") {
+			t.Fatalf("the job's record keeps private words: %+v", d)
+		}
+	}
+	_, leased := exec.token(t)
+	if leased.Turn == nil || !contains(leased.Turn.Ask, "Acme") {
+		t.Fatal("the agent itself is told what was asked")
+	}
+	if code := h.asJob(other, "GET", "/jobs/"+*turn.Job, nil, nil); code != 404 {
+		t.Fatalf("someone outside the DM read its job: %d", code)
+	}
+	if code := h.asJob(other, "GET", "/jobs/"+*turn.Job+"/events", nil, nil); code != 404 {
+		t.Fatalf("someone outside the DM read its job's output: %d", code)
+	}
+	var jobs []gen.Job
+	h.asJob(other, "GET", "/tasks/"+job.TaskId.String()+"/jobs", nil, &jobs)
+	if len(jobs) != 0 {
+		t.Fatalf("someone outside the DM listed its job: %+v", jobs)
 	}
 }

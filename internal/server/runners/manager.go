@@ -125,6 +125,9 @@ type TurnBrief struct {
 	Ask    string
 	Docs   []process.ContextDoc
 	Repeat string
+	// Private says the conversation is not the whole project's: what the job was handed of it
+	// reaches the runner but is not kept in the job's record, which the project reads.
+	Private bool
 }
 
 // TurnBriefer briefs the agent of a reply. The agents package provides one.

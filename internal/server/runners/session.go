@@ -450,7 +450,7 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	pj.AgentToken = s.agentToken(ctx, j)
 	pj.Guide = s.guide(ctx, q, j)
 	brief := s.brief(ctx, j)
-	pj.Context = s.handContext(ctx, q, j, brief.Docs)
+	pj.Context = s.handContext(ctx, q, j, brief)
 	if j.Kind == KindReply && j.TurnID.Valid {
 		pj.Turn = &proto.Turn{ID: uuidString(j.TurnID), Ask: brief.Ask, Repeat: brief.Repeat}
 		for _, d := range brief.Docs {
@@ -515,6 +515,9 @@ func (s *session) agentToken(ctx context.Context, j db.Job) string {
 	return token
 }
 
+// privateLeft is what the record of a job says of a private conversation it was handed.
+const privateLeft = "said in a private conversation: handed to the agent, not kept in the job's record"
+
 // brief is the conversation a reply answers in, as its agent is told it; nothing for any other
 // job, or when it cannot be told.
 func (s *session) brief(ctx context.Context, j db.Job) TurnBrief {
@@ -531,7 +534,7 @@ func (s *session) brief(ctx context.Context, j db.Job) TurnBrief {
 // handContext gathers the documents the job starts from — the conversation a reply answers in,
 // then the core's, then the plugins' — and records each one, whether or not it made it into the
 // prompt.
-func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, conversation []process.ContextDoc) []proto.ContextDoc {
+func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, brief TurnBrief) []proto.ContextDoc {
 	var out []proto.ContextDoc
 	// One counter across everything the job is handed, so the record reads in the
 	// order the prompt does.
@@ -545,8 +548,11 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, conv
 		}
 		pos++
 	}
-	for _, d := range conversation {
+	for _, d := range brief.Docs {
 		d.FullBytes = max(d.FullBytes, len(d.Body))
+		if brief.Private {
+			d.Body, d.Left = "", privateLeft
+		}
 		record(d, "conversation")
 	}
 	if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
@@ -738,7 +744,11 @@ func (s *session) closeJob(ctx context.Context, q *db.Queries, jobID pgtype.UUID
 		}
 	}
 	j.Status = status
-	return s.m.emitJob(ctx, q, "job.finished", j, map[string]any{"stop_reason": reason, "summary": fin.Summary})
+	extra := map[string]any{"stop_reason": reason}
+	if j.Kind == KindPhase {
+		extra["summary"] = fin.Summary // a reply's answer is its message, read through the conversation's rules
+	}
+	return s.m.emitJob(ctx, q, "job.finished", j, extra)
 }
 
 // recordWork leaves what a done job produced. A phase job leaves the document its role

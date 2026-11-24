@@ -41,8 +41,8 @@ const maxSummaryInput = 60000
 // Refresh queues a newer summary of conv when p says its background is stale. It does nothing
 // while one is being written, or when the summary already covers the older messages.
 func (s *Summaries) Refresh(ctx context.Context, conv db.Conversation, task pgtype.UUID, p Pack) error {
-	if !p.Stale || len(p.Older) == 0 || s.jobs == nil {
-		return nil
+	if !p.Stale || len(p.Older) == 0 || s.jobs == nil || p.Private {
+		return nil // a private conversation's words do not go into a job the project can read
 	}
 	upto := p.Older[len(p.Older)-1].Seq
 	q := db.New(s.pool)

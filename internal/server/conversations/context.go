@@ -62,6 +62,10 @@ type Pack struct {
 	Stale          bool
 	// Marker fences the outside words of this pack, here and wherever the pack is written out.
 	Marker Marker
+	// Private is a conversation not open to the whole project (a private channel, a DM): what is
+	// said in it stays out of anything the project's people read — the record of what a job was
+	// handed, a summary job's instruction.
+	Private bool
 }
 
 // Bytes is how much of the prompt the pack takes.
@@ -102,8 +106,11 @@ func NewPacker(store packStore, recentBytes int) *Packer {
 // Pack is conv as told to an agent asked by ask. A thread starts with the message it hangs under.
 func (p *Packer) Pack(ctx context.Context, conv db.Conversation, ask db.Message) (Pack, error) {
 	names := newNamer(p.store)
-	out := Pack{Where: p.where(ctx, conv), Marker: NewMarker()}
-	var err error
+	root, err := p.rootOf(ctx, conv)
+	if err != nil {
+		return Pack{}, err
+	}
+	out := Pack{Where: where(root, conv), Marker: NewMarker(), Private: !openToProject(root)}
 	if out.Ask, err = names.said(ctx, ask, maxMessageBytes); err != nil {
 		return Pack{}, err
 	}
@@ -211,14 +218,16 @@ func (p *Packer) background(ctx context.Context, conv db.Conversation, out *Pack
 	return nil
 }
 
-// where names a conversation for an agent.
-func (p *Packer) where(ctx context.Context, conv db.Conversation) string {
-	root := conv
-	if conv.ParentMessageID.Valid {
-		if r, err := p.store.GetAccessRoot(ctx, conv.ID); err == nil {
-			root = r
-		}
+// rootOf is the conversation that decides who reads conv.
+func (p *Packer) rootOf(ctx context.Context, conv db.Conversation) (db.Conversation, error) {
+	if !conv.ParentMessageID.Valid {
+		return conv, nil
 	}
+	return p.store.GetAccessRoot(ctx, conv.ID)
+}
+
+// where names a conversation for an agent.
+func where(root, conv db.Conversation) string {
 	name := "a conversation"
 	switch {
 	case root.Kind == KindChannel && root.Name != nil:

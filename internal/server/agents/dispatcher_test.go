@@ -27,7 +27,7 @@ func TestAMentionStartsATurnInTheThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	if job.Kind != "reply" || job.Tier != TierChat || job.AgentID != reviewer.ID || job.TurnID != turn.ID || job.Role != "reviewer" ||
-		job.Instruction != "@reviewer look at PR #12" || job.CreatedByKind != "user" {
+		job.Instruction != "Answer "+conversations.MessageLink(msg) || job.CreatedByKind != "user" {
 		t.Fatalf("job: %+v", job)
 	}
 	task, _ := w.q.GetTask(w.ctx, job.TaskID)
