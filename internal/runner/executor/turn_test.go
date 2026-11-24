@@ -115,10 +115,19 @@ func TestASummaryJobIsJustTheSummary(t *testing.T) {
 	be := &scripted{run: func(_ context.Context, _ int, spec backend.Spec, _ backend.Emit) backend.Outcome {
 		return backend.Outcome{Status: proto.StatusDone, SessionID: "s", Summary: "They agreed to bill monthly.", Usage: usage()}
 	}}
-	e := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	e := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be},
+		ServerURL: "http://gator", CLIPath: "/opt/gator/gator-cli"}
 	io, _, evs, _ := jobIO()
 	fin := e.Run(context.Background(), proto.Job{JobID: "sum", Backend: "fake", Kind: proto.KindSummary, Tier: proto.TierChat,
-		Guide: "# Role: summarizer", Instruction: "Ada: bill monthly?\nBo: yes"}, io)
+		Guide: "# Role: summarizer", Instruction: "Ada: bill monthly?\nBo: yes", AgentToken: "gtr_job_leaked",
+		Repo: &proto.Repo{Name: "app", URL: originRepo(t), DefaultBranch: "main"}}, io)
+	spec := be.specs[0]
+	if !spec.Access.NoTools || len(spec.Env) != 0 {
+		t.Fatalf("a summary has no tools and no identity: %+v %v", spec.Access, spec.Env)
+	}
+	if entries, _ := os.ReadDir(spec.Dir); len(entries) != 0 {
+		t.Fatalf("a summary gets no checkout: %v", entries)
+	}
 	if fin.Status != proto.StatusDone || fin.Summary != "They agreed to bill monthly." || fin.Digest != nil || len(be.specs) != 1 {
 		t.Fatalf("finish %+v after %d runs", fin, len(be.specs))
 	}

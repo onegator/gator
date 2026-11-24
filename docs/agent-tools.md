@@ -29,8 +29,13 @@ turns, a budget of twice a turn of the asked agent, never the same agent twice i
 agent only with a person's consent on the task). `task create` posts a proposal card; nothing
 is created until a person accepts it (`POST /proposals/{messageId}/accept`).
 
+What a job's identity may call is its kind's, checked by the server. A phase job may call all of
+the above. A reply (an agent answering in a conversation, chat or work) may `say`, `thread show`,
+`task create`, `knowledge search`, `catalogue show` and `product propose`; it never blocks a gate,
+asks a phase's question or writes a phase's documents. A summary job gets no identity at all.
+
 An agent answering in chat (`tier: chat`) has no tools that write and a read-only checkout; it
-may run `gator-cli` and nothing else.
+may run `gator-cli` and nothing else. A summary has no tools and no checkout.
 
 Output is JSON on stdout, one object or one array. Problems are `{"error": "..."}` on stderr.
 The exit code says what kind of problem it was: `0` ok, `1` the request was wrong, `2` Gator

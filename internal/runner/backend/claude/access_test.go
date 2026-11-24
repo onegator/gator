@@ -82,3 +82,22 @@ func TestFullAccessBypassesPermissions(t *testing.T) {
 		t.Fatalf("args: %q", args)
 	}
 }
+
+// A session with no tools at all gets none of the built-in ones.
+func TestNoToolsReachesTheCLI(t *testing.T) {
+	b, argsFile := fake(t, "claude-2.1.331-chat-readonly.ndjson")
+	run(t, b, context.Background(), backend.Spec{Prompt: "sum up", Access: backend.Access{ReadOnly: true, NoTools: true}})
+	args := argsOf(t, argsFile)
+	if after(args, "--permission-mode") != "dontAsk" || after(args, "--allowedTools") != "" {
+		t.Fatalf("args: %q", args)
+	}
+	found := false
+	for i, a := range args {
+		if a == "--tools" && i+1 < len(args) && args[i+1] == "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no --tools \"\": %q", args)
+	}
+}

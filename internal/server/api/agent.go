@@ -21,8 +21,10 @@ import (
 // Every call here is about the job's own task, and every call is written into the job's events,
 // where a person watching the work sees it.
 
-// agentJob resolves the job behind a job token, or answers the caller and returns false.
-func (s *Server) agentJob(w http.ResponseWriter, r *http.Request) (db.Job, bool) {
+// agentJob resolves the job behind a job token for one command, or answers the caller and
+// returns false. What a job may call is its kind's (scopeOf), checked here on the server: the
+// runner limits the agent's tools, but the token is what reaches Gator.
+func (s *Server) agentJob(w http.ResponseWriter, r *http.Request, cmd agentCommand) (db.Job, bool) {
 	p, ok := auth.FromContext(r.Context())
 	if !ok || p.Kind != auth.KindJob || !p.JobID.Valid {
 		writeError(w, http.StatusForbidden, "this is for a job's own identity", "forbidden")
@@ -38,6 +40,10 @@ func (s *Server) agentJob(w http.ResponseWriter, r *http.Request) (db.Job, bool)
 	default:
 		// The token is revoked when a job ends, so this is a race, not a hole. Say so plainly.
 		writeError(w, http.StatusForbidden, "this job has finished", "forbidden")
+		return db.Job{}, false
+	}
+	if !scopeOf(job)[cmd] {
+		writeError(w, http.StatusForbidden, "a "+job.Kind+" job may not "+string(cmd), "forbidden")
 		return db.Job{}, false
 	}
 	return job, true
@@ -67,7 +73,7 @@ func taskLink(id pgtype.UUID) string { return "gator://tasks/" + toUUID(id).Stri
 
 // AgentTask answers what this job is about.
 func (s *Server) AgentTask(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdTaskShow)
 	if !ok {
 		return
 	}
@@ -97,7 +103,7 @@ func (s *Server) AgentTask(w http.ResponseWriter, r *http.Request) {
 // AgentBlocked stops the task with the agent's reason. An agent that cannot go on should say
 // so: the alternative is an hour of guessing, paid for, ending in a report nobody can use.
 func (s *Server) AgentBlocked(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdTaskBlocked)
 	if !ok {
 		return
 	}
@@ -114,7 +120,7 @@ func (s *Server) AgentBlocked(w http.ResponseWriter, r *http.Request) {
 // inbox the same way every other decision does — and, like every other block, a phase timeout
 // eventually calls it out rather than letting it wait for ever.
 func (s *Server) AgentQuestion(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdAsk)
 	if !ok {
 		return
 	}
@@ -153,7 +159,7 @@ func (s *Server) blockOnAgent(w http.ResponseWriter, r *http.Request, job db.Job
 // AgentPutArtifact records a document for the job's phase before the job ends, so work survives
 // a job that later fails.
 func (s *Server) AgentPutArtifact(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdArtifactPut)
 	if !ok {
 		return
 	}
@@ -181,7 +187,7 @@ func (s *Server) AgentPutArtifact(w http.ResponseWriter, r *http.Request) {
 // decides what the product knows about itself, and an agent reading outside words must not be
 // able to write into the documents every later prompt carries.
 func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdProductPropose)
 	if !ok {
 		return
 	}
@@ -209,7 +215,7 @@ func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
 
 // AgentCatalogue answers what the project is made of.
 func (s *Server) AgentCatalogue(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdCatalogueShow)
 	if !ok {
 		return
 	}
@@ -224,7 +230,7 @@ func (s *Server) AgentCatalogue(w http.ResponseWriter, r *http.Request) {
 
 // AgentKnowledge searches this project's documents for words the job's package did not carry.
 func (s *Server) AgentKnowledge(w http.ResponseWriter, r *http.Request, params gen.AgentKnowledgeParams) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdKnowledge)
 	if !ok {
 		return
 	}

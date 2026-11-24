@@ -12,7 +12,7 @@ import (
 
 // AgentSay says something in the job's conversation as its agent.
 func (s *Server) AgentSay(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdSay)
 	if !ok || !s.agentsOn(w) {
 		return
 	}
@@ -32,7 +32,7 @@ func (s *Server) AgentSay(w http.ResponseWriter, r *http.Request) {
 
 // AgentThread reads more of the job's conversation than its prompt carried.
 func (s *Server) AgentThread(w http.ResponseWriter, r *http.Request, params gen.AgentThreadParams) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdThreadShow)
 	if !ok || !s.agentsOn(w) {
 		return
 	}
@@ -55,7 +55,7 @@ func (s *Server) AgentThread(w http.ResponseWriter, r *http.Request, params gen.
 
 // AgentProposeTask proposes a task; a person accepts it or not.
 func (s *Server) AgentProposeTask(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdTaskCreate)
 	if !ok || !s.agentsOn(w) {
 		return
 	}

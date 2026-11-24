@@ -500,7 +500,7 @@ func (s *session) guide(ctx context.Context, q *db.Queries, j db.Job) string {
 // job ends, so it can only ever discuss the work it was handed. Empty without an issuer.
 func (s *session) agentToken(ctx context.Context, j db.Job) string {
 	issuer := s.m.cfg.AgentTokens
-	if issuer == nil {
+	if issuer == nil || j.Kind == KindSummary { // a summary reads a transcript; it has nobody to talk to
 		return ""
 	}
 	ttl := s.m.cfg.AgentTokenTTL

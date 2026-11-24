@@ -19,8 +19,12 @@ var writingTools = []string{"Edit", "Write", "NotebookEdit"}
 // permissionArgs are the flags that give a session the access asked for. Full access is
 // today's job: bypassPermissions, since nobody is there to answer a prompt. Read-only is
 // dontAsk — anything not allowed up front is denied, never asked about — with only the reading
-// tools, Bash limited to the named commands, and the writing tools denied.
+// tools, Bash limited to the named commands, and the writing tools denied. No tools is dontAsk
+// with an empty --tools: no built-in tool at all.
 func permissionArgs(a backend.Access) []string {
+	if a.NoTools {
+		return []string{"--permission-mode", "dontAsk", "--tools", "", "--disallowedTools", strings.Join(writingTools, ",")}
+	}
 	if !a.ReadOnly {
 		return []string{"--permission-mode", "bypassPermissions"}
 	}

@@ -9,10 +9,14 @@ import (
 // conversation, read more of it, or propose a task.
 const talkBack = "gator-cli"
 
-// AccessFor is what a job's agent may do, by its tier: a chat job reads and answers with tools
-// that do not write (and may run gator-cli when it has an identity to talk back with); a work
-// job, like every job before tiers, may do anything in its worktree.
+// AccessFor is what a job's agent may do, by its kind and tier: a summary has no tools at all,
+// only the transcript it is given; a chat job reads and answers with tools that do not write
+// (and may run gator-cli when it has an identity to talk back with); a work job, like every job
+// before tiers, may do anything in its worktree.
 func AccessFor(job proto.Job) backend.Access {
+	if job.KindOrPhase() == proto.KindSummary {
+		return backend.Access{ReadOnly: true, NoTools: true}
+	}
 	if !job.ReadOnly() {
 		return backend.Access{}
 	}

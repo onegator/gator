@@ -32,6 +32,8 @@ type Spec struct {
 type Access struct {
 	// ReadOnly gives the agent tools that read, search and fetch, and none that write.
 	ReadOnly bool
+	// NoTools gives it none at all: a model reading what it is given and answering.
+	NoTools bool
 	// Commands are the only commands a read-only agent may run, by name: gator-cli, to talk back.
 	Commands []string
 }

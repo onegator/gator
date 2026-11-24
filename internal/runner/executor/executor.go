@@ -73,6 +73,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q is not available on this runner", job.Backend)}
 	}
 	access := AccessFor(job)
+	if access.NoTools {
+		job.Repo, job.AgentToken = nil, "" // nothing to read and nobody to talk to: an empty directory
+	}
 	prepare := e.WS.Prepare
 	if access.ReadOnly {
 		prepare = e.WS.PrepareReadOnly
