@@ -204,12 +204,18 @@ func scopeOf(root, conv db.Conversation) scope {
 	}
 }
 
-// readableListed answers whether a listed conversation is readable, from what the list already
-// knows: the caller's role in the project and whether they are in it. Only a conversation that
-// hangs under a message needs its root looked up.
-func (a *Access) readableListed(ctx context.Context, conv db.Conversation, p auth.Principal, role auth.Role, joined bool) (bool, error) {
-	if conv.ParentMessageID.Valid {
-		return a.CanRead(ctx, conv, p)
-	}
-	return decide(scopeOf(conv, conv), standing{role: role, member: joined}).Read, nil
+// rootFacts are what a list row says of the conversation that decides who reads it, and of the
+// caller's place in it (role "" when they are not in it).
+type rootFacts struct {
+	kind       string
+	visibility string
+	project    pgtype.UUID
+	archived   bool
+	role       string
+}
+
+// readableRoot is Rights(...).Read for a listed conversation, from what the list read.
+func readableRoot(f rootFacts, role auth.Role) bool {
+	sc := scope{kind: f.kind, private: f.visibility == VisibilityPrivate, hasProject: f.project.Valid, archived: f.archived}
+	return decide(sc, standing{role: role, member: f.role != "", owner: f.role == RoleOwner}).Read
 }

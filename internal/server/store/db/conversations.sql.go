@@ -541,6 +541,12 @@ func (q *Queries) ListConversationUserIDs(ctx context.Context, conversationID pg
 
 const listMemberConversations = `-- name: ListMemberConversations :many
 SELECT c.id, c.project_id, c.kind, c.name, c.topic, c.visibility, c.parent_message_id, c.task_id, c.component_key, c.dm_key, c.archived_at, c.created_by_kind, c.created_by, c.created_at, c.last_message_at, c.last_seq,
+       r.kind::text AS root_kind,
+       r.visibility::text AS root_visibility,
+       r.project_id AS root_project_id,
+       (r.archived_at IS NOT NULL)::bool AS root_archived,
+       COALESCE((SELECT rm.role FROM conversation_members rm
+                 WHERE rm.conversation_id = r.id AND rm.member_kind = 'user' AND rm.member_id = $1), '')::text AS root_role,
        true::bool AS joined,
        cm.last_read_seq::bigint AS last_read_seq,
        cm.notify::text AS notify,
@@ -549,29 +555,43 @@ SELECT c.id, c.project_id, c.kind, c.name, c.topic, c.visibility, c.parent_messa
           AND m.seq > cm.last_read_seq AND m.deleted_at IS NULL)::bigint AS unread_mentions
 FROM conversation_members cm
 JOIN conversations c ON c.id = cm.conversation_id
+LEFT JOIN messages pm ON pm.id = c.parent_message_id
+JOIN conversations r ON r.id = COALESCE(pm.conversation_id, c.id)
 WHERE cm.member_kind = 'user' AND cm.member_id = $1 AND c.archived_at IS NULL
   AND ($2::text IS NULL OR c.kind = $2::text)
-ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
-LIMIT 500
+ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC, c.id
+LIMIT $4 OFFSET $3
 `
 
 type ListMemberConversationsParams struct {
-	UserID pgtype.UUID `json:"user_id"`
-	Kind   *string     `json:"kind"`
+	UserID  pgtype.UUID `json:"user_id"`
+	Kind    *string     `json:"kind"`
+	Skip    int32       `json:"skip"`
+	MaxRows int32       `json:"max_rows"`
 }
 
 type ListMemberConversationsRow struct {
 	Conversation   Conversation `json:"conversation"`
+	RootKind       string       `json:"root_kind"`
+	RootVisibility string       `json:"root_visibility"`
+	RootProjectID  pgtype.UUID  `json:"root_project_id"`
+	RootArchived   bool         `json:"root_archived"`
+	RootRole       string       `json:"root_role"`
 	Joined         bool         `json:"joined"`
 	LastReadSeq    int64        `json:"last_read_seq"`
 	Notify         string       `json:"notify"`
 	UnreadMentions int64        `json:"unread_mentions"`
 }
 
-// Every conversation a person is in, across projects, newest activity first: the sidebar's
-// unread counts and DMs outside any project.
+// Every conversation a person is in, across projects, newest activity first, a page at a time:
+// the sidebar's unread counts and DMs outside any project. Rows carry their root, as above.
 func (q *Queries) ListMemberConversations(ctx context.Context, arg ListMemberConversationsParams) ([]ListMemberConversationsRow, error) {
-	rows, err := q.db.Query(ctx, listMemberConversations, arg.UserID, arg.Kind)
+	rows, err := q.db.Query(ctx, listMemberConversations,
+		arg.UserID,
+		arg.Kind,
+		arg.Skip,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -596,6 +616,11 @@ func (q *Queries) ListMemberConversations(ctx context.Context, arg ListMemberCon
 			&i.Conversation.CreatedAt,
 			&i.Conversation.LastMessageAt,
 			&i.Conversation.LastSeq,
+			&i.RootKind,
+			&i.RootVisibility,
+			&i.RootProjectID,
+			&i.RootArchived,
+			&i.RootRole,
 			&i.Joined,
 			&i.LastReadSeq,
 			&i.Notify,
@@ -613,6 +638,12 @@ func (q *Queries) ListMemberConversations(ctx context.Context, arg ListMemberCon
 
 const listProjectConversations = `-- name: ListProjectConversations :many
 SELECT c.id, c.project_id, c.kind, c.name, c.topic, c.visibility, c.parent_message_id, c.task_id, c.component_key, c.dm_key, c.archived_at, c.created_by_kind, c.created_by, c.created_at, c.last_message_at, c.last_seq,
+       r.kind::text AS root_kind,
+       r.visibility::text AS root_visibility,
+       r.project_id AS root_project_id,
+       (r.archived_at IS NOT NULL)::bool AS root_archived,
+       COALESCE((SELECT rm.role FROM conversation_members rm
+                 WHERE rm.conversation_id = r.id AND rm.member_kind = 'user' AND rm.member_id = $1), '')::text AS root_role,
        (cm.member_id IS NOT NULL)::bool AS joined,
        COALESCE(cm.last_read_seq, 0)::bigint AS last_read_seq,
        COALESCE(cm.notify, '')::text AS notify,
@@ -622,12 +653,14 @@ SELECT c.id, c.project_id, c.kind, c.name, c.topic, c.visibility, c.parent_messa
 FROM conversations c
 LEFT JOIN conversation_members cm
        ON cm.conversation_id = c.id AND cm.member_kind = 'user' AND cm.member_id = $1
+LEFT JOIN messages pm ON pm.id = c.parent_message_id
+JOIN conversations r ON r.id = COALESCE(pm.conversation_id, c.id)
 WHERE c.project_id = $2 AND c.kind = $3
   AND ($4::bool OR c.archived_at IS NULL)
   AND ($5::text IS NULL OR c.name ILIKE $5::text)
   AND (cm.member_id IS NOT NULL OR (c.visibility = 'project' AND c.kind <> 'dm'))
-ORDER BY c.name NULLS LAST, c.last_message_at DESC NULLS LAST
-LIMIT 500
+ORDER BY c.name NULLS LAST, c.last_message_at DESC NULLS LAST, c.id
+LIMIT $7 OFFSET $6
 `
 
 type ListProjectConversationsParams struct {
@@ -636,10 +669,17 @@ type ListProjectConversationsParams struct {
 	Kind            string      `json:"kind"`
 	IncludeArchived bool        `json:"include_archived"`
 	NameLike        *string     `json:"name_like"`
+	Skip            int32       `json:"skip"`
+	MaxRows         int32       `json:"max_rows"`
 }
 
 type ListProjectConversationsRow struct {
 	Conversation   Conversation `json:"conversation"`
+	RootKind       string       `json:"root_kind"`
+	RootVisibility string       `json:"root_visibility"`
+	RootProjectID  pgtype.UUID  `json:"root_project_id"`
+	RootArchived   bool         `json:"root_archived"`
+	RootRole       string       `json:"root_role"`
 	Joined         bool         `json:"joined"`
 	LastReadSeq    int64        `json:"last_read_seq"`
 	Notify         string       `json:"notify"`
@@ -647,8 +687,9 @@ type ListProjectConversationsRow struct {
 }
 
 // A project's conversations of one kind as one person sees the list: those open to the project
-// and those they are in. The caller still checks each with the access rules (a task thread may
-// hang under a private channel).
+// and those they are in, a page at a time. Each row carries what the access rules need of the
+// conversation that decides who reads it (its root: a task thread may hang under a private
+// channel), and the caller's role there, so the caller checks a whole page without a query per row.
 func (q *Queries) ListProjectConversations(ctx context.Context, arg ListProjectConversationsParams) ([]ListProjectConversationsRow, error) {
 	rows, err := q.db.Query(ctx, listProjectConversations,
 		arg.UserID,
@@ -656,6 +697,8 @@ func (q *Queries) ListProjectConversations(ctx context.Context, arg ListProjectC
 		arg.Kind,
 		arg.IncludeArchived,
 		arg.NameLike,
+		arg.Skip,
+		arg.MaxRows,
 	)
 	if err != nil {
 		return nil, err
@@ -681,6 +724,11 @@ func (q *Queries) ListProjectConversations(ctx context.Context, arg ListProjectC
 			&i.Conversation.CreatedAt,
 			&i.Conversation.LastMessageAt,
 			&i.Conversation.LastSeq,
+			&i.RootKind,
+			&i.RootVisibility,
+			&i.RootProjectID,
+			&i.RootArchived,
+			&i.RootRole,
 			&i.Joined,
 			&i.LastReadSeq,
 			&i.Notify,

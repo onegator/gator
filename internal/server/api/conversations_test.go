@@ -1263,3 +1263,53 @@ func TestAPrivateChannelKeepsAnOwner(t *testing.T) {
 		}
 	})
 }
+
+// A long list comes a page at a time and says when there is more, rather than stopping quietly.
+func TestConversationListsArePaged(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("paged")
+	pid := c.project.Id.String()
+	for i := range 3 {
+		h.channel(c.admin, pid, fmt.Sprintf("p%d", i), "")
+	}
+	page := func(query string) ([]gen.Conversation, string) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", h.srv.URL+"/api/v1/projects/"+pid+"/conversations?"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+c.admin)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out []gen.Conversation
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return out, res.Header.Get("X-Has-More")
+	}
+	first, more := page("limit=2")
+	if len(first) != 2 || more != "true" {
+		t.Fatalf("first page: %d, more %q", len(first), more)
+	}
+	rest, more := page("limit=2&offset=2")
+	if len(rest) != 2 || more != "false" { // general and the third channel
+		t.Fatalf("second page: %d, more %q", len(rest), more)
+	}
+}
+
+// Matches the caller may not read do not crowd out the ones they may: search reads on past them.
+func TestSearchReadsPastUnreadableMatches(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("crowd")
+	word := fmt.Sprintf("needle%d", time.Now().UnixNano())
+	secret := h.channel(c.member, c.project.Id.String(), "crowd", "private").Id.String()
+	open := h.channel(c.admin, c.project.Id.String(), "open", "").Id.String()
+	_, visible := h.post(c.admin, open, gen.NewMessage{Body: ptr(word + " for all")})
+	for i := range 10 {
+		h.post(c.member, secret, gen.NewMessage{Body: ptr(fmt.Sprintf("%s secret %d", word, i))})
+	}
+	// The admin may not read the private channel; its newer matches rank the same and come first.
+	var hits []gen.MessageHit
+	h.as(c.admin, func() { h.do("GET", "/search/messages?limit=1&q="+word, nil, &hits) })
+	if len(hits) != 1 || hits[0].Message.Id != visible.Id {
+		t.Fatalf("hits: %+v", hits)
+	}
+}

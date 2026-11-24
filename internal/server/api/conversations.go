@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -59,12 +60,13 @@ func (s *Server) ListProjectConversations(w http.ResponseWriter, r *http.Request
 	if params.Kind != nil {
 		f.Kind = string(*params.Kind)
 	}
-	rows, err := s.Conversations.Directory.ListProject(r.Context(), p, fromUUID(projectId), f)
+	f.Page = listPage(params.Limit, params.Offset)
+	rows, more, err := s.Conversations.Directory.ListProject(r.Context(), p, fromUUID(projectId), f)
 	if err != nil {
 		s.failConversation(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapAll(rows, toConversation))
+	writeConversationList(w, rows, more)
 }
 
 func (s *Server) CreateChannel(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
@@ -100,12 +102,12 @@ func (s *Server) ListMyConversations(w http.ResponseWriter, r *http.Request, par
 	if params.Kind != nil {
 		kind = string(*params.Kind)
 	}
-	rows, err := s.Conversations.Directory.ListMine(r.Context(), p, kind)
+	rows, more, err := s.Conversations.Directory.ListMine(r.Context(), p, kind, listPage(params.Limit, params.Offset))
 	if err != nil {
 		s.failConversation(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapAll(rows, toConversation))
+	writeConversationList(w, rows, more)
 }
 
 func (s *Server) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
@@ -301,6 +303,23 @@ func (s *Server) respondMessage(w http.ResponseWriter, r *http.Request, p auth.P
 		return
 	}
 	writeJSON(w, status, toMessage(v))
+}
+
+func listPage(limit, offset *int) conversations.ListPage {
+	var pg conversations.ListPage
+	if limit != nil {
+		pg.Limit = *limit
+	}
+	if offset != nil {
+		pg.Offset = *offset
+	}
+	return pg
+}
+
+// writeConversationList answers one page of conversations; X-Has-More says another follows.
+func writeConversationList(w http.ResponseWriter, rows []conversations.Listed, more bool) {
+	w.Header().Set("X-Has-More", strconv.FormatBool(more))
+	writeJSON(w, http.StatusOK, mapAll(rows, toConversation))
 }
 
 func toDraft(in gen.NewMessage) conversations.Draft {

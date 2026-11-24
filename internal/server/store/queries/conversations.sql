@@ -56,9 +56,16 @@ RETURNING *;
 
 -- name: ListProjectConversations :many
 -- A project's conversations of one kind as one person sees the list: those open to the project
--- and those they are in. The caller still checks each with the access rules (a task thread may
--- hang under a private channel).
+-- and those they are in, a page at a time. Each row carries what the access rules need of the
+-- conversation that decides who reads it (its root: a task thread may hang under a private
+-- channel), and the caller's role there, so the caller checks a whole page without a query per row.
 SELECT sqlc.embed(c),
+       r.kind::text AS root_kind,
+       r.visibility::text AS root_visibility,
+       r.project_id AS root_project_id,
+       (r.archived_at IS NOT NULL)::bool AS root_archived,
+       COALESCE((SELECT rm.role FROM conversation_members rm
+                 WHERE rm.conversation_id = r.id AND rm.member_kind = 'user' AND rm.member_id = sqlc.arg(user_id)), '')::text AS root_role,
        (cm.member_id IS NOT NULL)::bool AS joined,
        COALESCE(cm.last_read_seq, 0)::bigint AS last_read_seq,
        COALESCE(cm.notify, '')::text AS notify,
@@ -68,17 +75,25 @@ SELECT sqlc.embed(c),
 FROM conversations c
 LEFT JOIN conversation_members cm
        ON cm.conversation_id = c.id AND cm.member_kind = 'user' AND cm.member_id = sqlc.arg(user_id)
+LEFT JOIN messages pm ON pm.id = c.parent_message_id
+JOIN conversations r ON r.id = COALESCE(pm.conversation_id, c.id)
 WHERE c.project_id = sqlc.arg(project_id) AND c.kind = sqlc.arg(kind)
   AND (sqlc.arg(include_archived)::bool OR c.archived_at IS NULL)
   AND (sqlc.narg(name_like)::text IS NULL OR c.name ILIKE sqlc.narg(name_like)::text)
   AND (cm.member_id IS NOT NULL OR (c.visibility = 'project' AND c.kind <> 'dm'))
-ORDER BY c.name NULLS LAST, c.last_message_at DESC NULLS LAST
-LIMIT 500;
+ORDER BY c.name NULLS LAST, c.last_message_at DESC NULLS LAST, c.id
+LIMIT sqlc.arg(max_rows) OFFSET sqlc.arg(skip);
 
 -- name: ListMemberConversations :many
--- Every conversation a person is in, across projects, newest activity first: the sidebar's
--- unread counts and DMs outside any project.
+-- Every conversation a person is in, across projects, newest activity first, a page at a time:
+-- the sidebar's unread counts and DMs outside any project. Rows carry their root, as above.
 SELECT sqlc.embed(c),
+       r.kind::text AS root_kind,
+       r.visibility::text AS root_visibility,
+       r.project_id AS root_project_id,
+       (r.archived_at IS NOT NULL)::bool AS root_archived,
+       COALESCE((SELECT rm.role FROM conversation_members rm
+                 WHERE rm.conversation_id = r.id AND rm.member_kind = 'user' AND rm.member_id = sqlc.arg(user_id)), '')::text AS root_role,
        true::bool AS joined,
        cm.last_read_seq::bigint AS last_read_seq,
        cm.notify::text AS notify,
@@ -87,10 +102,12 @@ SELECT sqlc.embed(c),
           AND m.seq > cm.last_read_seq AND m.deleted_at IS NULL)::bigint AS unread_mentions
 FROM conversation_members cm
 JOIN conversations c ON c.id = cm.conversation_id
+LEFT JOIN messages pm ON pm.id = c.parent_message_id
+JOIN conversations r ON r.id = COALESCE(pm.conversation_id, c.id)
 WHERE cm.member_kind = 'user' AND cm.member_id = sqlc.arg(user_id) AND c.archived_at IS NULL
   AND (sqlc.narg(kind)::text IS NULL OR c.kind = sqlc.narg(kind)::text)
-ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
-LIMIT 500;
+ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC, c.id
+LIMIT sqlc.arg(max_rows) OFFSET sqlc.arg(skip);
 
 -- name: NextMessageSeq :one
 -- Takes the next seq and holds the conversation's row lock until the transaction ends, so

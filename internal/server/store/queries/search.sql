@@ -17,4 +17,4 @@ WHERE m.deleted_at IS NULL
                 WHERE cm.conversation_id = r.id AND cm.member_kind = 'user' AND cm.member_id = sqlc.arg(user_id)::uuid)
   )
 ORDER BY ts_rank(to_tsvector('simple', m.body), websearch_to_tsquery('simple', sqlc.arg(query)::text)) DESC, m.created_at DESC
-LIMIT sqlc.arg(max_rows);
+LIMIT sqlc.arg(max_rows) OFFSET sqlc.arg(skip);

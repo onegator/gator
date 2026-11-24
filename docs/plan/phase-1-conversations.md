@@ -300,8 +300,12 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
 - **FTS (00038)** to indeks wyrażeniowy GIN na `to_tsvector('simple', body)` (bez usuniętych), a nie
   kolumna `tsvector`: to samo wyszukiwanie bez wektora w każdym odczycie wiadomości. SQL zawęża
   kandydatów (otwarte rozmowy czytelnych projektów i te, w których jestem), a każdy wynik i tak
-  przechodzi przez `Access`. Zapytanie w składni `websearch_to_tsquery`. `pg_trgm` służy filtrowi
-  `?q=` na liście kanałów projektu (`ILIKE` po indeksie trigramowym).
+  przechodzi przez `Access`; gdy reguły odrzucą wiele kandydatów, wyszukiwanie czyta kolejne partie
+  (do 5), zamiast oddać niepełną stronę. Zapytanie w składni `websearch_to_tsquery`. `pg_trgm` służy
+  filtrowi `?q=` na liście kanałów projektu (`ILIKE` po indeksie trigramowym na całej kolumnie `name`);
+  krok down migracji zostawia rozszerzenie.
+- **Listy rozmów** są stronicowane (`limit` do 500, `offset`, nagłówek `X-Has-More`), a każdy wiersz
+  niesie fakty o rozmowie-korzeniu, więc reguły dostępu sprawdzają stronę bez zapytań na wiersz.
 - **Powiadomienia** to reguła w `internal/server/notify/messages.go` na `message.posted`: wzmianka
   (także poza członkami rozmowy), DM, odpowiedź w wątku, w którym się pisało (autor korzenia i
   odpowiadający), oraz wszystko przy `notify = all`. `notify = none` wycisza rozmowę razem ze

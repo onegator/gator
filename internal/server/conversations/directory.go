@@ -500,82 +500,121 @@ type ListFilter struct {
 	Archived bool
 	// Name keeps channels whose name contains it.
 	Name string
+	Page ListPage
 }
 
-// ListProject answers a project's conversations of one kind that the caller may read, with their
-// unread counts. The caller has already been found able to read the project.
-func (d *Directory) ListProject(ctx context.Context, p auth.Principal, project pgtype.UUID, f ListFilter) ([]Listed, error) {
+// ListPage is one page of a list: Limit rows (default 100, at most 500) after skipping Offset.
+type ListPage struct {
+	Limit  int
+	Offset int
+}
+
+const (
+	defaultListPage = 100
+	maxListPage     = 500
+)
+
+func (pg ListPage) bounds() (limit, offset int32) {
+	l := pg.Limit
+	if l <= 0 {
+		l = defaultListPage
+	}
+	return int32(min(l, maxListPage)), int32(max(pg.Offset, 0))
+}
+
+// listRow is a row of either list, with what the access rules need to know of its root.
+type listRow struct {
+	conv     db.Conversation
+	root     rootFacts
+	joined   bool
+	lastRead int64
+	notify   string
+	mentions int64
+}
+
+// ListProject answers a page of a project's conversations of one kind that the caller may read,
+// with their unread counts, and whether there are more. The caller has already been found able
+// to read the project.
+func (d *Directory) ListProject(ctx context.Context, p auth.Principal, project pgtype.UUID, f ListFilter) ([]Listed, bool, error) {
 	if f.Kind == "" {
 		f.Kind = KindChannel
 	}
 	if !validKind(f.Kind) {
-		return nil, invalid("kind is channel, dm, thread or task")
+		return nil, false, invalid("kind is channel, dm, thread or task")
 	}
 	me, _ := memberOf(p)
-	params := db.ListProjectConversationsParams{UserID: me.ID, ProjectID: project, Kind: f.Kind, IncludeArchived: f.Archived}
+	limit, offset := f.Page.bounds()
+	params := db.ListProjectConversationsParams{UserID: me.ID, ProjectID: project, Kind: f.Kind, IncludeArchived: f.Archived,
+		MaxRows: limit + 1, Skip: offset}
 	if name := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(f.Name), "#")); name != "" {
 		params.NameLike = ptr("%" + likeEscaper.Replace(name) + "%")
 	}
 	rows, err := db.New(d.pool).ListProjectConversations(ctx, params)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	role, err := d.roles.ProjectRole(ctx, p, project)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Listed, 0, len(rows))
+	out := make([]listRow, 0, len(rows))
 	for _, r := range rows {
-		ok, err := d.access.readableListed(ctx, r.Conversation, p, role, r.Joined)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			out = append(out, listed(r.Conversation, r.Joined, r.LastReadSeq, r.Notify, r.UnreadMentions))
-		}
+		out = append(out, listRow{conv: r.Conversation, joined: r.Joined, lastRead: r.LastReadSeq, notify: r.Notify, mentions: r.UnreadMentions,
+			root: rootFacts{kind: r.RootKind, visibility: r.RootVisibility, project: r.RootProjectID, archived: r.RootArchived, role: r.RootRole}})
 	}
-	return out, nil
+	return d.readable(ctx, p, out, int(limit))
 }
 
 // likeEscaper makes a person's words literal inside a LIKE pattern.
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
-// ListMine answers every conversation the caller is in and may still read, newest first; kind
-// narrows it ("" for all).
-func (d *Directory) ListMine(ctx context.Context, p auth.Principal, kind string) ([]Listed, error) {
+// ListMine answers a page of the conversations the caller is in and may still read, newest
+// first, and whether there are more; kind narrows it ("" for all).
+func (d *Directory) ListMine(ctx context.Context, p auth.Principal, kind string, page ListPage) ([]Listed, bool, error) {
 	me, ok := memberOf(p)
 	if !ok {
-		return []Listed{}, nil
+		return []Listed{}, false, nil
 	}
 	if kind != "" && !validKind(kind) {
-		return nil, invalid("kind is channel, dm, thread or task")
+		return nil, false, invalid("kind is channel, dm, thread or task")
 	}
-	rows, err := db.New(d.pool).ListMemberConversations(ctx, db.ListMemberConversationsParams{UserID: me.ID, Kind: optional(kind)})
+	limit, offset := page.bounds()
+	rows, err := db.New(d.pool).ListMemberConversations(ctx, db.ListMemberConversationsParams{
+		UserID: me.ID, Kind: optional(kind), MaxRows: limit + 1, Skip: offset,
+	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	out := make([]listRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, listRow{conv: r.Conversation, joined: true, lastRead: r.LastReadSeq, notify: r.Notify, mentions: r.UnreadMentions,
+			root: rootFacts{kind: r.RootKind, visibility: r.RootVisibility, project: r.RootProjectID, archived: r.RootArchived, role: r.RootRole}})
+	}
+	return d.readable(ctx, p, out, int(limit))
+}
+
+// readable keeps the rows of a page the caller may read, asking for their role once per project.
+// The page was read one row long, to tell whether there is more.
+func (d *Directory) readable(ctx context.Context, p auth.Principal, rows []listRow, limit int) ([]Listed, bool, error) {
+	more := len(rows) > limit
+	if more {
+		rows = rows[:limit]
 	}
 	roles := map[[16]byte]auth.Role{}
 	out := make([]Listed, 0, len(rows))
 	for _, r := range rows {
 		role := auth.RoleNone
-		if pid := r.Conversation.ProjectID; pid.Valid {
+		if pid := r.root.project; pid.Valid {
 			var seen bool
 			if role, seen = roles[pid.Bytes]; !seen {
+				var err error
 				if role, err = d.roles.ProjectRole(ctx, p, pid); err != nil {
-					return nil, err
+					return nil, false, err
 				}
 				roles[pid.Bytes] = role
 			}
 		}
-		ok, err := d.access.readableListed(ctx, r.Conversation, p, role, true)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			out = append(out, listed(r.Conversation, true, r.LastReadSeq, r.Notify, r.UnreadMentions))
+		if readableRoot(r.root, role) {
+			out = append(out, listed(r.conv, r.joined, r.lastRead, r.notify, r.mentions))
 		}
 	}
-	return out, nil
+	return out, more, nil
 }
 
 func listed(c db.Conversation, joined bool, lastRead int64, notify string, mentions int64) Listed {

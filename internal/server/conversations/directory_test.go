@@ -60,7 +60,7 @@ func TestDirectoryKeepsConversationsToTheirReaders(t *testing.T) {
 
 	names := func(who auth.Principal) map[string]bool {
 		t.Helper()
-		ls, err := f.directory.ListProject(f.ctx, who, project, ListFilter{Kind: KindChannel})
+		ls, _, err := f.directory.ListProject(f.ctx, who, project, ListFilter{Kind: KindChannel})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +116,7 @@ func TestDirectoryKeepsConversationsToTheirReaders(t *testing.T) {
 	if _, _, err := f.directory.OpenDM(f.ctx, member, []pgtype.UUID{stranger.UserID}, project); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("a DM in a project with somebody outside it: %v", err)
 	}
-	mine, err := f.directory.ListMine(f.ctx, stranger, KindDM)
+	mine, _, err := f.directory.ListMine(f.ctx, stranger, KindDM, ListPage{})
 	if err != nil || len(mine) != 1 || mine[0].Conversation.ID != dm.ID {
 		t.Fatalf("the stranger's DMs: %+v %v", mine, err)
 	}

@@ -1096,8 +1096,10 @@ paths:
         - { name: kind, in: query, required: false, schema: { type: string, enum: [channel, dm, thread, task], default: channel } }
         - { name: archived, in: query, required: false, description: include archived channels, schema: { type: boolean } }
         - { name: q, in: query, required: false, description: "channels whose name contains this", schema: { type: string } }
+        - { $ref: "#/components/parameters/listLimit" }
+        - { $ref: "#/components/parameters/listOffset" }
       responses:
-        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } } }
+        "200": { $ref: "#/components/responses/ConversationList" }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
     post:
@@ -1118,8 +1120,10 @@ paths:
       description: Every conversation the caller is in and may still read, newest activity first, with unread counts; DMs outside any project are listed here.
       parameters:
         - { name: kind, in: query, required: false, schema: { type: string, enum: [channel, dm, thread, task] } }
+        - { $ref: "#/components/parameters/listLimit" }
+        - { $ref: "#/components/parameters/listOffset" }
       responses:
-        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } } }
+        "200": { $ref: "#/components/responses/ConversationList" }
         "400": { $ref: "#/components/responses/Error" }
   /conversations/dm:
     post:
@@ -1381,10 +1385,17 @@ components:
     memberId: { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
     emoji: { name: emoji, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 64 } }
     attachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    listLimit: { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+    listOffset: { name: offset, in: query, required: false, description: "rows to skip, for the next page", schema: { type: integer, minimum: 0 } }
   responses:
     Error:
       description: error
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ConversationList:
+      description: one page of conversations; X-Has-More says whether another page follows (ask with offset)
+      headers:
+        X-Has-More: { schema: { type: boolean } }
+      content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } }
   schemas:
     Error:
       type: object

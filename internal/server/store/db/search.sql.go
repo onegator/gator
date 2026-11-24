@@ -27,7 +27,7 @@ WHERE m.deleted_at IS NULL
                 WHERE cm.conversation_id = r.id AND cm.member_kind = 'user' AND cm.member_id = $5::uuid)
   )
 ORDER BY ts_rank(to_tsvector('simple', m.body), websearch_to_tsquery('simple', $1::text)) DESC, m.created_at DESC
-LIMIT $6
+LIMIT $7 OFFSET $6
 `
 
 type SearchMessagesParams struct {
@@ -36,6 +36,7 @@ type SearchMessagesParams struct {
 	AllProjects bool          `json:"all_projects"`
 	ProjectIds  []pgtype.UUID `json:"project_ids"`
 	UserID      pgtype.UUID   `json:"user_id"`
+	Skip        int32         `json:"skip"`
 	MaxRows     int32         `json:"max_rows"`
 }
 
@@ -53,6 +54,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 		arg.AllProjects,
 		arg.ProjectIds,
 		arg.UserID,
+		arg.Skip,
 		arg.MaxRows,
 	)
 	if err != nil {

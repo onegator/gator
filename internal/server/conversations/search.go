@@ -16,8 +16,10 @@ const (
 	defaultHits  = 20
 	maxHits      = 100
 	maxQueryRune = 200
-	// candidates is how many matches are read before the access rules leave the readable ones.
-	candidates = 4
+	// candidates is how many matches are read per hit wanted before the access rules leave the
+	// readable ones, and searchRounds how many such batches at most.
+	candidates   = 4
+	searchRounds = 5
 )
 
 // Search finds messages by their words, among the conversations the caller may read.
@@ -69,28 +71,36 @@ func (s *Search) Messages(ctx context.Context, p auth.Principal, scope Scope, in
 		projects = []pgtype.UUID{}
 	}
 	q := db.New(s.pool)
-	rows, err := q.SearchMessages(ctx, db.SearchMessagesParams{
-		Query: text, ProjectID: in.Project, AllProjects: scope.All, ProjectIds: projects, UserID: me.ID, MaxRows: int32(limit * candidates),
-	})
-	if err != nil {
-		return nil, err
-	}
 	readable := map[[16]byte]*db.Conversation{}
 	var msgs []db.Message
-	for _, r := range rows {
-		conv, seen := readable[r.Message.ConversationID.Bytes]
-		if !seen {
-			c, rights, err := s.access.RightsByID(ctx, r.Message.ConversationID, p)
-			if err != nil {
-				return nil, err
-			}
-			if rights.Read {
-				conv = &c
-			}
-			readable[r.Message.ConversationID.Bytes] = conv
+	batch := int32(limit * candidates)
+	// The access rules can leave out most of a batch (a busy private channel the SQL could not
+	// rule out); read further batches until the page is full or the matches run out.
+	for round, skip := 0, int32(0); round < searchRounds && len(msgs) < limit; round, skip = round+1, skip+batch {
+		rows, err := q.SearchMessages(ctx, db.SearchMessagesParams{
+			Query: text, ProjectID: in.Project, AllProjects: scope.All, ProjectIds: projects, UserID: me.ID, MaxRows: batch, Skip: skip,
+		})
+		if err != nil {
+			return nil, err
 		}
-		if conv != nil && len(msgs) < limit {
-			msgs = append(msgs, r.Message)
+		for _, r := range rows {
+			conv, seen := readable[r.Message.ConversationID.Bytes]
+			if !seen {
+				c, rights, err := s.access.RightsByID(ctx, r.Message.ConversationID, p)
+				if err != nil {
+					return nil, err
+				}
+				if rights.Read {
+					conv = &c
+				}
+				readable[r.Message.ConversationID.Bytes] = conv
+			}
+			if conv != nil && len(msgs) < limit {
+				msgs = append(msgs, r.Message)
+			}
+		}
+		if len(rows) < int(batch) {
+			break
 		}
 	}
 	views, err := describe(ctx, q, msgs)
