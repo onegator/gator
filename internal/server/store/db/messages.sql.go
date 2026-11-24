@@ -27,6 +27,78 @@ func (q *Queries) AddMention(ctx context.Context, arg AddMentionParams) error {
 	return err
 }
 
+const findCard = `-- name: FindCard :one
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE card_key = $1 AND conversation_id = ANY($2::uuid[])
+ORDER BY created_at LIMIT 1
+`
+
+type FindCardParams struct {
+	CardKey         *string       `json:"card_key"`
+	ConversationIds []pgtype.UUID `json:"conversation_ids"`
+}
+
+// A card by what it is about, in any of these conversations (a task's card sits in its channel,
+// or in the task's own thread when that thread was there first).
+func (q *Queries) FindCard(ctx context.Context, arg FindCardParams) (Message, error) {
+	row := q.db.QueryRow(ctx, findCard, arg.CardKey, arg.ConversationIds)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getCardForUpdate = `-- name: GetCardForUpdate :one
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE conversation_id = $1 AND card_key = $2 FOR UPDATE
+`
+
+type GetCardForUpdateParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	CardKey        *string     `json:"card_key"`
+}
+
+// The card about one thing in a conversation, locked while it is brought up to date.
+func (q *Queries) GetCardForUpdate(ctx context.Context, arg GetCardForUpdateParams) (Message, error) {
+	row := q.db.QueryRow(ctx, getCardForUpdate, arg.ConversationID, arg.CardKey)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getMessage = `-- name: GetMessage :one
 SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE id = $1
 `
@@ -336,4 +408,41 @@ func (q *Queries) ListThreadsOfMessages(ctx context.Context, messageIds []pgtype
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateCard = `-- name: UpdateCard :one
+UPDATE messages SET body = $1, card = $2, edited_at = now()
+WHERE id = $3
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at
+`
+
+type UpdateCardParams struct {
+	Body string      `json:"body"`
+	Card []byte      `json:"card"`
+	ID   pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateCard(ctx context.Context, arg UpdateCardParams) (Message, error) {
+	row := q.db.QueryRow(ctx, updateCard, arg.Body, arg.Card, arg.ID)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }

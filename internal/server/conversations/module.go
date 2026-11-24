@@ -22,21 +22,24 @@ type Module struct {
 }
 
 // Consumer is the outbox consumer that keeps conversations in step with the rest of Gator:
-// people who join a project join its #general. Run it with go consumer.Run(ctx).
+// people who join a project join its #general, and every new task gets its thread. Run it with
+// go consumer.Run(ctx).
 func (m *Module) Consumer(hub *events.Hub, log *slog.Logger, poll time.Duration) *Consumer {
 	c := NewConsumer(m.pool, hub, log, poll)
 	c.On(defaultChannelJoiner{directory: m.Directory}, membershipEvents...)
+	c.On(taskThreadOpener{pool: m.pool, threads: m.Threads}, "task.created")
 	return c
 }
 
 // New wires the services. roles answers project roles (auth.Authorizer).
 func New(pool *pgxpool.Pool, roles RoleResolver) *Module {
 	access := NewAccess(roles, db.New(pool))
+	directory := NewDirectory(pool, access, roles)
 	return &Module{
 		Access:    access,
-		Directory: NewDirectory(pool, access, roles),
+		Directory: directory,
 		Messages:  NewMessages(pool, access),
-		Threads:   NewThreads(pool, access),
+		Threads:   NewThreads(pool, access, directory),
 		pool:      pool,
 	}
 }

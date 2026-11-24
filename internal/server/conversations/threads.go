@@ -13,15 +13,64 @@ import (
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
-// Threads finds the thread under a message, opening it the first time somebody asks.
+// Threads finds the thread under a message, opening it the first time somebody asks, and the
+// thread every task has.
 type Threads struct {
-	pool   *pgxpool.Pool
-	access *Access
+	pool     *pgxpool.Pool
+	access   *Access
+	channels taskChannels
+}
+
+// taskChannels answers where a project's new tasks show up. Directory is one.
+type taskChannels interface {
+	TaskChannel(ctx context.Context, project pgtype.UUID) (db.Conversation, error)
 }
 
 // NewThreads builds the thread finder.
-func NewThreads(pool *pgxpool.Pool, access *Access) *Threads {
-	return &Threads{pool: pool, access: access}
+func NewThreads(pool *pgxpool.Pool, access *Access, channels taskChannels) *Threads {
+	return &Threads{pool: pool, access: access, channels: channels}
+}
+
+// ForTask answers a task's thread, opening it when the task has none: the task's card goes into
+// its project's task channel and the thread hangs under that card, so replying to the card is
+// talking in the task. Safe to repeat and to race: there is one thread per task.
+func (t *Threads) ForTask(ctx context.Context, task db.Task) (db.Conversation, error) {
+	q := db.New(t.pool)
+	if conv, err := q.GetTaskConversation(ctx, task.ID); !errors.Is(err, pgx.ErrNoRows) {
+		return conv, err
+	}
+	var channel db.Conversation
+	if !task.ClosedAt.Valid { // a task closed before it had a thread gets one quietly, without a card
+		var err error
+		if channel, err = t.channels.TaskChannel(ctx, task.ProjectID); err != nil {
+			return db.Conversation{}, err
+		}
+	}
+	var conv db.Conversation
+	err := store.InTx(ctx, t.pool, func(q *db.Queries) error {
+		var root pgtype.UUID
+		if channel.ID.Valid {
+			card, _, err := writeCard(ctx, q, channel, TaskCard(task))
+			if err != nil {
+				return err
+			}
+			root = card.ID
+		}
+		var err error
+		if conv, err = q.CreateConversation(ctx, db.CreateConversationParams{
+			ProjectID: task.ProjectID, Kind: KindTask, Visibility: VisibilityProject, ParentMessageID: root, TaskID: task.ID,
+			CreatedByKind: AuthorSystem,
+		}); err != nil {
+			return err
+		}
+		return emit(ctx, q, EventConversationCreated, conv.ID, map[string]any{
+			"kind": conv.Kind, "taskId": uuidString(task.ID), "parentMessageId": uuidString(root), "projectId": uuidString(task.ProjectID),
+		})
+	})
+	if isUniqueViolation(err) { // opened a moment ago by another request
+		return q.GetTaskConversation(ctx, task.ID)
+	}
+	return conv, err
 }
 
 // Of answers the thread under a message the caller may read. The first ask opens it, with the

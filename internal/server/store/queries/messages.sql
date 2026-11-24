@@ -38,3 +38,18 @@ ON CONFLICT DO NOTHING;
 -- name: ListMentionsOfMessages :many
 SELECT * FROM message_mentions WHERE message_id = ANY(sqlc.arg(message_ids)::uuid[])
 ORDER BY message_id, member_kind, member_id;
+
+-- name: GetCardForUpdate :one
+-- The card about one thing in a conversation, locked while it is brought up to date.
+SELECT * FROM messages WHERE conversation_id = $1 AND card_key = $2 FOR UPDATE;
+
+-- name: UpdateCard :one
+UPDATE messages SET body = sqlc.arg(body), card = sqlc.arg(card), edited_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: FindCard :one
+-- A card by what it is about, in any of these conversations (a task's card sits in its channel,
+-- or in the task's own thread when that thread was there first).
+SELECT * FROM messages WHERE card_key = sqlc.arg(card_key) AND conversation_id = ANY(sqlc.arg(conversation_ids)::uuid[])
+ORDER BY created_at LIMIT 1;

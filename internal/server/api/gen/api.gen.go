@@ -2875,6 +2875,9 @@ type ServerInterface interface {
 	// (GET /tasks/{taskId}/context)
 	PreviewTaskContext(w http.ResponseWriter, r *http.Request, taskId TaskId, params PreviewTaskContextParams)
 
+	// (GET /tasks/{taskId}/conversation)
+	GetTaskConversation(w http.ResponseWriter, r *http.Request, taskId TaskId)
+
 	// (POST /tasks/{taskId}/handoff)
 	HandoffTask(w http.ResponseWriter, r *http.Request, taskId TaskId)
 
@@ -3475,6 +3478,11 @@ func (_ Unimplemented) SetTaskComponent(w http.ResponseWriter, r *http.Request, 
 
 // (GET /tasks/{taskId}/context)
 func (_ Unimplemented) PreviewTaskContext(w http.ResponseWriter, r *http.Request, taskId TaskId, params PreviewTaskContextParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// (GET /tasks/{taskId}/conversation)
+func (_ Unimplemented) GetTaskConversation(w http.ResponseWriter, r *http.Request, taskId TaskId) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -6389,6 +6397,31 @@ func (siw *ServerInterfaceWrapper) PreviewTaskContext(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
+// GetTaskConversation operation middleware
+func (siw *ServerInterfaceWrapper) GetTaskConversation(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "taskId" -------------
+	var taskId TaskId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "taskId", chi.URLParam(r, "taskId"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "taskId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTaskConversation(w, r, taskId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // HandoffTask operation middleware
 func (siw *ServerInterfaceWrapper) HandoffTask(w http.ResponseWriter, r *http.Request) {
 
@@ -7167,6 +7200,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/tasks/{taskId}/context", wrapper.PreviewTaskContext)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/tasks/{taskId}/conversation", wrapper.GetTaskConversation)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/tasks/{taskId}/handoff", wrapper.HandoffTask)
 	})
 	r.Group(func(r chi.Router) {
@@ -7531,23 +7567,25 @@ var swaggerSpec = []string{
 	"SLGB35+q/e3aeWzhxy/+9amscGkODB8MVyvkW+udiVWryJZPSQjMKX26AjmSftbzZzZgTaF5rcEn5Q7b",
 	"ybxvUC5Xc10bGwthFiKXVmplT9n3dVmyvERnonTD4urOFTMegdF6dS6eDpvd92zyySSjwcO8MaiIgim9",
 	"8WhIc4EWE1FcNLh0Fc9v+FKA086KNWAoEOBYTMDqJsegS/CU/QGkmUfL9x4MWwlVtAsKD2KV0frcLSkm",
-	"sM44VFkbKL9bxgbRXGxI8wznNF6hPerUI+OoeEJc0TI8ZFRnj3Ng5fViMWx9+ZZeeIpHhx/aP5ka8rOe",
-	"7w+GBEXiaZtg/qTn909Q+Q9Qkhr/EMivkIXizVydvXrK3uhSsP5+jvuYrNwItEcmBDROWzpThUFnrKmV",
-	"vWClBqTGEx6DGPSiVSLkmc0o+drn/mkl6Kj1PT+Hp3mp6wKaoH9Q51mUv1qxQqx9ooZql6xCoHdKSYej",
-	"V5jnEAKEB3sbCp7q8gY/gFbeoG0pPxVUUYocwefvlXbv/SdZCANpV7mVVDI45LFT5JLtzDmUq/X28xO9",
-	"Yw5fEmzl8yHwcc+5T02OfC82yK2PG9Mau+yyPN0LHiM9tid39oGmvZW+9qcHNsixqE7wLwXLW0YGTXyx",
-	"Esbvy5R1E5jhrthoj2XW34Nj9gCaG93+P6vlIN1fc3NTQLEAx+ekmOcrWdm2FgbqPbaDe9QZOa8dZrjT",
-	"fWCQ/JSm/eOrJ0n/OLhDbPZG6EqovVAC3fs0wmeEejkYLQNIoTyY/ZpKU41x8G3zKmYuCzgGOOKvY2Qc",
-	"3J0EN6UUxhsNecmUZqVWS2Fieao3OFxSj5sgotELPs0wdcWnxv73jv+07/hGE2LMsMb9xr/xJEMuwuj/",
-	"uXTuVoDbXtX7bevdJ62BNwO9lxu0tnw5Yhb1dm9UCmzGcm0p/p00doRLBf3Ax1QojGH2xxLzeQeIuoQa",
-	"hA+YB8XhZz2/jKcaaRNY5YwqB1baOOa0BhFaiRDDz2Qh1pV2EGn5Z7GNdwU0aUTLGFP6M12lw42he1jk",
-	"H3HST2zz4aA+SdFk7PlFntyCRU2tih71s1g5nlaVlNqH1KDHRtXu8+gSHnl/WHHGx4RDVEQbE9WaPKkt",
-	"1OJDIC50H9I10auFXtU+6eVmpPCGUTrROB5FtkBX97/fv5YKsx8EN5gPAaUHvVSgPd8ig2We3/upKpc+",
-	"pYBe4qYBeyMiD95GcQ7Hy5MkEn2KIlatrkfyJe/G5mcf8f87+Vepuk+Bwj0pmkic9m0+BpD5neo9EQVw",
-	"sw7uc4yjx9riqhvpfMr+0tvAIyiVP9rHysSDno5VPg+o5YPJBhWq//TPj3huhS5G9Z24Tmc+JWJf6m9O",
-	"OVSynTSHkUQil4UPVCdpHrwkkiLZ27WS4Ubv23pPsL3eMbyRyl7GEF6tRBZLblEKClBDpCPGIp9d+Zn8",
-	"JmqNN1SMOSlDdcb7lcUnbqzrAdL8b4nwY6hEv2YzMmWTuK9NObuYnfFKnt1+Pvv1p1//vwEAHEr7XH66",
-	"AQA=",
+	"sM44VFkbKL9bxgbRXGxI8wznNF6hPerUI+OoeEJc0TI8ZFTnLuc00Pij+HXeFbRqyjYYUZUgRmpV+Dhz",
+	"TCHoIs8/s82hpUTJTv5lKZQwvMQYBe+Eek/ABaft0dhT+O69/+558FNhY3Bv00pcBoGHAaGe4zpt+PBR",
+	"4eve0ehBPs4FHrnkVDNyuXKwIzICMpUu2lMhwRdS/r5skPJ9I3BchblzthbWQp5xr8ZFCMdhJ5xVRt5S",
+	"cUM/o9Sd3++CZk2e5N1/EuT9J7EmgiTTi8WwNfFbeuEpqkJ+aP9kavXPer4/uBcU46dtUvyTnt8/4eo/",
+	"QOlv/J1wHoesKi9fO2fPKXujS8H651M8l8hrg8CRZBJDZ4slHVEYDC4wtbIXrNSAPHrCY1COXrRE1TOS",
+	"kzzksqJodavY83N4mpe6RjlG/6DOs6hPaMUKsfaJR6pdgm2F+KZoOLFSK2GeQ0gbyu12aQOqMx38Wlp5",
+	"B42lfGu4WlEkFD5/r7R77z/JQlhTu2qzpBLYAZeBIvFsZ86h/LL3B53oHffOkmBYnw+B6XvOfWpy5Hux",
+	"QW593Bjt2GWX5eme+xjp3j25sw8E8K30tWw9UEeORaKCvzRYkjMy0OOLlTB+Xw6d3HfF+nssN9UeXL4H",
+	"OH/JmvVZLQfp/pqbmwKKXzg+p4tmvpKV7emM1A7uUWfkvHaI2EDq3iD5CXbgx1dPkv5xcIf4oIzQlVB7",
+	"oTG69iGEgwlaOEZ/AfItD2bspnJaY+x+27yKmfgCjgGO9QQw0hOUe8FNKYXxRnBeMqVZqdVSmFhu7Q0O",
+	"l657TVDcqMGKZpgyWVFj/2uzeto2K6MJAWlY437j33iSIURh9P9cOncrYHOv6v229e6T1sCbgd7LrV/D",
+	"PX1Yono/DioFNmO5tpTPQRo7wv+CfuBjhBTG5Ptjifk8GkQRQw3CJ4CA4vCznl/GU420CazaR5UwK20c",
+	"c1qDCK1EyElhshDrSjuIHP6z2Ma7AprooqWXKf2ZrtLh89A9LPKPOOkntvlwUJ+kCDj2/CJPbsGiplZF",
+	"j/pZOL78qpJS+5Aa9Nio2n0eXcIj7w8rzviYcLWKaDMlm9dJbaG2JALLobmOroleLfSq9kkv1yiFn43S",
+	"icbxKLIFurr//f61VJjNI7jB/B4opemlAu35Fhks8/zeT7269Cky9BI3DXghEXnwNopzOF7eL5HoUxRl",
+	"a3U9kv97NzY/+4j/38knTNUxCxTuSdEEEIBv8zGA+e9Uv4wogJt1cJ+jvR1r5atu5P4p+0tvA4+grv5o",
+	"HyuzFHo6VjlIoJYPjhxUqP7TPz/iuRW6GNV34jqdee/KvlT2nHICZTsJFCPjRC4Ln3hB0jx4/SRlZrRr",
+	"f8ONvuvN8YEOG6nsZQxJ10pksYQcpVRV6EVKXuojn135mfwmauc3VIw5VkN18/uV8idurOsB0vxvyftj",
+	"qES/ZjMyZZO4r005u5id8Uqe3X4++/WnX/+/AQCJprneTr0BAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

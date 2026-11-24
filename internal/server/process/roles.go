@@ -39,6 +39,9 @@ type ProjectConfig struct {
 	// Quality is the project's scorecard: off unless it is asked for. Read by the quality
 	// package, kept here so one document describes the whole process.
 	Quality json.RawMessage `json:"quality,omitempty"`
+	// Conversations says where the project's conversations put work, e.g. which channel a new
+	// task's card goes to ({"task_channel": "work"}). Read by the conversations package.
+	Conversations json.RawMessage `json:"conversations,omitempty"`
 }
 
 // ParseProjectConfig reads process_config; empty input is an empty config.

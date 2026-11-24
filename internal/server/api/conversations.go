@@ -10,6 +10,7 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/conversations"
+	"github.com/onegator/gator/internal/server/store/db"
 )
 
 // conversationsOff answers 503 when the server runs without conversations.
@@ -311,3 +312,30 @@ func toDraft(in gen.NewMessage) conversations.Draft {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// GetTaskConversation answers the task's thread, opening it for a task that has none yet.
+func (s *Server) GetTaskConversation(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if s.conversationsOff(w) {
+		return
+	}
+	p, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer)
+	if !ok {
+		return
+	}
+	task, err := db.New(s.Pool).GetTask(r.Context(), fromUUID(taskId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	conv, err := s.Conversations.Threads.ForTask(r.Context(), task)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	d, err := s.Conversations.Directory.DetailOf(r.Context(), conv, p)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toConversationDetail(d))
+}

@@ -252,3 +252,8 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
 - **`#general` przy projekcie** tworzy `POST /projects` (twórca od razu w nim jest), a osoby dołączające
   do projektu (`project.member_set`, `project.invitation_accepted`) dodaje do niego konsument outboxu
   pakietu (kursor `conversations`). `#general` nie da się przemianować ani zarchiwizować (409).
+- **Wątek taska** otwiera konsument outboxu na `task.created` (kartę `task` w kanale zadań, a pod nią
+  conversation `kind='task'`), a `GET /tasks/{id}/conversation` robi to samo, jeśli jeszcze nie zdążył;
+  jeden wątek na task gwarantuje `UNIQUE (task_id)`. `process_config.conversations.task_channel`
+  wskazuje inny kanał niż `#general` (nieistniejący albo zarchiwizowany = `#general`). Backfill 00037
+  zakłada wątki otwartym taskom bez karty w kanale (bez wiadomości-korzenia), żeby nie zalać `#general`.

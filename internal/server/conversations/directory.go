@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -568,4 +570,35 @@ func unique(ids []pgtype.UUID) []pgtype.UUID {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// projectConfig is the part of process_config about conversations.
+type projectConfig struct {
+	// TaskChannel is the channel a new task's card goes to; #general when unset or gone.
+	TaskChannel string `json:"task_channel"`
+}
+
+// TaskChannel answers the channel where a project's new tasks show up: the one its
+// process_config names (conversations.task_channel), or #general.
+func (d *Directory) TaskChannel(ctx context.Context, project pgtype.UUID) (db.Conversation, error) {
+	q := db.New(d.pool)
+	p, err := q.GetProject(ctx, project)
+	if err != nil {
+		return db.Conversation{}, err
+	}
+	if cfg, err := process.ParseProjectConfig(p.ProcessConfig); err == nil && len(cfg.Conversations) > 0 {
+		var cc projectConfig
+		if json.Unmarshal(cfg.Conversations, &cc) == nil && cc.TaskChannel != "" {
+			if name, err := normalizeChannelName(cc.TaskChannel); err == nil {
+				ch, err := q.GetChannelByName(ctx, db.GetChannelByNameParams{ProjectID: project, Name: name})
+				if err == nil && !ch.ArchivedAt.Valid {
+					return ch, nil
+				}
+				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+					return db.Conversation{}, err
+				}
+			}
+		}
+	}
+	return d.EnsureDefaultChannels(ctx, project)
 }

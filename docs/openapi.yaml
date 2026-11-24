@@ -1064,6 +1064,19 @@ paths:
         "202": { description: requested }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /tasks/{taskId}/conversation:
+    get:
+      operationId: getTaskConversation
+      description: >-
+        The task's thread: the replies under its card in the project's task channel (#general, or
+        process_config.conversations.task_channel). Every task has one; a task made before
+        conversations, or one whose thread is being opened right now, gets it on this call. 404
+        when the thread hangs under a message the caller may not read (a private channel).
+      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /tasks/{taskId}/transitions:
     get:
       operationId: listTaskTransitions

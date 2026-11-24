@@ -445,3 +445,73 @@ func TestEveryProjectHasGeneral(t *testing.T) {
 		}
 	})
 }
+
+// Every new task has its thread: the replies under its card in #general, or in the channel the
+// project names for tasks. Asking for it straight away, before the consumer gets to it, answers
+// the same one thread.
+func TestEveryNewTaskHasItsThread(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("taskthread")
+	pid := c.project.Id.String()
+
+	var task gen.Task
+	h.as(c.member, func() {
+		if code := h.do("POST", "/projects/"+pid+"/tasks", gen.NewTask{Kind: "bug", Title: "Login loops"}, &task); code != 201 {
+			t.Fatalf("create task: %d", code)
+		}
+	})
+	var thread, again gen.ConversationDetail
+	h.as(c.viewer, func() {
+		if code := h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &thread); code != 200 {
+			t.Fatalf("task conversation: %d", code)
+		}
+	})
+	if thread.Kind != gen.ConversationDetailKindTask || thread.TaskId == nil || *thread.TaskId != task.Id || thread.ParentMessageId == nil {
+		t.Fatalf("task thread: %+v", thread)
+	}
+	time.Sleep(300 * time.Millisecond) // let the consumer see task.created too
+	h.as(c.member, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &again) })
+	if again.Id != thread.Id {
+		t.Fatalf("a second thread for one task: %v and %v", thread.Id, again.Id)
+	}
+
+	g, _ := h.general(c.member, pid)
+	var page gen.MessagePage
+	h.as(c.member, func() { h.do("GET", "/conversations/"+g.Id.String()+"/messages", nil, &page) })
+	cards := 0
+	for _, m := range page.Messages {
+		if m.CardType != nil && *m.CardType == "task" && m.Card != nil && m.Card.Ref.Id == task.Id.String() {
+			cards++
+			if m.Id != *thread.ParentMessageId {
+				t.Fatalf("the thread hangs under %v, not the task's card %v", *thread.ParentMessageId, m.Id)
+			}
+		}
+	}
+	if cards != 1 {
+		t.Fatalf("#general has %d cards for the task: %+v", cards, page.Messages)
+	}
+	var viaCard gen.ConversationDetail
+	h.as(c.member, func() { h.do("GET", "/messages/"+thread.ParentMessageId.String()+"/thread", nil, &viaCard) })
+	if viaCard.Id != thread.Id {
+		t.Fatalf("the thread under the card is not the task's: %v", viaCard.Id)
+	}
+
+	// A project that names another channel for its tasks gets their cards there.
+	work := h.channel(c.admin, pid, "work", "")
+	if _, err := h.pool.Exec(context.Background(), `UPDATE projects SET process_config = '{"conversations":{"task_channel":"work"}}' WHERE id = $1`, pid); err != nil {
+		t.Fatal(err)
+	}
+	var other gen.Task
+	h.as(c.member, func() { h.do("POST", "/projects/"+pid+"/tasks", gen.NewTask{Kind: "bug", Title: "Second"}, &other) })
+	h.as(c.member, func() { h.do("GET", "/tasks/"+other.Id.String()+"/conversation", nil, &thread) })
+	var root gen.Message
+	h.as(c.member, func() { h.do("GET", "/messages/"+thread.ParentMessageId.String(), nil, &root) })
+	if root.ConversationId != work.Id {
+		t.Fatalf("the card went to %v, not #work %v", root.ConversationId, work.Id)
+	}
+	h.as(c.stranger, func() {
+		if code := h.do("GET", "/tasks/"+other.Id.String()+"/conversation", nil, nil); code != 403 {
+			t.Fatalf("a stranger read a task's thread: %d", code)
+		}
+	})
+}
