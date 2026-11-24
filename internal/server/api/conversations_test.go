@@ -355,11 +355,18 @@ func TestConversationPermissionsOverHTTP(t *testing.T) {
 	var firehose *websocket.Conn
 	h.as(workspaceAdmin, func() { firehose = h.follow("*") })
 	time.Sleep(100 * time.Millisecond)
-	h.post(c.member, secret, gen.NewMessage{Body: ptr("still secret")})
+	_, hidden := h.post(c.member, secret, gen.NewMessage{Body: ptr("still secret")})
 	_, visible := h.post(c.member, open, gen.NewMessage{Body: ptr("for everyone")})
-	e := await(t, firehose, "message.posted")
-	if !strings.Contains(string(e.Payload), visible.Id.String()) {
-		t.Fatalf("the firehose carried the private channel's message first: %s", e.Payload)
+	// Other tests' projects talk on the firehose too; events come in outbox order, so the private
+	// message would arrive before the open one.
+	for {
+		e := await(t, firehose, "message.posted")
+		if e.AggregateID == secret || strings.Contains(string(e.Payload), hidden.Id.String()) {
+			t.Fatalf("the firehose carried the private channel's message: %s", e.Payload)
+		}
+		if strings.Contains(string(e.Payload), visible.Id.String()) {
+			break
+		}
 	}
 	h.as(c.member, func() {
 		ws := h.follow("user:" + c.viewerID)
