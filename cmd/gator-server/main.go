@@ -218,6 +218,7 @@ func serve(ctx context.Context) error {
 	runnerMgr.UseBriefer(team.Briefer)
 	go team.Consumer(hub, log, 0).Run(ctx)
 	go team.Streamer(hub, log, 0).Run(ctx)
+	go team.Sweeper(log).Run(ctx, time.Minute)
 	go runnerMgr.Run(ctx)
 	if os.Getenv("GATOR_AUTOPILOT") != "0" {
 		go runnerMgr.RunAutopilot(ctx)

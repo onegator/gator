@@ -60,14 +60,14 @@ func (s *Steerer) Intercept(ctx context.Context, msg db.Message, conv db.Convers
 	}
 	steered := map[[16]byte]bool{}
 	for _, t := range active {
+		if !t.JobID.Valid {
+			continue // a turn that never got its job answers nothing: asking again asks anew
+		}
 		named := slices.ContainsFunc(asked, func(a db.Agent) bool { return a.ID == t.AgentID })
 		if len(asked) > 0 && !named {
 			continue
 		}
 		steered[t.AgentID.Bytes] = true
-		if !t.JobID.Valid {
-			continue
-		}
 		err := s.jobs.SteerJob(ctx, t.JobID, fmt.Sprintf("%s says in the conversation:\n\n%s", who, msg.Body))
 		switch {
 		case err == nil, errors.Is(err, runners.ErrJobNotActive), errors.Is(err, pgx.ErrNoRows):

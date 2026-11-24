@@ -3,8 +3,10 @@ package conversations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -41,6 +43,9 @@ type Speech struct {
 	Status string
 	// Mentions are agents (and people) it asks. Nobody is mentioned in a streaming answer.
 	Mentions []Member
+	// ClientID makes saying it again answer the message said the first time (a turn's answer,
+	// started twice).
+	ClientID string
 }
 
 // Origin is what an agent's message carries about where it was said.
@@ -67,9 +72,19 @@ func (v *Voice) Say(ctx context.Context, conv db.Conversation, s Speech) (db.Mes
 		if err != nil {
 			return err
 		}
+		if s.ClientID != "" {
+			prior, err := q.GetMessageByClientID(ctx, db.GetMessageByClientIDParams{
+				ConversationID: conv.ID, AuthorKind: AuthorAgent, AuthorID: s.Agent, ClientID: &s.ClientID})
+			if err == nil {
+				return replay{prior}
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
 		if msg, err = q.InsertMessage(ctx, db.InsertMessageParams{
 			ConversationID: conv.ID, Seq: seq, AuthorKind: AuthorAgent, AuthorID: s.Agent, Kind: messageText,
-			Body: strings.TrimSpace(s.Body), Origin: origin, Status: s.Status,
+			Body: strings.TrimSpace(s.Body), Origin: origin, Status: s.Status, ClientID: optional(s.ClientID),
 		}); err != nil {
 			return err
 		}
@@ -83,6 +98,10 @@ func (v *Voice) Say(ctx context.Context, conv db.Conversation, s Speech) (db.Mes
 		}
 		return afterPost(ctx, q, conv, msg, Author{Kind: AuthorAgent, ID: s.Agent}, s.Mentions)
 	})
+	var again replay
+	if errors.As(err, &again) {
+		return again.msg, nil
+	}
 	return msg, err
 }
 

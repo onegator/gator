@@ -40,7 +40,9 @@ type conversationRights interface {
 type controlStore interface {
 	GetTurn(ctx context.Context, id pgtype.UUID) (db.AgentTurn, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
-	SetTurnStatus(ctx context.Context, arg db.SetTurnStatusParams) (db.AgentTurn, error)
+	ClaimTurn(ctx context.Context, arg db.ClaimTurnParams) (db.AgentTurn, error)
+	EndClaimedTurn(ctx context.Context, arg db.EndClaimedTurnParams) (db.AgentTurn, error)
+	GetJobOfTurn(ctx context.Context, turnID pgtype.UUID) (db.Job, error)
 }
 
 // Control is what people do to turns from a conversation. Stop is the button under an answer
@@ -94,20 +96,29 @@ func (c *Control) Stop(ctx context.Context, p auth.Principal, id pgtype.UUID, re
 		reason = "by " + orText(p.Name, "a person")
 	}
 	if turn.JobID.Valid {
-		err := c.jobs.StopJob(ctx, turn.JobID, reason)
-		if errors.Is(err, runners.ErrJobFinished) {
-			return turn, fmt.Errorf("%w: this turn has just ended", ErrConflict)
-		}
-		return turn, err
+		return turn, c.stopJob(ctx, turn.JobID, reason)
 	}
-	agent, err := c.store.GetAgent(ctx, turn.AgentID)
+	// No job yet: the stop takes the turn the way a start would, so the two never both win.
+	claimed, err := c.store.ClaimTurn(ctx, db.ClaimTurnParams{ID: turn.ID, ClaimTtl: interval(ClaimTTL)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Somebody is starting it: its job may be there already, before the turn says so.
+		job, jerr := c.store.GetJobOfTurn(ctx, turn.ID)
+		if jerr == nil {
+			return turn, c.stopJob(ctx, job.ID, reason)
+		}
+		if !errors.Is(jerr, pgx.ErrNoRows) {
+			return turn, jerr
+		}
+		return turn, fmt.Errorf("%w: the agent is just starting; stop it again in a moment", ErrConflict)
+	}
 	if err != nil {
 		return db.AgentTurn{}, err
 	}
-	ended, err := c.store.SetTurnStatus(ctx, db.SetTurnStatusParams{ID: turn.ID, Status: TurnStopped})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return turn, fmt.Errorf("%w: this turn has just ended", ErrConflict)
+	ended, err := c.store.EndClaimedTurn(ctx, db.EndClaimedTurnParams{ID: claimed.ID, Status: TurnStopped})
+	if err != nil {
+		return db.AgentTurn{}, err
 	}
+	agent, err := c.store.GetAgent(ctx, turn.AgentID)
 	if err != nil {
 		return db.AgentTurn{}, err
 	}
@@ -117,4 +128,12 @@ func (c *Control) Stop(ctx context.Context, p auth.Principal, id pgtype.UUID, re
 		}
 	}
 	return ended, nil
+}
+
+func (c *Control) stopJob(ctx context.Context, job pgtype.UUID, reason string) error {
+	err := c.jobs.StopJob(ctx, job, reason)
+	if errors.Is(err, runners.ErrJobFinished) {
+		return fmt.Errorf("%w: this turn has just ended", ErrConflict)
+	}
+	return err
 }

@@ -110,6 +110,50 @@ func (q *Queries) ChainCost(ctx context.Context, chainID pgtype.UUID) (float64, 
 	return column_1, err
 }
 
+const claimTurn = `-- name: ClaimTurn :one
+UPDATE agent_turns SET claimed_at = now(), updated_at = now()
+WHERE id = $1 AND status = 'queued' AND job_id IS NULL
+  AND (claimed_at IS NULL OR claimed_at < now() - $2::interval)
+RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at
+`
+
+type ClaimTurnParams struct {
+	ID       pgtype.UUID     `json:"id"`
+	ClaimTtl pgtype.Interval `json:"claim_ttl"`
+}
+
+// Claims a turn that has no job yet for whoever starts it: one claimer at a time, and a claim
+// nobody finished (a crash) expires after claim_ttl. No row: somebody else is starting it, or it
+// has its job, or it ended.
+func (q *Queries) ClaimTurn(ctx context.Context, arg ClaimTurnParams) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, claimTurn, arg.ID, arg.ClaimTtl)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+		&i.ClaimedAt,
+	)
+	return i, err
+}
+
 const countActiveTurnsOfAgent = `-- name: CountActiveTurnsOfAgent :one
 SELECT count(*)::int FROM agent_turns WHERE agent_id = $1 AND status IN ('queued', 'running')
 `
@@ -194,6 +238,49 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) (int64, error
 	return result.RowsAffected(), nil
 }
 
+const endClaimedTurn = `-- name: EndClaimedTurn :one
+UPDATE agent_turns
+SET status = $1, refusal = $2, claimed_at = NULL, finished_at = now(), updated_at = now()
+WHERE id = $3 AND status = 'queued' AND job_id IS NULL
+RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at
+`
+
+type EndClaimedTurnParams struct {
+	Status  string      `json:"status"`
+	Refusal *string     `json:"refusal"`
+	ID      pgtype.UUID `json:"id"`
+}
+
+// Ends a turn its claimer holds (a refusal found on redelivery, a stop before any job).
+func (q *Queries) EndClaimedTurn(ctx context.Context, arg EndClaimedTurnParams) (AgentTurn, error) {
+	row := q.db.QueryRow(ctx, endClaimedTurn, arg.Status, arg.Refusal, arg.ID)
+	var i AgentTurn
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.ProjectID,
+		&i.ConversationID,
+		&i.TriggerMessageID,
+		&i.ReplyMessageID,
+		&i.RequestedByKind,
+		&i.RequestedBy,
+		&i.OnBehalfOf,
+		&i.ChainID,
+		&i.ParentTurnID,
+		&i.EscalatedFrom,
+		&i.Hop,
+		&i.Tier,
+		&i.JobID,
+		&i.Status,
+		&i.Refusal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+		&i.ClaimedAt,
+	)
+	return i, err
+}
+
 const getAgent = `-- name: GetAgent :one
 SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE id = $1
 `
@@ -258,6 +345,51 @@ func (q *Queries) GetAgentByHandle(ctx context.Context, arg GetAgentByHandlePara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getJobOfTurn = `-- name: GetJobOfTurn :one
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE turn_id = $1 AND kind = 'reply' ORDER BY created_at LIMIT 1
+`
+
+// The job a turn's start queued, even when the start did not live to record it on the turn.
+func (q *Queries) GetJobOfTurn(ctx context.Context, turnID pgtype.UUID) (Job, error) {
+	row := q.db.QueryRow(ctx, getJobOfTurn, turnID)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.ProjectID,
+		&i.Phase,
+		&i.Role,
+		&i.Backend,
+		&i.Instruction,
+		&i.Status,
+		&i.RunnerID,
+		&i.Attempts,
+		&i.MaxAttempts,
+		&i.LeaseExpiresAt,
+		&i.LastEventAt,
+		&i.Bounds,
+		&i.Receipt,
+		&i.StopReason,
+		&i.CreatedByKind,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+		&i.Model,
+		&i.UnassignableSince,
+		&i.ContextBytes,
+		&i.ContextDocs,
+		&i.Objections,
+		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -680,6 +812,56 @@ func (q *Queries) ListConversationAgentIDs(ctx context.Context, conversationID p
 	return items, nil
 }
 
+const listStaleTurns = `-- name: ListStaleTurns :many
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at FROM agent_turns
+WHERE status = 'queued' AND job_id IS NULL AND created_at < $1
+  AND (claimed_at IS NULL OR claimed_at < $1)
+ORDER BY created_at DESC LIMIT 500
+`
+
+// Turns that never got a job, whose start nobody holds any more.
+func (q *Queries) ListStaleTurns(ctx context.Context, before pgtype.Timestamptz) ([]AgentTurn, error) {
+	rows, err := q.db.Query(ctx, listStaleTurns, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentTurn
+	for rows.Next() {
+		var i AgentTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.ProjectID,
+			&i.ConversationID,
+			&i.TriggerMessageID,
+			&i.ReplyMessageID,
+			&i.RequestedByKind,
+			&i.RequestedBy,
+			&i.OnBehalfOf,
+			&i.ChainID,
+			&i.ParentTurnID,
+			&i.EscalatedFrom,
+			&i.Hop,
+			&i.Tier,
+			&i.JobID,
+			&i.Status,
+			&i.Refusal,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+			&i.ClaimedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTurnsOfReplies = `-- name: ListTurnsOfReplies :many
 SELECT t.id, t.reply_message_id, t.agent_id, t.status, t.tier, t.job_id, t.refusal,
        COALESCE(u.cost_usd, 0)::float8 AS cost_usd, COALESCE(u.duration_ms, 0)::bigint AS duration_ms,
@@ -737,6 +919,55 @@ func (q *Queries) ListTurnsOfReplies(ctx context.Context, ids []pgtype.UUID) ([]
 	return items, nil
 }
 
+const listWaitingTurns = `-- name: ListWaitingTurns :many
+SELECT t.id, t.agent_id, t.project_id, t.conversation_id, t.trigger_message_id, t.reply_message_id, t.requested_by_kind, t.requested_by, t.on_behalf_of, t.chain_id, t.parent_turn_id, t.escalated_from, t.hop, t.tier, t.job_id, t.status, t.refusal, t.created_at, t.updated_at, t.finished_at, t.claimed_at FROM agent_turns t JOIN jobs j ON j.id = t.job_id
+WHERE t.status = 'queued' AND j.status = 'queued' AND j.created_at < $1
+ORDER BY t.created_at DESC LIMIT 500
+`
+
+// Turns whose job no runner has taken for a while, to say so under the answer.
+func (q *Queries) ListWaitingTurns(ctx context.Context, before pgtype.Timestamptz) ([]AgentTurn, error) {
+	rows, err := q.db.Query(ctx, listWaitingTurns, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentTurn
+	for rows.Next() {
+		var i AgentTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.ProjectID,
+			&i.ConversationID,
+			&i.TriggerMessageID,
+			&i.ReplyMessageID,
+			&i.RequestedByKind,
+			&i.RequestedBy,
+			&i.OnBehalfOf,
+			&i.ChainID,
+			&i.ParentTurnID,
+			&i.EscalatedFrom,
+			&i.Hop,
+			&i.Tier,
+			&i.JobID,
+			&i.Status,
+			&i.Refusal,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+			&i.ClaimedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceAgents = `-- name: ListWorkspaceAgents :many
 SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE project_id IS NULL AND deleted_at IS NULL ORDER BY handle
 `
@@ -778,6 +1009,15 @@ func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const releaseTurn = `-- name: ReleaseTurn :exec
+UPDATE agent_turns SET claimed_at = NULL WHERE id = $1 AND job_id IS NULL
+`
+
+func (q *Queries) ReleaseTurn(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, releaseTurn, id)
+	return err
 }
 
 const setTurnJob = `-- name: SetTurnJob :one

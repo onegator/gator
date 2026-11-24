@@ -88,8 +88,33 @@ func consentCard(turn db.AgentTurn, agent db.Agent, task db.Task, state string, 
 	}}
 }
 
-// AskConsent implements ConsentAsker: the card goes where the agent answered.
-func (c *Consent) AskConsent(ctx context.Context, turn db.AgentTurn, home db.Conversation, task db.Task) error {
+// consentCardStore is what ConsentCards reads. *db.Queries is one.
+type consentCardStore interface {
+	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
+	FindCard(ctx context.Context, arg db.FindCardParams) (db.Message, error)
+}
+
+// ConsentCards posts the question (ConsentAsker); Consent answers it.
+type ConsentCards struct {
+	store consentCardStore
+	cards cardSayer
+}
+
+// NewConsentCards builds it.
+func NewConsentCards(store consentCardStore, cards cardSayer) *ConsentCards {
+	return &ConsentCards{store: store, cards: cards}
+}
+
+// AskConsent implements ConsentAsker: the card goes where the agent answered, once; a card
+// already there, asked or answered, is left as it is.
+func (c *ConsentCards) AskConsent(ctx context.Context, turn db.AgentTurn, home db.Conversation, task db.Task) error {
+	_, err := c.store.FindCard(ctx, db.FindCardParams{CardKey: new(consentKey(turn.ID)), ConversationIds: []pgtype.UUID{home.ID}})
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	agent, err := c.store.GetAgent(ctx, turn.AgentID)
 	if err != nil {
 		return err

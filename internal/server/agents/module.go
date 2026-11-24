@@ -60,7 +60,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	q := db.New(pool)
 	voice := conversations.NewVoice(pool)
 	chat := deps.Conversations
-	starter := NewStarter(q, Locker{Pool: pool}, chat.Threads, chat.Asks, voice, deps.Jobs, nil)
+	starter := NewStarter(q, chat.Threads, chat.Asks, voice, deps.Jobs, NewConsentCards(q, voice))
 	guards := Guards{
 		Paused,
 		Writers{Access: chat.Access},
@@ -71,7 +71,6 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	}
 	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})
 	consent := NewConsent(q, voice, chat.Access, deps.Roles, deps.Process, guards, starter)
-	starter.consent = consent
 	return &Module{
 		Consent:    consent,
 		Directory:  NewDirectory(q, deps.Roles, chat.Access),
@@ -94,6 +93,11 @@ func (m *Module) Consumer(hub *events.Hub, log *slog.Logger, poll time.Duration)
 	c.On(m.Summaries.Handler(), "job.finished")
 	c.On(m.Tracker, m.Tracker.Events()...)
 	return c
+}
+
+// Sweeper ends what starts left hanging. Run it with go sweeper.Run(ctx, time.Minute).
+func (m *Module) Sweeper(log *slog.Logger) *Sweeper {
+	return NewSweeper(db.New(m.pool), m.Voice, log)
 }
 
 // Streamer writes replies into their messages as agents write them, from the hub's job output.

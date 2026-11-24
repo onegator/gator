@@ -100,7 +100,7 @@ func Ending(agent db.Agent, job db.Job, said db.Message) (string, string) {
 		reason = *job.StopReason
 	}
 	partial := ""
-	if said.Status == conversations.StatusStreaming && said.Body != Reading(agent) {
+	if said.Status == conversations.StatusStreaming && said.Body != Reading(agent) && said.Body != Waiting(agent) {
 		partial = strings.TrimSpace(said.Body)
 	}
 	switch job.Status {

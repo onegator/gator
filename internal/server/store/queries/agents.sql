@@ -141,3 +141,39 @@ SELECT * FROM agent_turns
 WHERE agent_id = sqlc.arg(agent_id) AND created_at >= sqlc.arg(since)
 ORDER BY created_at DESC
 LIMIT sqlc.arg(max_rows);
+
+-- name: ClaimTurn :one
+-- Claims a turn that has no job yet for whoever starts it: one claimer at a time, and a claim
+-- nobody finished (a crash) expires after claim_ttl. No row: somebody else is starting it, or it
+-- has its job, or it ended.
+UPDATE agent_turns SET claimed_at = now(), updated_at = now()
+WHERE id = sqlc.arg(id) AND status = 'queued' AND job_id IS NULL
+  AND (claimed_at IS NULL OR claimed_at < now() - sqlc.arg(claim_ttl)::interval)
+RETURNING *;
+
+-- name: ReleaseTurn :exec
+UPDATE agent_turns SET claimed_at = NULL WHERE id = $1 AND job_id IS NULL;
+
+-- name: EndClaimedTurn :one
+-- Ends a turn its claimer holds (a refusal found on redelivery, a stop before any job).
+UPDATE agent_turns
+SET status = sqlc.arg(status), refusal = sqlc.narg(refusal), claimed_at = NULL, finished_at = now(), updated_at = now()
+WHERE id = sqlc.arg(id) AND status = 'queued' AND job_id IS NULL
+RETURNING *;
+
+-- name: GetJobOfTurn :one
+-- The job a turn's start queued, even when the start did not live to record it on the turn.
+SELECT * FROM jobs WHERE turn_id = $1 AND kind = 'reply' ORDER BY created_at LIMIT 1;
+
+-- name: ListStaleTurns :many
+-- Turns that never got a job, whose start nobody holds any more.
+SELECT * FROM agent_turns
+WHERE status = 'queued' AND job_id IS NULL AND created_at < sqlc.arg(before)
+  AND (claimed_at IS NULL OR claimed_at < sqlc.arg(before))
+ORDER BY created_at DESC LIMIT 500;
+
+-- name: ListWaitingTurns :many
+-- Turns whose job no runner has taken for a while, to say so under the answer.
+SELECT t.* FROM agent_turns t JOIN jobs j ON j.id = t.job_id
+WHERE t.status = 'queued' AND j.status = 'queued' AND j.created_at < sqlc.arg(before)
+ORDER BY t.created_at DESC LIMIT 500;
