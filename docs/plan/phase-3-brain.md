@@ -34,7 +34,7 @@ go wywołała (faza 2: `agent_turns.on_behalf_of`). Prywatne wpisy jednej osoby 
 turnu wywołanego przez kogoś innego. Ten sam warunek obowiązuje w MCP i w pakiecie promptu, a testy
 to sprawdzają.
 
-## Dane (`00041_brain.sql`)
+## Dane (`00042_brain.sql`)
 
 ```sql
 CREATE TABLE brain_entries (
@@ -81,11 +81,11 @@ CREATE TABLE brain_citations (        -- które wpisy dostał / zacytował job
 );
 ```
 
-`00042_brain_backfill.sql` przenosi `product_context` i `knowledge_entries`, zachowując statusy,
+`00043_brain_backfill.sql` przenosi `product_context` i `knowledge_entries`, zachowując statusy,
 autorów i `source_task_id`. Stare tabele zostają do następnego wydania (krok down przywraca dane).
 
 **Wyszukiwanie:** zaczynamy od Postgres FTS (`tsvector` + `ts_rank`) z filtrami scope/kind, co nie
-wymaga żadnej nowej zależności. `00043_brain_embeddings.sql` jest opcjonalna: rozszerzenie
+wymaga żadnej nowej zależności. `00044_brain_embeddings.sql` jest opcjonalna: rozszerzenie
 `vector` (pgvector), kolumna `embedding vector(1024)` i wyszukiwanie hybrydowe (FTS + kosinus, RRF).
 Wymaga obrazu Postgresa z pgvector (`pgvector/pgvector:pg16` w `docker-compose.yml`, `deploy/compose.yaml`,
 `install.sh`) i dostawcy embeddingów za interfejsem `brain.Embedder` (np. Voyage albo lokalny model
@@ -161,8 +161,8 @@ GET    /projects/{id}/brain/preview?task=             co dostałby job tego task
 
 ## Podział na PR-y
 
-1. Migracja 00041, serwis `internal/server/brain` (CRUD, wersje, reguły widoczności z testami).
-2. Backfill 00042 i fasady `/product`, `/knowledge` na nowym magazynie.
+1. Migracja 00042, serwis `internal/server/brain` (CRUD, wersje, reguły widoczności z testami).
+2. Backfill 00043 i fasady `/product`, `/knowledge` na nowym magazynie.
 3. Pakiet dla jobów na Brainie (zamiast product slice + knowledge) i `brain_citations`.
 4. Serwer MCP `/mcp` (token joba i usera), wpis w `--mcp-config` runnera, nagrania testowe.
 5. Curator rozmów i karta `brain_proposal` w wątku.

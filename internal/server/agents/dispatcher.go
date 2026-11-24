@@ -146,8 +146,8 @@ func (d *Dispatcher) asked(ctx context.Context, msg db.Message, conv db.Conversa
 		}
 		seen[id.Bytes] = true
 		a, err := d.store.GetAgent(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue // deleted since
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && a.DeletedAt.Valid) {
+			continue // put away since
 		}
 		if err != nil {
 			return nil, err

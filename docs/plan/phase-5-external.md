@@ -54,7 +54,7 @@ umiejętności, endpoint, auth) i zlecanie mu zadań z cyklem życia i strumieni
 - delegacja agent→agent z fazy 2 obejmuje remote, z tymi samymi limitami hop i budżetu.
 
 ```sql
--- 00046_external_agents.sql
+-- 00047_external_agents.sql
 ALTER TABLE agents ADD COLUMN kind text NOT NULL DEFAULT 'local' CHECK (kind IN ('local','remote')),
                    ADD COLUMN remote jsonb,          -- {card_url, auth, secrets_ref}
                    ADD COLUMN a2a_exposed boolean NOT NULL DEFAULT false;
@@ -100,7 +100,7 @@ cardAction?                                przyciski Approve/Rollback w Slacku (
 | użytkownik Slacka bez konta Gatora | `author_kind='external'`; agent go słucha, ale nie może zatwierdzać ani dawać consentu `work` |
 
 ```sql
--- 00047_messaging_bridges.sql
+-- 00048_messaging_bridges.sql
 CREATE TABLE external_identities (
     provider text NOT NULL, external_id text NOT NULL,
     user_id uuid REFERENCES users(id) ON DELETE CASCADE,

@@ -3,16 +3,16 @@ SELECT * FROM agents WHERE id = $1;
 
 -- name: ListAgentsVisibleIn :many
 -- The agents a project's people can mention: the project's own and the workspace's.
-SELECT * FROM agents WHERE project_id = sqlc.arg(project_id) OR project_id IS NULL
+SELECT * FROM agents WHERE (project_id = sqlc.arg(project_id) OR project_id IS NULL) AND deleted_at IS NULL
 ORDER BY handle;
 
 -- name: ListWorkspaceAgents :many
-SELECT * FROM agents WHERE project_id IS NULL ORDER BY handle;
+SELECT * FROM agents WHERE project_id IS NULL AND deleted_at IS NULL ORDER BY handle;
 
 -- name: GetAgentByHandle :one
 -- A handle names at most one agent where it is seen (see agents_handle_visible_once).
 SELECT * FROM agents
-WHERE handle = sqlc.arg(handle) AND (project_id = sqlc.arg(project_id) OR project_id IS NULL)
+WHERE handle = sqlc.arg(handle) AND (project_id = sqlc.arg(project_id) OR project_id IS NULL) AND deleted_at IS NULL
 LIMIT 1;
 
 -- name: AgentForRole :one
@@ -20,7 +20,7 @@ LIMIT 1;
 -- made for the role (a @backend-reviewer) before the built-in one. The template keeps saying
 -- role: reviewer; a project swaps the agent without touching it.
 SELECT * FROM agents
-WHERE role_key = sqlc.arg(role_key) AND (project_id = sqlc.arg(project_id) OR project_id IS NULL)
+WHERE role_key = sqlc.arg(role_key) AND (project_id = sqlc.arg(project_id) OR project_id IS NULL) AND deleted_at IS NULL
 ORDER BY project_id IS NULL, (source->>'kind' = 'builtin'), created_at DESC
 LIMIT 1;
 
@@ -116,7 +116,12 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: DeleteAgent :execrows
-DELETE FROM agents WHERE id = $1 AND source->>'kind' <> 'builtin';
+-- Puts an agent people made away; its turns stay, and so does what they cost.
+UPDATE agents SET deleted_at = now(), status = 'paused', updated_at = now()
+WHERE id = $1 AND source->>'kind' <> 'builtin' AND deleted_at IS NULL;
+
+-- name: CountActiveTurnsOfAgent :one
+SELECT count(*)::int FROM agent_turns WHERE agent_id = $1 AND status IN ('queued', 'running');
 
 -- name: AgentStats :one
 -- An agent's record since a moment: its turns, its jobs (phase work and answers), how many of

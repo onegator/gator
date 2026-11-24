@@ -27,6 +27,7 @@ type directoryStore interface {
 	CreateAgent(ctx context.Context, arg db.CreateAgentParams) (db.Agent, error)
 	UpdateAgent(ctx context.Context, arg db.UpdateAgentParams) (db.Agent, error)
 	DeleteAgent(ctx context.Context, id pgtype.UUID) (int64, error)
+	CountActiveTurnsOfAgent(ctx context.Context, agentID pgtype.UUID) (int32, error)
 	AgentStats(ctx context.Context, arg db.AgentStatsParams) (db.AgentStatsRow, error)
 	ListAgentTurns(ctx context.Context, arg db.ListAgentTurnsParams) ([]db.AgentTurn, error)
 }
@@ -96,7 +97,7 @@ func (d *Directory) ListWorkspace(ctx context.Context, p auth.Principal) ([]db.A
 // Get answers an agent the caller may see.
 func (d *Directory) Get(ctx context.Context, p auth.Principal, id pgtype.UUID) (db.Agent, error) {
 	a, err := d.store.GetAgent(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && a.DeletedAt.Valid) {
 		return db.Agent{}, ErrNotFound
 	}
 	if err != nil {
@@ -184,7 +185,9 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 	return out, err
 }
 
-// Delete removes an agent a person made. A built-in one is paused instead.
+// Delete puts away an agent a person made: it answers nobody from then on and its handle is free,
+// while its turns stay as the record of what it did and cost. One still answering is not put
+// away until it is done or stopped. A built-in agent is paused instead.
 func (d *Directory) Delete(ctx context.Context, p auth.Principal, id pgtype.UUID) error {
 	a, err := d.Get(ctx, p, id)
 	if err != nil {
@@ -195,6 +198,13 @@ func (d *Directory) Delete(ctx context.Context, p auth.Principal, id pgtype.UUID
 	}
 	if sourceOf(a) == SourceBuiltin {
 		return fmt.Errorf("%w: a built-in agent is not deleted; pause it", ErrConflict)
+	}
+	active, err := d.store.CountActiveTurnsOfAgent(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	if active > 0 {
+		return fmt.Errorf("%w: @%s is still answering; stop its turns or wait for them first", ErrConflict, a.Handle)
 	}
 	_, err = d.store.DeleteAgent(ctx, a.ID)
 	return err

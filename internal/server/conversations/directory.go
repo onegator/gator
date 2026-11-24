@@ -508,7 +508,7 @@ func agentVisible(ctx context.Context, q *db.Queries, project, agent pgtype.UUID
 	if err != nil {
 		return false, err
 	}
-	return !a.ProjectID.Valid || a.ProjectID == project, nil
+	return !a.DeletedAt.Valid && (!a.ProjectID.Valid || a.ProjectID == project), nil
 }
 
 // RemoveMember takes someone out of a conversation: oneself by leaving, anyone else by a

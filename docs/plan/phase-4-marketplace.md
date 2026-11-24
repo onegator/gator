@@ -97,7 +97,7 @@ Runner **nigdy** nie dostaje tokenu do zewnętrznego MCP. `--mcp-config` joba ws
 - działa w `limits.Breaker`, jak pluginy.
 
 ```sql
--- 00045_mcp_servers.sql
+-- 00046_mcp_servers.sql
 CREATE TABLE mcp_servers (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id  uuid REFERENCES projects(id) ON DELETE CASCADE,   -- NULL = workspace
@@ -126,7 +126,7 @@ nasza implementacja):
 - skrypty skilla nie są uruchamiane przy instalacji, tylko przez agenta w trakcie joba, w jego
   uprawnieniach (`tier`).
 
-## Dane (`00044_marketplace.sql`)
+## Dane (`00045_marketplace.sql`)
 
 ```sql
 CREATE TABLE marketplace_registries (

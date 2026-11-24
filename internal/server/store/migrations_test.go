@@ -164,3 +164,46 @@ func TestAgentMigrationsRoundTrip(t *testing.T) {
 	}
 	check("second up")
 }
+
+// A default agent steps aside for a workspace agent that has its handle, rather than failing the
+// creation of the project; projects made at the same moment do not wait on or fail each other.
+func TestDefaultAgentsStepAsideAndProjectsDoNotCollide(t *testing.T) {
+	conn, pool := scratch(t)
+	ctx := context.Background()
+	if err := goose.UpContext(ctx, conn, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agents (project_id, handle, display_name, source) VALUES (NULL, 'reviewer', 'Ours', '{"kind":"custom"}')`); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 8)
+	for i := range 8 {
+		go func() {
+			_, err := pool.Exec(ctx, `INSERT INTO projects (slug, name) VALUES ($1, 'P')`, fmt.Sprintf("p%d", i))
+			errs <- err
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Fatalf("a project failed to be made: %v", err)
+		}
+	}
+	var own, reviewers int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE project_id IS NOT NULL), count(*) FILTER (WHERE handle = 'reviewer')
+		FROM agents`).Scan(&own, &reviewers); err != nil {
+		t.Fatal(err)
+	}
+	if own != 8*7 || reviewers != 1 {
+		t.Fatalf("each project has the seven defaults the workspace left it: %d agents, %d @reviewer", own, reviewers)
+	}
+	// An agent put away frees its handle, and keeps its turns.
+	if _, err := pool.Exec(ctx, `UPDATE agents SET deleted_at = now() WHERE project_id IS NULL AND handle = 'reviewer'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT gator_seed_default_agents(id) FROM projects`); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agents WHERE handle = 'reviewer' AND deleted_at IS NULL`).Scan(&reviewers); err != nil || reviewers != 8 {
+		t.Fatalf("every project takes @reviewer back: %d %v", reviewers, err)
+	}
+}

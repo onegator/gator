@@ -12,8 +12,8 @@ import (
 )
 
 const agentForRole = `-- name: AgentForRole :one
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents
-WHERE role_key = $1 AND (project_id = $2 OR project_id IS NULL)
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents
+WHERE role_key = $1 AND (project_id = $2 OR project_id IS NULL) AND deleted_at IS NULL
 ORDER BY project_id IS NULL, (source->>'kind' = 'builtin'), created_at DESC
 LIMIT 1
 `
@@ -47,6 +47,7 @@ func (q *Queries) AgentForRole(ctx context.Context, arg AgentForRoleParams) (Age
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -109,11 +110,22 @@ func (q *Queries) ChainCost(ctx context.Context, chainID pgtype.UUID) (float64, 
 	return column_1, err
 }
 
+const countActiveTurnsOfAgent = `-- name: CountActiveTurnsOfAgent :one
+SELECT count(*)::int FROM agent_turns WHERE agent_id = $1 AND status IN ('queued', 'running')
+`
+
+func (q *Queries) CountActiveTurnsOfAgent(ctx context.Context, agentID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countActiveTurnsOfAgent, agentID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createAgent = `-- name: CreateAgent :one
 INSERT INTO agents (project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, status, source, created_by)
 VALUES ($1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, '{"kind":"custom"}', $11)
-RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
 `
 
 type CreateAgentParams struct {
@@ -163,14 +175,17 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const deleteAgent = `-- name: DeleteAgent :execrows
-DELETE FROM agents WHERE id = $1 AND source->>'kind' <> 'builtin'
+UPDATE agents SET deleted_at = now(), status = 'paused', updated_at = now()
+WHERE id = $1 AND source->>'kind' <> 'builtin' AND deleted_at IS NULL
 `
 
+// Puts an agent people made away; its turns stay, and so does what they cost.
 func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteAgent, id)
 	if err != nil {
@@ -180,7 +195,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) (int64, error
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents WHERE id = $1
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -204,13 +219,14 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getAgentByHandle = `-- name: GetAgentByHandle :one
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents
-WHERE handle = $1 AND (project_id = $2 OR project_id IS NULL)
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents
+WHERE handle = $1 AND (project_id = $2 OR project_id IS NULL) AND deleted_at IS NULL
 LIMIT 1
 `
 
@@ -241,12 +257,13 @@ func (q *Queries) GetAgentByHandle(ctx context.Context, arg GetAgentByHandlePara
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE id = $1
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at FROM agent_turns WHERE id = $1
 `
 
 func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (AgentTurn, error) {
@@ -273,12 +290,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (AgentTurn, error
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
 
 const getTurnByJob = `-- name: GetTurnByJob :one
-SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE job_id = $1
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at FROM agent_turns WHERE job_id = $1
 `
 
 func (q *Queries) GetTurnByJob(ctx context.Context, jobID pgtype.UUID) (AgentTurn, error) {
@@ -305,12 +323,13 @@ func (q *Queries) GetTurnByJob(ctx context.Context, jobID pgtype.UUID) (AgentTur
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
 
 const getTurnByTrigger = `-- name: GetTurnByTrigger :one
-SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE agent_id = $1 AND trigger_message_id = $2
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at FROM agent_turns WHERE agent_id = $1 AND trigger_message_id = $2
 `
 
 type GetTurnByTriggerParams struct {
@@ -342,12 +361,13 @@ func (q *Queries) GetTurnByTrigger(ctx context.Context, arg GetTurnByTriggerPara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
 
 const getTurnForUpdate = `-- name: GetTurnForUpdate :one
-SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE id = $1 FOR UPDATE
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at FROM agent_turns WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetTurnForUpdate(ctx context.Context, id pgtype.UUID) (AgentTurn, error) {
@@ -374,6 +394,7 @@ func (q *Queries) GetTurnForUpdate(ctx context.Context, id pgtype.UUID) (AgentTu
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
@@ -386,7 +407,7 @@ VALUES ($1, $2, $3, $4,
         COALESCE($8::uuid, gen_random_uuid()),
         $9, $10, $11, $12, $13, $14)
 ON CONFLICT (agent_id, trigger_message_id) DO NOTHING
-RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at
 `
 
 type InsertTurnParams struct {
@@ -446,6 +467,7 @@ func (q *Queries) InsertTurn(ctx context.Context, arg InsertTurnParams) (AgentTu
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
@@ -488,7 +510,7 @@ func (q *Queries) JobProgress(ctx context.Context, jobID pgtype.UUID) (JobProgre
 }
 
 const listActiveTurnsIn = `-- name: ListActiveTurnsIn :many
-SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns WHERE conversation_id = $1 AND status IN ('queued', 'running') ORDER BY created_at
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at FROM agent_turns WHERE conversation_id = $1 AND status IN ('queued', 'running') ORDER BY created_at
 `
 
 // The turns still answering in a conversation, oldest first.
@@ -522,6 +544,7 @@ func (q *Queries) ListActiveTurnsIn(ctx context.Context, conversationID pgtype.U
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.ClaimedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -534,7 +557,7 @@ func (q *Queries) ListActiveTurnsIn(ctx context.Context, conversationID pgtype.U
 }
 
 const listAgentTurns = `-- name: ListAgentTurns :many
-SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at FROM agent_turns
 WHERE agent_id = $1 AND created_at >= $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -576,6 +599,7 @@ func (q *Queries) ListAgentTurns(ctx context.Context, arg ListAgentTurnsParams) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FinishedAt,
+			&i.ClaimedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -588,7 +612,7 @@ func (q *Queries) ListAgentTurns(ctx context.Context, arg ListAgentTurnsParams) 
 }
 
 const listAgentsVisibleIn = `-- name: ListAgentsVisibleIn :many
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents WHERE project_id = $1 OR project_id IS NULL
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE (project_id = $1 OR project_id IS NULL) AND deleted_at IS NULL
 ORDER BY handle
 `
 
@@ -620,6 +644,7 @@ func (q *Queries) ListAgentsVisibleIn(ctx context.Context, projectID pgtype.UUID
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -713,7 +738,7 @@ func (q *Queries) ListTurnsOfReplies(ctx context.Context, ids []pgtype.UUID) ([]
 }
 
 const listWorkspaceAgents = `-- name: ListWorkspaceAgents :many
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents WHERE project_id IS NULL ORDER BY handle
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE project_id IS NULL AND deleted_at IS NULL ORDER BY handle
 `
 
 func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
@@ -743,6 +768,7 @@ func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -756,7 +782,7 @@ func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
 
 const setTurnJob = `-- name: SetTurnJob :one
 UPDATE agent_turns SET job_id = $1, tier = $2, updated_at = now()
-WHERE id = $3 RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+WHERE id = $3 RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at
 `
 
 type SetTurnJobParams struct {
@@ -789,13 +815,14 @@ func (q *Queries) SetTurnJob(ctx context.Context, arg SetTurnJobParams) (AgentTu
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
 
 const setTurnReply = `-- name: SetTurnReply :one
 UPDATE agent_turns SET reply_message_id = $1, updated_at = now()
-WHERE id = $2 RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+WHERE id = $2 RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at
 `
 
 type SetTurnReplyParams struct {
@@ -827,6 +854,7 @@ func (q *Queries) SetTurnReply(ctx context.Context, arg SetTurnReplyParams) (Age
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
@@ -836,7 +864,7 @@ UPDATE agent_turns
 SET status = $1, refusal = $2, updated_at = now(),
     finished_at = CASE WHEN $1::text IN ('done', 'failed', 'stopped', 'refused') THEN now() ELSE finished_at END
 WHERE id = $3 AND status IN ('queued', 'running')
-RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at
+RETURNING id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at, claimed_at
 `
 
 type SetTurnStatusParams struct {
@@ -870,6 +898,7 @@ func (q *Queries) SetTurnStatus(ctx context.Context, arg SetTurnStatusParams) (A
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+		&i.ClaimedAt,
 	)
 	return i, err
 }
@@ -880,7 +909,7 @@ SET handle = $1, display_name = $2, description = $3,
     avatar = $4, role_key = $5, instructions = $6, tier = $7,
     policy = $8, status = $9, updated_at = now()
 WHERE id = $10
-RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
 `
 
 type UpdateAgentParams struct {
@@ -928,6 +957,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }

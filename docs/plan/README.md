@@ -67,13 +67,15 @@ przychodzi jako karta w wątku taska i działa tym samym endpointem co dziś `/t
 | Faza | Migracja |
 |---|---|
 | 1 | `00035_conversations.sql`, `00036_general_channels.sql`, `00037_task_conversations.sql`, `00038_message_search.sql` |
-| 2 | `00039_agents.sql`, `00040_agent_turns.sql` |
-| 3 | `00041_brain.sql`, `00042_brain_backfill.sql`, `00043_brain_embeddings.sql` (opcjonalna, pgvector) |
-| 4 | `00044_marketplace.sql`, `00045_mcp_servers.sql` |
-| 5 | `00046_external_agents.sql`, `00047_messaging_bridges.sql` |
+| 2 | `00039_agents.sql`, `00040_agent_turns.sql`, `00041_agents_keep.sql` |
+| 3 | `00042_brain.sql`, `00043_brain_backfill.sql`, `00044_brain_embeddings.sql` (opcjonalna, pgvector) |
+| 4 | `00045_marketplace.sql`, `00046_mcp_servers.sql` |
+| 5 | `00047_external_agents.sql`, `00048_messaging_bridges.sql` |
 
 Faza 1 dostała dwie migracje więcej niż w pierwszej wersji planu: backfill `#general` i backfill
 wątków otwartych tasków to osobne kroki (osobne PR-y), więc numery kolejnych faz przesunęły się o 2.
+Faza 2 dostała jedną więcej (`00041_agents_keep.sql`: agentów się odkłada, a nie usuwa, i turn jest
+zajmowany przed startem), więc fazy 3–5 przesunęły się o kolejną.
 
 Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
 

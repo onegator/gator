@@ -26,6 +26,7 @@ type Agent struct {
 	CreatedBy    pgtype.UUID        `json:"created_by"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
 }
 
 type AgentCall struct {
@@ -58,6 +59,7 @@ type AgentTurn struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	ClaimedAt        pgtype.Timestamptz `json:"claimed_at"`
 }
 
 type ApiToken struct {
