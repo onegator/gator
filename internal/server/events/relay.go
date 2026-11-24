@@ -179,21 +179,42 @@ func (r *Relay) Drain(ctx context.Context) error {
 // update repeats a batch, which deliver must tolerate. It stops at the first database error
 // and tries again on the caller's next wake.
 func DrainCursor(ctx context.Context, pool *pgxpool.Pool, cursor string, types []string, deliver func(db.EventsAfterRow)) {
+	_ = DrainCursorUntil(ctx, pool, cursor, types, func(r db.EventsAfterRow) error {
+		deliver(r)
+		return nil
+	})
+}
+
+// DrainCursorUntil is DrainCursor for a consumer that can fail: it stops at the first event
+// deliver fails, leaves the cursor just before it, and answers the error, so the event comes
+// again on the next drain instead of being lost.
+func DrainCursorUntil(ctx context.Context, pool *pgxpool.Pool, cursor string, types []string, deliver func(db.EventsAfterRow) error) error {
 	q := db.New(pool)
 	for ctx.Err() == nil {
 		after, err := q.GetEventCursor(ctx, cursor)
 		if err != nil {
-			return
+			return err
 		}
 		rows, err := q.EventsAfter(ctx, db.EventsAfterParams{After: after, Types: types, MaxRows: 100})
 		if err != nil || len(rows) == 0 {
-			return
+			return err
 		}
+		done := after
+		var failed error
 		for _, r := range rows {
-			deliver(r)
+			if failed = deliver(r); failed != nil {
+				break
+			}
+			done = r.ID
 		}
-		if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursor, EventID: rows[len(rows)-1].ID}); err != nil {
-			return
+		if done > after {
+			if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursor, EventID: done}); err != nil {
+				return err
+			}
+		}
+		if failed != nil {
+			return failed
 		}
 	}
+	return ctx.Err()
 }

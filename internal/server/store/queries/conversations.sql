@@ -156,3 +156,7 @@ INSERT INTO conversation_members (conversation_id, member_kind, member_id, last_
 VALUES (sqlc.arg(conversation_id), 'user', sqlc.arg(user_id), sqlc.arg(seq)::bigint)
 ON CONFLICT (conversation_id, member_kind, member_id)
 DO UPDATE SET last_read_seq = GREATEST(conversation_members.last_read_seq, EXCLUDED.last_read_seq);
+
+-- name: LockConversation :exec
+-- Holds the conversation's row until the transaction ends: writers of its cards go one at a time.
+SELECT id FROM conversations WHERE id = $1 FOR UPDATE;

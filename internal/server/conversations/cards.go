@@ -57,6 +57,12 @@ func writeCard(ctx context.Context, q *db.Queries, conv db.Conversation, c Card)
 	if err != nil {
 		return db.Message{}, cardUnchanged, err
 	}
+	// Two writers of one card (the consumer and a request, or an event delivered twice) take
+	// turns on the conversation's row, so the second finds the first one's card and updates it
+	// rather than posting a second one.
+	if err := q.LockConversation(ctx, conv.ID); err != nil {
+		return db.Message{}, cardUnchanged, err
+	}
 	existing, err := q.GetCardForUpdate(ctx, db.GetCardForUpdateParams{ConversationID: conv.ID, CardKey: &c.Key})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

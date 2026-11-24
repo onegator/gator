@@ -37,6 +37,8 @@ type Consumer struct {
 	poll     time.Duration
 	handlers map[string][]Handler
 	types    []string
+	// attempts counts the failed tries of the event the drain is stuck on.
+	attempts map[int64]int
 }
 
 // NewConsumer builds a consumer with no handlers; poll defaults to two seconds.
@@ -47,7 +49,7 @@ func NewConsumer(pool *pgxpool.Pool, hub *events.Hub, log *slog.Logger, poll tim
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Consumer{pool: pool, hub: hub, log: log, poll: poll, handlers: map[string][]Handler{}}
+	return &Consumer{pool: pool, hub: hub, log: log, poll: poll, handlers: map[string][]Handler{}, attempts: map[int64]int{}}
 }
 
 // On has h handle every event of these types, after the handlers already registered for them.
@@ -81,16 +83,30 @@ func (c *Consumer) Run(ctx context.Context) {
 	}
 }
 
-// Drain handles every event after the cursor once (at least once, across crashes).
+// maxAttempts is how often one event is tried before it is given up on, so that one event no
+// handler can take does not stop every conversation from following the work.
+const maxAttempts = 5
+
+// Drain handles the events after the cursor in order, at least once. A handler that fails stops
+// the drain at that event, and the next drain tries it again; after maxAttempts it is logged
+// and passed over.
 func (c *Consumer) Drain(ctx context.Context) {
 	if len(c.types) == 0 {
 		return
 	}
-	events.DrainCursor(ctx, c.pool, cursorName, c.types, func(r db.EventsAfterRow) {
+	err := events.DrainCursorUntil(ctx, c.pool, cursorName, c.types, func(r db.EventsAfterRow) error {
 		for _, h := range c.handlers[r.Type] {
-			if err := h.Handle(ctx, r); err != nil && ctx.Err() == nil {
-				c.log.Warn("conversations", "event", r.Type, "id", r.ID, "err", err)
+			if err := h.Handle(ctx, r); err != nil {
+				if c.attempts[r.ID]++; c.attempts[r.ID] < maxAttempts {
+					return err
+				}
+				c.log.Error("conversations: giving up on an event", "event", r.Type, "id", r.ID, "err", err)
 			}
 		}
+		delete(c.attempts, r.ID)
+		return nil
 	})
+	if err != nil && ctx.Err() == nil {
+		c.log.Warn("conversations", "err", err)
+	}
 }

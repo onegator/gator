@@ -1024,3 +1024,28 @@ func TestClientIDIsPerSender(t *testing.T) {
 		t.Fatalf("another sender's same client id: %d %+v", code, theirs)
 	}
 }
+
+// task.created delivered twice leaves one task card and one thread.
+func TestARedeliveredTaskCreatedChangesNothing(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("twice")
+	pid := c.project.Id.String()
+	var task gen.Task
+	h.as(c.member, func() { h.do("POST", "/projects/"+pid+"/tasks", gen.NewTask{Kind: "bug", Title: "Twice"}, &task) })
+	for range 2 {
+		if _, err := h.pool.Exec(context.Background(), `INSERT INTO events (type, aggregate, aggregate_id, payload) VALUES ('task.created', 'task', $1, '{}')`, task.Id.String()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g, _ := h.general(c.member, pid)
+	eventually(t, "the task's card", func() bool { return len(h.cardsIn(c.member, g.Id.String(), "task")) > 0 })
+	time.Sleep(500 * time.Millisecond)
+	if n := len(h.cardsIn(c.member, g.Id.String(), "task")); n != 1 {
+		t.Fatalf("%d task cards for one task", n)
+	}
+	var n int
+	_ = h.pool.QueryRow(context.Background(), "SELECT count(*) FROM conversations WHERE task_id = $1", task.Id.String()).Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d threads for one task", n)
+	}
+}

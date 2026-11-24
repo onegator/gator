@@ -696,6 +696,16 @@ func (q *Queries) ListProjectConversations(ctx context.Context, arg ListProjectC
 	return items, nil
 }
 
+const lockConversation = `-- name: LockConversation :exec
+SELECT id FROM conversations WHERE id = $1 FOR UPDATE
+`
+
+// Holds the conversation's row until the transaction ends: writers of its cards go one at a time.
+func (q *Queries) LockConversation(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockConversation, id)
+	return err
+}
+
 const markConversationRead = `-- name: MarkConversationRead :one
 INSERT INTO conversation_members (conversation_id, member_kind, member_id, last_read_seq)
 SELECT c.id, 'user', $1, LEAST($2::bigint, c.last_seq)
