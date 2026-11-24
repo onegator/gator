@@ -214,7 +214,7 @@ func serve(ctx context.Context) error {
 	go chat.Consumer(hub, log, 0).Run(ctx)
 	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
 	// within the limits of a chain of delegations and the project's budget.
-	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Log: log})
+	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Roles: auth.Authorizer{Pool: db.Pool}, Log: log})
 	runnerMgr.UseBriefer(team.Briefer)
 	go team.Consumer(hub, log, 0).Run(ctx)
 	go team.Streamer(hub, log, 0).Run(ctx)

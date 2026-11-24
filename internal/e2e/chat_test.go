@@ -119,3 +119,55 @@ func TestAMentionInGeneralIsAnsweredInChat(t *testing.T) {
 		return false
 	})
 }
+
+// "@worker fix it" where nobody allowed agents gets an answer in chat and a card asking whether
+// @worker may work; allowing it from the card is the task's consent, and @worker's work turn
+// leaves a branch with its commit, signed by it.
+func TestTheConsentCardLeadsToABranch(t *testing.T) {
+	h := newHarness(t)
+	p, origin := h.repoProject()
+	project := p.Id.String()
+	h.claudeRunner(project, "claude-2.1.270-tool-success.ndjson")
+	t.Setenv("FAKE_CLAUDE_COMMIT", "1")
+
+	general := h.generalOf(project)
+	ask := h.say(project, general.Id.String(), "@worker fix the flaky checkout test", "worker")
+	chat := h.turnOf(ask, project, "worker")
+	if chat.Tier != "chat" {
+		t.Fatalf("without consent @worker answers in chat: %+v", chat)
+	}
+	h.waitJob(*chat.Job, "done")
+	card := h.lastSaid(chat.Conversation, func(m gen.Message) bool { return m.CardType != nil && *m.CardType == "consent" })
+	if card.Card == nil || deref(card.Card.Title) != "Let @worker work on this?" || deref(card.Card.State) != "pending" || card.Card.Ref.Id != chat.ID {
+		t.Fatalf("the consent card: %+v", card.Card)
+	}
+	if branches := gitCmd(t, origin, "branch", "--list"); strings.Contains(branches, "gator/") {
+		t.Fatalf("the chat answer pushed: %s", branches)
+	}
+
+	var work gen.AgentTurn
+	if code := h.do("POST", "/turns/"+chat.ID+"/allow", nil, &work); code != 201 || work.Tier != "work" || work.EscalatedFrom == nil {
+		t.Fatalf("allow: %d %+v", code, work)
+	}
+	job := h.waitJob(work.JobId.String(), "done", "failed")
+	if job.Status != "done" || job.Tier != "work" {
+		t.Fatalf("the work job: %s %s", job.Status, deref(job.StopReason))
+	}
+	branch, _ := (*job.Receipt)["branch"].(string)
+	commits, _ := (*job.Receipt)["commits"].([]any)
+	if !strings.HasPrefix(branch, "gator/") || len(commits) != 1 {
+		t.Fatalf("receipt: %+v", *job.Receipt)
+	}
+	if msg := gitCmd(t, origin, "log", "-1", "--format=%B", "refs/heads/"+branch); !strings.Contains(msg, "Co-Authored-By: @worker via Gator") {
+		t.Fatalf("the commit says whose it is:\n%s", msg)
+	}
+	var task gen.Task
+	h.do("GET", "/tasks/"+job.TaskId.String(), nil, &task)
+	if task.AgentsAllowedAt == nil {
+		t.Fatal("the consent is the task's")
+	}
+	allowed := h.message(card.Id.String())
+	if deref(allowed.Card.State) != "allowed" {
+		t.Fatalf("the card says it was allowed: %+v", allowed.Card)
+	}
+}

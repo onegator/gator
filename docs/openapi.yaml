@@ -1432,6 +1432,17 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /turns/{turnId}/allow:
+    post:
+      operationId: allowTurnToWork
+      description: "The consent card's button (\"Let @worker work on this?\"): a work agent that answered in chat because nobody allowed agents on the task. The caller (a project member who may write in the conversation) allows agents on the task, as POST /tasks/{id}/allow-agents does, and the agent takes a work turn on the same question. Repeating it answers the same turn."
+      parameters: [ { $ref: "#/components/parameters/turnId" } ]
+      responses:
+        "201": { description: the work turn, content: { application/json: { schema: { $ref: "#/components/schemas/AgentTurn" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2615,7 +2626,7 @@ components:
         authorId: { type: string, format: uuid }
         kind: { type: string, enum: [text, card] }
         body: { type: string, description: "Markdown; empty once deleted" }
-        cardType: { type: string, description: "task | decision | job | artifact | pr | incident | release | brain_proposal" }
+        cardType: { type: string, description: "task | decision | job | artifact | consent | task_proposal | pr | incident | release | brain_proposal" }
         card: { $ref: "#/components/schemas/Card" }
         replyCount: { type: integer }
         threadId: { type: string, format: uuid, description: "the thread under this message, once opened" }
@@ -2704,7 +2715,7 @@ components:
       type: object
       required: [kind, id]
       properties:
-        kind: { type: string, description: "task | job | artifact | pr | incident | release | brain_entry" }
+        kind: { type: string, description: "task | job | artifact | turn | task_proposal | pr | incident | release | brain_entry" }
         id: { type: string }
         taskId: { type: string, format: uuid }
     MessagePage:

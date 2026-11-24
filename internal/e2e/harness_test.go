@@ -103,7 +103,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
 	// Conversations and the agents who answer in them, each following the outbox on its own.
 	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc})
-	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Log: slog.Default()})
+	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default()})
 	mgr.UseBriefer(team.Briefer)
 	consumers, stopConsumers := context.WithCancel(context.Background())
 	t.Cleanup(stopConsumers)

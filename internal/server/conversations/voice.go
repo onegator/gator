@@ -130,3 +130,18 @@ func (v *Voice) Join(ctx context.Context, conv, agent pgtype.UUID) error {
 		return err
 	})
 }
+
+// Card posts a card Gator shows about a turn (asking a person to let an agent work), or brings
+// the one with its key up to date.
+func (v *Voice) Card(ctx context.Context, conv db.Conversation, c Card) (db.Message, error) {
+	var msg db.Message
+	err := store.InTx(ctx, v.pool, func(q *db.Queries) error {
+		var err error
+		msg, _, err = writeCard(ctx, q, conv, c)
+		return err
+	})
+	return msg, err
+}
+
+// AgentRef is how a card names an agent.
+func AgentRef(a db.Agent) map[string]any { return agentRef(a) }

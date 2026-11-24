@@ -49,7 +49,7 @@ func newWorld(t *testing.T) *world {
 	chat := conversations.New(pool, conversations.Deps{Roles: roles, Decisions: svc, Tasks: svc})
 	mgr := runners.New(pool, svc, events.NewHub(), slog.Default(), runners.Config{})
 	w := &world{t: t, ctx: ctx, pool: pool, q: db.New(pool), svc: svc, chat: chat, mgr: mgr,
-		mod: New(pool, Deps{Conversations: chat, Process: svc, Jobs: mgr})}
+		mod: New(pool, Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: roles})}
 	w.project = newProject(t, pool)
 	w.admin = w.person("admin")
 	w.viewer = w.person("viewer")

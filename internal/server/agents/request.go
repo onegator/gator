@@ -28,6 +28,19 @@ type Request struct {
 	RequestedBy     pgtype.UUID
 	// Parent is the turn an agent was in when it asked; nil when a person asked.
 	Parent *db.AgentTurn
+	// EscalatedFrom is the chat turn a person let work: this turn answers that turn's ask, and
+	// its trigger is the person's consent.
+	EscalatedFrom *db.AgentTurn
+	// Ask is the message the turn answers when its trigger is not it (an escalation's).
+	Ask *db.Message
+}
+
+// Question is the message the turn answers.
+func (r Request) Question() db.Message {
+	if r.Ask != nil {
+		return *r.Ask
+	}
+	return r.Trigger
 }
 
 // Hop is how far down a chain of delegations the turn is: 0 when a person asks, one more than

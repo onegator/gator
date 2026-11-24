@@ -13,7 +13,6 @@ import (
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/runners"
-	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -109,9 +108,9 @@ func (s *Starter) Start(ctx context.Context, r Request) error {
 	})
 }
 
-// start does the work of Start with the turn held: turns writes under that hold.
+// start does the work of Start with the turn held.
 func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, turn db.AgentTurn, turns turnStore) error {
-	task, err := s.asks.For(ctx, home, r.Trigger, actorOf(r))
+	task, err := s.asks.For(ctx, home, r.Question(), actorOf(r))
 	if errors.Is(err, conversations.ErrInvalid) || errors.Is(err, conversations.ErrConflict) {
 		return s.end(ctx, turns, turn, home, TurnRefused, &Refusal{Code: RefusedNoTask, Say: plain(err)})
 	}
@@ -131,7 +130,7 @@ func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, tu
 	}
 	job, err := s.jobs.CreateJob(ctx, task.ID, runners.NewJob{
 		Agent: r.Agent.ID, Turn: turn.ID, Kind: runners.KindReply, Tier: grant.Tier, Role: roleOf(r.Agent),
-		Instruction: clip(r.Trigger.Body, maxInstruction), CreatedBy: actorOf(r),
+		Instruction: clip(r.Question().Body, maxInstruction), CreatedBy: actorOf(r),
 	})
 	if errors.Is(err, runners.ErrBudgetExceeded) {
 		return s.end(ctx, turns, turn, home, TurnRefused, &Refusal{Code: RefusedBudget, Say: fmt.Sprintf("@%s does not answer today: %s", r.Agent.Handle, plain(err))})
@@ -176,6 +175,9 @@ func (s *Starter) open(ctx context.Context, r Request, home db.Conversation, ref
 	}
 	if r.Parent != nil {
 		in.ParentTurnID = r.Parent.ID
+	}
+	if r.EscalatedFrom != nil {
+		in.EscalatedFrom = r.EscalatedFrom.ID
 	}
 	if refused != nil {
 		in.Status, in.Refusal = TurnRefused, &refused.Code
@@ -234,19 +236,32 @@ func clip(s string, n int) string {
 	return s
 }
 
-// Locker holds turns in a transaction of their own (turnLocker).
+// Locker holds turns with an advisory lock on a connection of its own (turnLocker). Not a row
+// lock: what a start writes references the turn and the conversation, and a row lock held across
+// those writes would wait on itself.
 type Locker struct{ Pool *pgxpool.Pool }
 
-// WithTurn implements turnLocker: fn runs with the turn's row held until it returns, and what fn
-// writes through q commits with the release.
+// WithTurn implements turnLocker: fn runs with the turn held until it returns, reading the turn
+// as it is once held; its writes go through the pool and commit as they are made.
 func (l Locker) WithTurn(ctx context.Context, id pgtype.UUID, fn func(turn db.AgentTurn, q turnStore) error) error {
-	return store.InTx(ctx, l.Pool, func(q *db.Queries) error {
-		turn, err := q.LockTurn(ctx, id)
-		if err != nil {
-			return err
-		}
-		return fn(turn, q)
-	})
+	conn, err := l.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	key := "agent-turn:" + uuidText(id)
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", key); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key)
+	}()
+	q := db.New(l.Pool)
+	turn, err := q.GetTurn(ctx, id)
+	if err != nil {
+		return err
+	}
+	return fn(turn, q)
 }
 
 // Reading is what an agent's message says from the moment it is asked until it writes: the

@@ -92,3 +92,18 @@ func toAgentTurn(t db.AgentTurn, cost db.JobCostRow) gen.AgentTurn {
 		CreatedAt: t.CreatedAt.Time, FinishedAt: timePtr(t.FinishedAt),
 	}
 }
+
+// AllowTurnToWork is the consent card's button: agents are allowed on the task and the agent
+// takes a work turn on the same question.
+func (s *Server) AllowTurnToWork(w http.ResponseWriter, r *http.Request, turnId gen.TurnId) {
+	p, ok := s.agentsCaller(w, r)
+	if !ok {
+		return
+	}
+	turn, err := s.Agents.Consent.Allow(r.Context(), p, fromUUID(turnId))
+	if err != nil {
+		s.failAgents(w, err)
+		return
+	}
+	s.respondTurn(w, r, turn, http.StatusCreated)
+}

@@ -26,6 +26,8 @@ type Deps struct {
 		jobSteerer
 		jobStopper
 	}
+	// Roles answers people's roles in projects (auth.Authorizer).
+	Roles roleResolver
 	// Now is the clock of the daily budget; nil is time.Now.
 	Now func() time.Time
 	Log *slog.Logger
@@ -45,6 +47,8 @@ type Module struct {
 	Control *Control
 	// Talk is what agents say from inside their jobs.
 	Talk *Talk
+	// Consent asks a person to let a work agent work, and lets it.
+	Consent *Consent
 
 	pool *pgxpool.Pool
 }
@@ -64,7 +68,10 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		DailyBudget{Budgets: deps.Process, Now: deps.Now},
 	}
 	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})
+	consent := NewConsent(q, voice, chat.Access, deps.Roles, deps.Process, guards, starter)
+	starter.consent = consent
 	return &Module{
+		Consent:    consent,
 		Dispatcher: NewDispatcher(q, guards, starter, NewSteerer(q, deps.Jobs, deps.Log)),
 		Control:    NewControl(q, chat.Access, deps.Jobs, voice),
 		Starter:    starter,
