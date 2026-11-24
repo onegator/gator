@@ -481,7 +481,7 @@ func TestEveryNewTaskHasItsThread(t *testing.T) {
 		}
 	})
 	var thread, again gen.ConversationDetail
-	h.as(c.viewer, func() {
+	h.as(c.member, func() {
 		if code := h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &thread); code != 200 {
 			t.Fatalf("task conversation: %d", code)
 		}
@@ -490,7 +490,7 @@ func TestEveryNewTaskHasItsThread(t *testing.T) {
 		t.Fatalf("task thread: %+v", thread)
 	}
 	time.Sleep(300 * time.Millisecond) // let the consumer see task.created too
-	h.as(c.member, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &again) })
+	h.as(c.viewer, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &again) })
 	if again.Id != thread.Id {
 		t.Fatalf("a second thread for one task: %v and %v", thread.Id, again.Id)
 	}
@@ -1170,4 +1170,96 @@ func TestUnsentAndDeletedFilesAreSwept(t *testing.T) {
 	if code, _ := h.upload(c.member, conv, "more.txt", "x"); code != 400 {
 		t.Fatalf("an upload past the pending limit: %d", code)
 	}
+}
+
+// Reading opens nothing: a viewer, or anyone in an archived channel, finds a thread that is there
+// but does not open one; a task's thread missing for a moment is opened only by someone who may
+// write in the project.
+func TestOnlyWritersOpenThreads(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("noopen")
+	ch := h.channel(c.admin, c.project.Id.String(), "quiet", "").Id.String()
+	_, msg := h.post(c.member, ch, gen.NewMessage{Body: ptr("hi")})
+	h.as(c.viewer, func() {
+		if code := h.do("GET", "/messages/"+msg.Id.String()+"/thread", nil, nil); code != 404 {
+			t.Fatalf("a viewer opened a thread: %d", code)
+		}
+	})
+	var n int
+	_ = h.pool.QueryRow(context.Background(), "SELECT count(*) FROM conversations WHERE parent_message_id = $1", msg.Id.String()).Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d threads opened by reading", n)
+	}
+	h.as(c.member, func() { h.do("GET", "/messages/"+msg.Id.String()+"/thread", nil, nil) })
+	h.as(c.viewer, func() {
+		if code := h.do("GET", "/messages/"+msg.Id.String()+"/thread", nil, nil); code != 200 {
+			t.Fatalf("a viewer reads a thread that is there: %d", code)
+		}
+	})
+	_, other := h.post(c.member, ch, gen.NewMessage{Body: ptr("later")})
+	h.as(c.admin, func() { h.do("PATCH", "/conversations/"+ch, gen.ConversationPatch{Archived: ptr(true)}, nil) })
+	h.as(c.admin, func() {
+		if code := h.do("GET", "/messages/"+other.Id.String()+"/thread", nil, nil); code != 404 {
+			t.Fatalf("a thread opened in an archived channel: %d", code)
+		}
+	})
+
+	// A task whose thread is not there yet.
+	var task gen.Task
+	h.as(c.member, func() {
+		h.do("POST", "/projects/"+c.project.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "x"}, &task)
+	})
+	h.as(c.member, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, nil) })
+	if _, err := h.pool.Exec(context.Background(), "DELETE FROM conversations WHERE task_id = $1", task.Id.String()); err != nil {
+		t.Fatal(err)
+	}
+	h.as(c.viewer, func() {
+		if code := h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, nil); code != 404 {
+			t.Fatalf("a viewer opened a task's missing thread: %d", code)
+		}
+	})
+	h.as(c.member, func() {
+		if code := h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, nil); code != 200 {
+			t.Fatalf("a member opens it: %d", code)
+		}
+	})
+}
+
+// In a project's DM a viewer answers; in a channel they only read.
+func TestAViewerAnswersADM(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("viewerdm")
+	var dm gen.ConversationDetail
+	h.as(c.member, func() {
+		if code := h.do("POST", "/conversations/dm", gen.NewDirectMessage{Members: []openapi_types.UUID{mustOpenUUID(t, c.viewerID)}, ProjectId: &c.project.Id}, &dm); code != 201 {
+			t.Fatalf("a DM with a viewer: %d", code)
+		}
+	})
+	if code, _ := h.post(c.viewer, dm.Id.String(), gen.NewMessage{Body: ptr("sure")}); code != 201 {
+		t.Fatalf("the viewer answers the DM: %d", code)
+	}
+}
+
+// The last owner of a private channel leaving hands it to the longest-standing member; the last
+// person in it cannot leave it empty.
+func TestAPrivateChannelKeepsAnOwner(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("owner")
+	ch := h.channel(c.member, c.project.Id.String(), "inner", "private").Id.String()
+	h.as(c.member, func() {
+		h.do("PUT", "/conversations/"+ch+"/members/user/"+c.viewerID, nil, nil)
+		if code := h.do("DELETE", "/conversations/"+ch+"/members/user/"+c.memberID, nil, nil); code != 204 {
+			t.Fatalf("the owner leaves: %d", code)
+		}
+	})
+	var d gen.ConversationDetail
+	h.as(c.viewer, func() { h.do("GET", "/conversations/"+ch, nil, &d) })
+	if len(d.Members) != 1 || d.Members[0].Role != gen.ConversationMemberRoleOwner {
+		t.Fatalf("after the owner left: %+v", d.Members)
+	}
+	h.as(c.viewer, func() {
+		if code := h.do("DELETE", "/conversations/"+ch+"/members/user/"+c.viewerID, nil, nil); code != 409 {
+			t.Fatalf("the last person left a private channel: %d", code)
+		}
+	})
 }

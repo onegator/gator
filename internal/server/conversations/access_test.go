@@ -49,7 +49,7 @@ func TestDecide(t *testing.T) {
 		{"DM outside a project: its people write", dmOutside, standing{member: true}, writer},
 		{"DM outside a project: nobody else reads", dmOutside, standing{role: auth.RoleAdmin}, none},
 		{"DM in a project: its people read only while in the project", dmInside, standing{member: true}, none},
-		{"DM in a project: a viewer reads but does not write", dmInside, standing{member: true, role: auth.RoleViewer}, readReact},
+		{"DM in a project: a viewer in it answers", dmInside, standing{member: true, role: auth.RoleViewer}, writer},
 		{"DM in a project: admin in it does not moderate", dmInside, standing{member: true, role: auth.RoleAdmin}, writer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

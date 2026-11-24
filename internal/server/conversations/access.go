@@ -42,7 +42,8 @@ type accessStore interface {
 //   - A project channel (and a task thread) is read by everyone who may read the project, and
 //     written by its members and admins; a viewer reads and reacts but does not write.
 //   - A private channel is read only by its members, who must still be able to read the project.
-//   - A DM is read only by its people; a DM inside a project also needs the project.
+//   - A DM is read and written only by its people; a DM inside a project also needs the project,
+//     where its viewers may write in it too.
 //   - A thread is read by whoever may read the conversation its root message lives in.
 //   - Nobody writes in an archived conversation.
 //   - Project admins and a conversation's owners moderate it; a DM has nobody above its people.
@@ -88,7 +89,9 @@ func decide(s scope, st standing) Rights {
 	if !read {
 		return Rights{}
 	}
-	write := !s.archived && (!s.hasProject || st.role >= auth.RoleMember)
+	// A DM is its people's to write in, a project's viewers included: being able to be messaged
+	// and not to answer would make no sense. In a channel a viewer reads and reacts.
+	write := !s.archived && (s.kind == KindDM || !s.hasProject || st.role >= auth.RoleMember)
 	moderate := st.owner || (s.kind != KindDM && s.hasProject && st.role >= auth.RoleAdmin)
 	return Rights{Read: true, React: !s.archived, Write: write, Moderate: moderate}
 }

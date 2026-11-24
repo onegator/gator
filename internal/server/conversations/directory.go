@@ -182,7 +182,7 @@ func (d *Directory) OpenDM(ctx context.Context, p auth.Principal, people []pgtyp
 		if err != nil {
 			return db.Conversation{}, false, err
 		}
-		if role < auth.RoleMember {
+		if role < auth.RoleViewer {
 			return db.Conversation{}, false, ErrForbidden
 		}
 	}
@@ -420,7 +420,8 @@ func (d *Directory) SetMember(ctx context.Context, p auth.Principal, id pgtype.U
 }
 
 // RemoveMember takes someone out of a conversation: oneself by leaving, anyone else by a
-// moderator. Nobody leaves a DM; it is the conversation of the people it was opened with.
+// moderator. Nobody leaves a DM; it is the conversation of the people it was opened with. When a
+// channel's last owner goes, the longest-standing member becomes its owner.
 func (d *Directory) RemoveMember(ctx context.Context, p auth.Principal, id pgtype.UUID, m Member) error {
 	conv, rights, err := d.access.RightsByID(ctx, id, p)
 	if err != nil {
@@ -448,7 +449,47 @@ func (d *Directory) RemoveMember(ctx context.Context, p auth.Principal, id pgtyp
 		if m.Kind == MemberUser {
 			removed = append(removed, m.ID)
 		}
-		return emit(ctx, q, EventMemberChanged, conv.ID, map[string]any{"member": memberPayload(m), "change": "left"}, removed...)
+		if err := emit(ctx, q, EventMemberChanged, conv.ID, map[string]any{"member": memberPayload(m), "change": "left"}, removed...); err != nil {
+			return err
+		}
+		if conv.Kind == KindChannel {
+			return keepAnOwner(ctx, q, conv)
+		}
+		return nil
+	})
+}
+
+// keepAnOwner makes the longest-standing member the owner of a channel whose last owner just
+// left, so that a private channel, which no project admin moderates from outside, always has
+// someone who can. A channel nobody is left in cannot be left by its last person.
+func keepAnOwner(ctx context.Context, q *db.Queries, conv db.Conversation) error {
+	members, err := q.ListConversationMembers(ctx, conv.ID)
+	if err != nil {
+		return err
+	}
+	var oldest *db.ListConversationMembersRow
+	for i := range members {
+		switch {
+		case members[i].Role == RoleOwner:
+			return nil
+		case oldest == nil && members[i].MemberKind == MemberUser:
+			oldest = &members[i] // listed by when they joined
+		}
+	}
+	if oldest == nil {
+		if conv.Visibility == VisibilityPrivate {
+			return conflict("you are the last one in this private channel; archive it instead of leaving")
+		}
+		return nil
+	}
+	owner := RoleOwner
+	if _, err := q.UpdateConversationMember(ctx, db.UpdateConversationMemberParams{
+		ConversationID: conv.ID, MemberKind: oldest.MemberKind, MemberID: oldest.MemberID, Role: &owner,
+	}); err != nil {
+		return err
+	}
+	return emit(ctx, q, EventMemberChanged, conv.ID, map[string]any{
+		"member": memberPayload(Member{Kind: oldest.MemberKind, ID: oldest.MemberID}), "change": "updated", "role": RoleOwner,
 	})
 }
 

@@ -31,6 +31,24 @@ func NewThreads(pool *pgxpool.Pool, access *Access, channels taskChannels) *Thre
 	return &Threads{pool: pool, access: access, channels: channels}
 }
 
+// ForTaskAs is ForTask for a caller: a task's thread that is there is answered to anyone who may
+// read the task, and only someone who may write in the project opens a missing one (the
+// consumer opens it for every new task in any case).
+func (t *Threads) ForTaskAs(ctx context.Context, p auth.Principal, task db.Task) (db.Conversation, error) {
+	conv, err := db.New(t.pool).GetTaskConversation(ctx, task.ID)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return conv, err
+	}
+	role, err := t.access.roles.ProjectRole(ctx, p, task.ProjectID)
+	if err != nil {
+		return db.Conversation{}, err
+	}
+	if role < auth.RoleMember {
+		return db.Conversation{}, ErrNotFound
+	}
+	return t.ForTask(ctx, task)
+}
+
 // ForTask answers a task's thread, opening it when the task has none: the task's card goes into
 // its project's task channel and the thread hangs under that card, so replying to the card is
 // talking in the task. Safe to repeat and to race: there is one thread per task.
@@ -73,9 +91,9 @@ func (t *Threads) ForTask(ctx context.Context, task db.Task) (db.Conversation, e
 	return conv, err
 }
 
-// Of answers the thread under a message the caller may read. The first ask opens it, with the
-// message's author in it so that replies reach them; a task card's thread is the task's own.
-// Replies have no threads of their own: threads do not nest.
+// Of answers the thread under a message the caller may read. The first ask by someone who may
+// write there opens it, with the message's author in it so that replies reach them; a task
+// card's thread is the task's own. Replies have no threads of their own: threads do not nest.
 func (t *Threads) Of(ctx context.Context, p auth.Principal, message pgtype.UUID) (db.Conversation, error) {
 	q := db.New(t.pool)
 	msg, err := q.GetMessage(ctx, message)
@@ -96,6 +114,11 @@ func (t *Threads) Of(ctx context.Context, p auth.Principal, message pgtype.UUID)
 	}
 	if conv.ParentMessageID.Valid || conv.Kind == KindTask {
 		return db.Conversation{}, invalid("a reply has no thread of its own")
+	}
+	// Opening a thread is the first step of replying: someone who cannot write here (a viewer,
+	// anyone in an archived conversation) only finds a thread that is there.
+	if !rights.Write {
+		return db.Conversation{}, ErrNotFound
 	}
 	by, ok := authorOf(p)
 	if !ok {

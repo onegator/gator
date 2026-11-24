@@ -332,7 +332,7 @@ func (s *Server) GetTaskConversation(w http.ResponseWriter, r *http.Request, tas
 		s.fail(w, err)
 		return
 	}
-	conv, err := s.Conversations.Threads.ForTask(r.Context(), task)
+	conv, err := s.Conversations.Threads.ForTaskAs(r.Context(), p, task)
 	if err != nil {
 		s.failConversation(w, err)
 		return

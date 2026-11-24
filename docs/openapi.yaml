@@ -1070,7 +1070,8 @@ paths:
       description: >-
         The task's thread: the replies under its card in the project's task channel (#general, or
         process_config.conversations.task_channel). Every task has one; a task made before
-        conversations, or one whose thread is being opened right now, gets it on this call. 404
+        conversations, or one whose thread is being opened right now, gets it on this call when the
+        caller may write in the project (404 for anyone else until it is there). 404
         when the thread hangs under a message the caller may not read (a private channel).
       parameters: [ { $ref: "#/components/parameters/taskId" } ]
       responses:
@@ -1357,8 +1358,8 @@ paths:
     get:
       operationId: getMessageThread
       description: >-
-        The thread under a message, opened the first time somebody asks (with the message's author
-        in it). The thread under a task's card is the task's conversation. Replies have no threads
+        The thread under a message, opened the first time somebody who may write there asks (with
+        the message's author in it); to anyone else, a thread not opened yet is 404. The thread under a task's card is the task's conversation. Replies have no threads
         of their own (400).
       parameters: [ { $ref: "#/components/parameters/messageId" } ]
       responses:

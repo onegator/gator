@@ -252,8 +252,13 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   wiadomością-korzeniem, w rozmowie korzenia).
 - **Administrator workspace'u** moderuje kanały projektów jak admin projektu, ale prywatny kanał i
   DM czyta tylko wtedy, gdy jest ich członkiem. Rozmowa, której nie wolno czytać, odpowiada 404.
-- **`GET /messages/{id}/thread`** otwiera wątek przy pierwszym pytaniu (idempotentnie), z autorem
-  wiadomości jako członkiem; wątki się nie zagnieżdżają (400 dla odpowiedzi).
+- **`GET /messages/{id}/thread`** otwiera wątek przy pierwszym pytaniu (idempotentnie) kogoś, kto może
+  tam pisać, z autorem wiadomości jako członkiem; viewer i każdy w zarchiwizowanej rozmowie tylko
+  znajdują wątek, który już jest (inaczej 404). Tak samo `GET /tasks/{id}/conversation` otwiera
+  brakujący wątek taska tylko członkowi projektu. Wątki się nie zagnieżdżają (400 dla odpowiedzi).
+- **Viewer w DM-ie** projektu odpisuje (może też otworzyć DM); w kanałach tylko czyta i reaguje.
+- **Ostatni właściciel kanału**, który wychodzi, przekazuje go najdłużej obecnemu członkowi;
+  ostatnia osoba nie może opuścić prywatnego kanału (409, zamiast tego archiwizacja).
 - **Migracje:** backfille `#general` (00036) i wątków otwartych tasków (00037) są osobnymi migracjami,
   a FTS ma numer 00038; numery kolejnych faz przesunęły się o 2 (tabela w `README.md`).
 - **`#general` przy projekcie** tworzy `POST /projects` (twórca od razu w nim jest), a osoby dołączające
