@@ -100,3 +100,39 @@ FROM job_events WHERE job_id = $1;
 -- name: JobCost :one
 SELECT COALESCE(sum(cost_usd), 0)::float8 AS cost_usd, COALESCE(sum(duration_ms), 0)::bigint AS duration_ms
 FROM usage_records WHERE job_id = $1;
+
+-- name: CreateAgent :one
+INSERT INTO agents (project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, status, source, created_by)
+VALUES (sqlc.narg(project_id), sqlc.arg(handle), sqlc.arg(display_name), sqlc.arg(description), sqlc.arg(avatar), sqlc.narg(role_key),
+        sqlc.arg(instructions), sqlc.arg(tier), sqlc.arg(policy), sqlc.arg(status), '{"kind":"custom"}', sqlc.narg(created_by))
+RETURNING *;
+
+-- name: UpdateAgent :one
+UPDATE agents
+SET handle = sqlc.arg(handle), display_name = sqlc.arg(display_name), description = sqlc.arg(description),
+    avatar = sqlc.arg(avatar), role_key = sqlc.narg(role_key), instructions = sqlc.arg(instructions), tier = sqlc.arg(tier),
+    policy = sqlc.arg(policy), status = sqlc.arg(status), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: DeleteAgent :execrows
+DELETE FROM agents WHERE id = $1 AND source->>'kind' <> 'builtin';
+
+-- name: AgentStats :one
+-- An agent's record since a moment: its turns, its jobs (phase work and answers), how many of
+-- those that ended ended done, and what they cost.
+SELECT
+    (SELECT count(*) FROM agent_turns t WHERE t.agent_id = sqlc.arg(agent_id) AND t.created_at >= sqlc.arg(since))::int AS turns,
+    (SELECT count(*) FROM agent_turns t WHERE t.agent_id = sqlc.arg(agent_id) AND t.created_at >= sqlc.arg(since) AND t.status = 'refused')::int AS refused,
+    (SELECT count(*) FROM jobs j WHERE j.agent_id = sqlc.arg(agent_id) AND j.created_at >= sqlc.arg(since))::int AS jobs,
+    (SELECT count(*) FROM jobs j WHERE j.agent_id = sqlc.arg(agent_id) AND j.created_at >= sqlc.arg(since) AND j.status = 'done')::int AS done,
+    (SELECT count(*) FROM jobs j WHERE j.agent_id = sqlc.arg(agent_id) AND j.created_at >= sqlc.arg(since)
+        AND j.status IN ('done', 'failed', 'stopped'))::int AS finished,
+    COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+              WHERE j.agent_id = sqlc.arg(agent_id) AND u.created_at >= sqlc.arg(since)), 0)::float8 AS cost_usd;
+
+-- name: ListAgentTurns :many
+SELECT * FROM agent_turns
+WHERE agent_id = sqlc.arg(agent_id) AND created_at >= sqlc.arg(since)
+ORDER BY created_at DESC
+LIMIT sqlc.arg(max_rows);

@@ -51,6 +51,48 @@ func (q *Queries) AgentForRole(ctx context.Context, arg AgentForRoleParams) (Age
 	return i, err
 }
 
+const agentStats = `-- name: AgentStats :one
+SELECT
+    (SELECT count(*) FROM agent_turns t WHERE t.agent_id = $1 AND t.created_at >= $2)::int AS turns,
+    (SELECT count(*) FROM agent_turns t WHERE t.agent_id = $1 AND t.created_at >= $2 AND t.status = 'refused')::int AS refused,
+    (SELECT count(*) FROM jobs j WHERE j.agent_id = $1 AND j.created_at >= $2)::int AS jobs,
+    (SELECT count(*) FROM jobs j WHERE j.agent_id = $1 AND j.created_at >= $2 AND j.status = 'done')::int AS done,
+    (SELECT count(*) FROM jobs j WHERE j.agent_id = $1 AND j.created_at >= $2
+        AND j.status IN ('done', 'failed', 'stopped'))::int AS finished,
+    COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+              WHERE j.agent_id = $1 AND u.created_at >= $2), 0)::float8 AS cost_usd
+`
+
+type AgentStatsParams struct {
+	AgentID pgtype.UUID        `json:"agent_id"`
+	Since   pgtype.Timestamptz `json:"since"`
+}
+
+type AgentStatsRow struct {
+	Turns    int32   `json:"turns"`
+	Refused  int32   `json:"refused"`
+	Jobs     int32   `json:"jobs"`
+	Done     int32   `json:"done"`
+	Finished int32   `json:"finished"`
+	CostUsd  float64 `json:"cost_usd"`
+}
+
+// An agent's record since a moment: its turns, its jobs (phase work and answers), how many of
+// those that ended ended done, and what they cost.
+func (q *Queries) AgentStats(ctx context.Context, arg AgentStatsParams) (AgentStatsRow, error) {
+	row := q.db.QueryRow(ctx, agentStats, arg.AgentID, arg.Since)
+	var i AgentStatsRow
+	err := row.Scan(
+		&i.Turns,
+		&i.Refused,
+		&i.Jobs,
+		&i.Done,
+		&i.Finished,
+		&i.CostUsd,
+	)
+	return i, err
+}
+
 const chainCost = `-- name: ChainCost :one
 SELECT COALESCE(sum(u.cost_usd), 0)::float8
 FROM usage_records u
@@ -65,6 +107,76 @@ func (q *Queries) ChainCost(ctx context.Context, chainID pgtype.UUID) (float64, 
 	var column_1 float64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const createAgent = `-- name: CreateAgent :one
+INSERT INTO agents (project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, status, source, created_by)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, '{"kind":"custom"}', $11)
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at
+`
+
+type CreateAgentParams struct {
+	ProjectID    pgtype.UUID `json:"project_id"`
+	Handle       string      `json:"handle"`
+	DisplayName  string      `json:"display_name"`
+	Description  string      `json:"description"`
+	Avatar       string      `json:"avatar"`
+	RoleKey      *string     `json:"role_key"`
+	Instructions string      `json:"instructions"`
+	Tier         string      `json:"tier"`
+	Policy       []byte      `json:"policy"`
+	Status       string      `json:"status"`
+	CreatedBy    pgtype.UUID `json:"created_by"`
+}
+
+func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, createAgent,
+		arg.ProjectID,
+		arg.Handle,
+		arg.DisplayName,
+		arg.Description,
+		arg.Avatar,
+		arg.RoleKey,
+		arg.Instructions,
+		arg.Tier,
+		arg.Policy,
+		arg.Status,
+		arg.CreatedBy,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Handle,
+		&i.DisplayName,
+		&i.Description,
+		&i.Avatar,
+		&i.RoleKey,
+		&i.Instructions,
+		&i.Tier,
+		&i.Policy,
+		&i.Tools,
+		&i.Skills,
+		&i.Status,
+		&i.Source,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteAgent = `-- name: DeleteAgent :execrows
+DELETE FROM agents WHERE id = $1 AND source->>'kind' <> 'builtin'
+`
+
+func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAgent, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getAgent = `-- name: GetAgent :one
@@ -421,6 +533,60 @@ func (q *Queries) ListActiveTurnsIn(ctx context.Context, conversationID pgtype.U
 	return items, nil
 }
 
+const listAgentTurns = `-- name: ListAgentTurns :many
+SELECT id, agent_id, project_id, conversation_id, trigger_message_id, reply_message_id, requested_by_kind, requested_by, on_behalf_of, chain_id, parent_turn_id, escalated_from, hop, tier, job_id, status, refusal, created_at, updated_at, finished_at FROM agent_turns
+WHERE agent_id = $1 AND created_at >= $2
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListAgentTurnsParams struct {
+	AgentID pgtype.UUID        `json:"agent_id"`
+	Since   pgtype.Timestamptz `json:"since"`
+	MaxRows int32              `json:"max_rows"`
+}
+
+func (q *Queries) ListAgentTurns(ctx context.Context, arg ListAgentTurnsParams) ([]AgentTurn, error) {
+	rows, err := q.db.Query(ctx, listAgentTurns, arg.AgentID, arg.Since, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentTurn
+	for rows.Next() {
+		var i AgentTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.ProjectID,
+			&i.ConversationID,
+			&i.TriggerMessageID,
+			&i.ReplyMessageID,
+			&i.RequestedByKind,
+			&i.RequestedBy,
+			&i.OnBehalfOf,
+			&i.ChainID,
+			&i.ParentTurnID,
+			&i.EscalatedFrom,
+			&i.Hop,
+			&i.Tier,
+			&i.JobID,
+			&i.Status,
+			&i.Refusal,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentsVisibleIn = `-- name: ListAgentsVisibleIn :many
 SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at FROM agents WHERE project_id = $1 OR project_id IS NULL
 ORDER BY handle
@@ -704,6 +870,64 @@ func (q *Queries) SetTurnStatus(ctx context.Context, arg SetTurnStatusParams) (A
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const updateAgent = `-- name: UpdateAgent :one
+UPDATE agents
+SET handle = $1, display_name = $2, description = $3,
+    avatar = $4, role_key = $5, instructions = $6, tier = $7,
+    policy = $8, status = $9, updated_at = now()
+WHERE id = $10
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at
+`
+
+type UpdateAgentParams struct {
+	Handle       string      `json:"handle"`
+	DisplayName  string      `json:"display_name"`
+	Description  string      `json:"description"`
+	Avatar       string      `json:"avatar"`
+	RoleKey      *string     `json:"role_key"`
+	Instructions string      `json:"instructions"`
+	Tier         string      `json:"tier"`
+	Policy       []byte      `json:"policy"`
+	Status       string      `json:"status"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, updateAgent,
+		arg.Handle,
+		arg.DisplayName,
+		arg.Description,
+		arg.Avatar,
+		arg.RoleKey,
+		arg.Instructions,
+		arg.Tier,
+		arg.Policy,
+		arg.Status,
+		arg.ID,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Handle,
+		&i.DisplayName,
+		&i.Description,
+		&i.Avatar,
+		&i.RoleKey,
+		&i.Instructions,
+		&i.Tier,
+		&i.Policy,
+		&i.Tools,
+		&i.Skills,
+		&i.Status,
+		&i.Source,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

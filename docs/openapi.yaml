@@ -1443,6 +1443,85 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/agents:
+    get:
+      operationId: listProjectAgents
+      description: "The agents people of this project can mention, for @autocomplete: its own (the defaults of every project and those it made) and the workspace's. For anyone who may read the project."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Agent" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createProjectAgent
+      description: "A project's own agent, such as a @backend-reviewer for the reviewer role. For the project's admins. Its handle must not be taken in the project or the workspace."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewAgent" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /workspace/agents:
+    get:
+      operationId: listWorkspaceAgents
+      description: The workspace's own agents, which every project sees.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Agent" } } } } }
+    post:
+      operationId: createWorkspaceAgent
+      description: "An agent every project sees. For workspace admins. Its handle must not be taken in any project."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewAgent" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /agents/{agentId}:
+    get:
+      operationId: getAgent
+      description: "An agent's profile: who it is, what it may do, and its record over the last 30 days."
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentProfile" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateAgent
+      description: "Change an agent or pause it (status: paused). For its project's admins, or workspace admins for a workspace agent. A built-in agent keeps its handle and role."
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentPatch" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteAgent
+      description: "Remove an agent a person made. A built-in agent is paused instead (409)."
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      responses:
+        "204": { description: deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /agents/{agentId}/turns:
+    get:
+      operationId: listAgentTurns
+      description: "An agent's turns since a moment (default 30 days), newest first: those in conversations the caller may read."
+      parameters:
+        - { $ref: "#/components/parameters/agentId" }
+        - { name: since, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AgentTurn" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2325,6 +2404,7 @@ components:
         trigger: { type: string, description: "pull_request, weekly or incident" }
         needs: { type: string, description: "what the project must have first: github, monitoring, repository, or empty for nothing" }
         usesAgents: { type: boolean, description: "its tasks are worked on by agents, so switching it on needs allowAgents" }
+        author: { type: string, description: "the role of the agent whose work it is (its default agent: reviewer, security_reviewer, worker, triage, reporter)" }
         available: { type: boolean, description: the project has what it needs }
         unavailableReason: { type: string, description: "what to do first, when not available" }
         enabled: { type: boolean }
@@ -2640,6 +2720,80 @@ components:
         reactions: { type: array, items: { $ref: "#/components/schemas/Reaction" } }
         attachments: { type: array, items: { $ref: "#/components/schemas/Attachment" }, description: "none once deleted" }
         turn: { $ref: "#/components/schemas/MessageTurn" }
+    Agent:
+      type: object
+      description: "A member of the team that is an agent: an identity people mention, a role it plays in the process, what it may touch, and its state."
+      required: [id, handle, displayName, description, avatar, instructions, tier, policy, tools, skills, status, source, builtin, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: absent for a workspace agent }
+        handle: { type: string, description: "what people type after @; 2–32 of a–z, 0–9 and '-'" }
+        displayName: { type: string }
+        description: { type: string, description: "one line, shown in @autocomplete" }
+        avatar: { type: string, description: "an SF Symbol, an emoji or a url" }
+        roleKey: { type: string, description: "the process role it plays: researcher, planner, worker, reviewer, security_reviewer, curator, triage, reporter, …" }
+        instructions: { type: string, description: "its own prompt; empty means its role's" }
+        tier: { type: string, enum: [chat, work], description: "chat reads and answers with no tools that write; work changes code on a gator/ branch, where a person allowed agents on the task" }
+        policy: { $ref: "#/components/schemas/AgentPolicy" }
+        tools: { type: array, items: { type: string }, description: "MCP servers and plugins (phase 4)" }
+        skills: { type: array, items: { type: string }, description: "phase 4" }
+        status: { type: string, enum: [active, paused], description: "a paused agent refuses turns and says so" }
+        source: { type: object, additionalProperties: true, description: "{kind: builtin | custom | marketplace, …}" }
+        builtin: { type: boolean, description: "one of every project's defaults: paused, never deleted" }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AgentPolicy:
+      type: object
+      description: "The agent's own backend, model and cost cap per turn, over the project's policy for its role and tier; empty takes the project's."
+      properties:
+        backend: { type: string }
+        model: { type: string }
+        maxCostUsd: { type: number, format: double }
+    NewAgent:
+      type: object
+      required: [handle, displayName]
+      properties:
+        handle: { type: string }
+        displayName: { type: string }
+        description: { type: string }
+        avatar: { type: string }
+        roleKey: { type: string }
+        instructions: { type: string }
+        tier: { type: string, enum: [chat, work], default: chat }
+        policy: { $ref: "#/components/schemas/AgentPolicy" }
+    AgentPatch:
+      type: object
+      description: fields left out stay as they are
+      properties:
+        handle: { type: string, description: "not for a built-in agent" }
+        displayName: { type: string }
+        description: { type: string }
+        avatar: { type: string }
+        roleKey: { type: string, description: "not for a built-in agent" }
+        instructions: { type: string }
+        tier: { type: string, enum: [chat, work] }
+        policy: { $ref: "#/components/schemas/AgentPolicy" }
+        status: { type: string, enum: [active, paused] }
+    AgentProfile:
+      type: object
+      required: [agent, stats]
+      properties:
+        agent: { $ref: "#/components/schemas/Agent" }
+        stats: { $ref: "#/components/schemas/AgentStats" }
+    AgentStats:
+      type: object
+      description: "Its record since a moment, 30 days by default: turns asked of it, jobs it did (phase work and answers), how many of those that ended ended done, and what they cost."
+      required: [since, turns, refused, jobs, done, ended, doneShare, costUsd]
+      properties:
+        since: { type: string, format: date-time }
+        turns: { type: integer }
+        refused: { type: integer }
+        jobs: { type: integer }
+        done: { type: integer }
+        ended: { type: integer }
+        doneShare: { type: number, format: double, description: "done over ended; 0 with nothing ended" }
+        costUsd: { type: number, format: double }
     AgentTurn:
       type: object
       description: "One answer of one agent to one call: a mention, a message in a DM, a delegation, an escalation a person allowed. A refused call is a turn too, with its refusal."

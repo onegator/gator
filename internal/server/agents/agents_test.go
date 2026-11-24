@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -10,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -53,11 +51,6 @@ func newProject(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
 func insertAgent(ctx context.Context, pool *pgxpool.Pool, project pgtype.UUID, handle string) error {
 	_, err := pool.Exec(ctx, `INSERT INTO agents (project_id, handle, display_name, source) VALUES ($1, $2, 'X', '{"kind":"custom"}')`, project, handle)
 	return err
-}
-
-func isUniqueViolation(err error) bool {
-	var pg *pgconn.PgError
-	return errors.As(err, &pg) && pg.Code == "23505"
 }
 
 // Every project starts with one agent per role of the process, the ones Defaults names, and each
