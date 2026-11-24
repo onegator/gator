@@ -118,6 +118,15 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 	return i, err
 }
 
+const deleteAttachment = `-- name: DeleteAttachment :exec
+DELETE FROM message_attachments WHERE id = $1
+`
+
+func (q *Queries) DeleteAttachment(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAttachment, id)
+	return err
+}
+
 const editMessage = `-- name: EditMessage :one
 UPDATE messages SET body = $1, edited_at = now()
 WHERE id = $2 AND deleted_at IS NULL
@@ -407,6 +416,52 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listAbandonedAttachments = `-- name: ListAbandonedAttachments :many
+SELECT a.id, a.conversation_id, a.message_id, a.uploaded_by, a.name, a.content_type, a.size_bytes, a.storage_key, a.created_at FROM message_attachments a
+LEFT JOIN messages m ON m.id = a.message_id
+WHERE (a.message_id IS NULL AND a.created_at < $1)
+   OR m.deleted_at IS NOT NULL
+ORDER BY a.created_at
+LIMIT $2
+`
+
+type ListAbandonedAttachmentsParams struct {
+	Before  pgtype.Timestamptz `json:"before"`
+	MaxRows int32              `json:"max_rows"`
+}
+
+// Files nobody will read: uploaded and never sent before the cutoff, or carried by a message
+// that was deleted.
+func (q *Queries) ListAbandonedAttachments(ctx context.Context, arg ListAbandonedAttachmentsParams) ([]MessageAttachment, error) {
+	rows, err := q.db.Query(ctx, listAbandonedAttachments, arg.Before, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageAttachment
+	for rows.Next() {
+		var i MessageAttachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.MessageID,
+			&i.UploadedBy,
+			&i.Name,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.StorageKey,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAttachmentsOfMessages = `-- name: ListAttachmentsOfMessages :many
@@ -710,6 +765,18 @@ func (q *Queries) ListThreadsOfMessages(ctx context.Context, messageIds []pgtype
 		return nil, err
 	}
 	return items, nil
+}
+
+const pendingUploadBytes = `-- name: PendingUploadBytes :one
+SELECT COALESCE(sum(size_bytes), 0)::bigint FROM message_attachments WHERE uploaded_by = $1 AND message_id IS NULL
+`
+
+// What a person has uploaded and not sent yet.
+func (q *Queries) PendingUploadBytes(ctx context.Context, uploadedBy pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, pendingUploadBytes, uploadedBy)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const removeReaction = `-- name: RemoveReaction :execrows

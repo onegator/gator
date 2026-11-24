@@ -1135,3 +1135,39 @@ func TestReadMarkersReachOnlyTheReader(t *testing.T) {
 		t.Fatalf("%d read events for one move of the marker", reads)
 	}
 }
+
+// Files nobody sends within a day, and the files of deleted messages, are swept; a person cannot
+// pile up unsent uploads past the limit.
+func TestUnsentAndDeletedFilesAreSwept(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("sweep")
+	conv := h.channel(c.admin, c.project.Id.String(), "files", "").Id.String()
+	_, stale := h.upload(c.member, conv, "old.txt", "old")
+	_, kept := h.upload(c.member, conv, "new.txt", "new")
+	_, sent := h.upload(c.member, conv, "sent.txt", "sent")
+	_, msg := h.post(c.member, conv, gen.NewMessage{Body: ptr("see"), Attachments: &[]openapi_types.UUID{sent.Id}})
+	h.as(c.member, func() { h.do("DELETE", "/messages/"+msg.Id.String(), nil, nil) })
+	if _, err := h.pool.Exec(context.Background(), "UPDATE message_attachments SET created_at = now() - interval '25 hours' WHERE id = $1", stale.Id.String()); err != nil {
+		t.Fatal(err)
+	}
+	n, err := h.api.Conversations.Attachments.Sweep(context.Background(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 2 {
+		t.Fatalf("swept %d files, want the stale upload and the deleted message's", n)
+	}
+	for id, want := range map[string]bool{stale.Id.String(): false, sent.Id.String(): false, kept.Id.String(): true} {
+		var there bool
+		_ = h.pool.QueryRow(context.Background(), "SELECT EXISTS (SELECT 1 FROM message_attachments WHERE id = $1)", id).Scan(&there)
+		if there != want {
+			t.Fatalf("attachment %s still there: %v, want %v", id, there, want)
+		}
+	}
+	if _, err := h.pool.Exec(context.Background(), "UPDATE message_attachments SET size_bytes = $2 WHERE id = $1", kept.Id.String(), int64(100<<20)); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := h.upload(c.member, conv, "more.txt", "x"); code != 400 {
+		t.Fatalf("an upload past the pending limit: %d", code)
+	}
+}

@@ -289,7 +289,8 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   nie wyśle wiadomości z jego id (`message_attachments.message_id` jest NULL do tej chwili). Obrazki
   pokazują się inline, reszta jako pobranie, zawsze z `nosniff` i `sandbox`.
 - **Usunięcie wiadomości** zostawia jej miejsce (`seq`, wątek) i czyści treść w bazie; jej pliki nie są
-  już wydawane (sprzątanie magazynu zostaje na później). Edycja nie zmienia wzmianek. Karty nie są
+  już wydawane, a co godzinę sprzątacz usuwa je z magazynu razem z plikami niewysłanymi przez 24 h.
+  Jedna osoba może mieć najwyżej 100 MB niewysłanych plików. Edycja nie zmienia wzmianek. Karty nie są
   edytowane ręcznie, a usuwa je tylko moderator.
 - **FTS (00038)** to indeks wyrażeniowy GIN na `to_tsvector('simple', body)` (bez usuniętych), a nie
   kolumna `tsvector`: to samo wyszukiwanie bez wektora w każdym odczycie wiadomości. SQL zawęża

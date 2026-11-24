@@ -117,6 +117,9 @@ CREATE TABLE message_attachments (
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX message_attachments_message_idx ON message_attachments (message_id);
+-- Unsent uploads, per conversation and per uploader: the sweep and the pending-bytes limit.
+CREATE INDEX message_attachments_conversation_idx ON message_attachments (conversation_id);
+CREATE INDEX message_attachments_pending_idx ON message_attachments (uploaded_by, created_at) WHERE message_id IS NULL;
 
 -- +goose Down
 DROP TABLE message_attachments;

@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDiskStoreKeepsFilesWholeAndInside(t *testing.T) {
@@ -66,5 +67,17 @@ func TestCleanNameAndEmoji(t *testing.T) {
 		if validEmoji(e) != ok {
 			t.Errorf("validEmoji(%q) = %v", e, !ok)
 		}
+	}
+}
+
+// A long name is cut between characters, never inside one.
+func TestCleanNameCutsWholeCharacters(t *testing.T) {
+	name := strings.Repeat("ż", 200) + ".png" // 2 bytes each
+	got := cleanName(name)
+	if len(got) > maxAttachmentName || !utf8.ValidString(got) {
+		t.Fatalf("%d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+	if got := cleanName("bad\xffbyte.txt"); !utf8.ValidString(got) || got != "badbyte.txt" {
+		t.Fatalf("invalid UTF-8 kept: %q", got)
 	}
 }

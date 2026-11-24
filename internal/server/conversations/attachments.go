@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +22,14 @@ import (
 const MaxAttachmentBytes = 25 << 20
 
 const maxAttachmentName = 255
+
+// MaxPendingBytes is how much one person may have uploaded and not sent yet.
+const MaxPendingBytes = 100 << 20
+
+// UnsentFor is how long an upload waits for the message that carries it before it is swept.
+const UnsentFor = 24 * time.Hour
+
+const sweepBatch = 100
 
 // ErrTooLarge answers a file over MaxAttachmentBytes.
 var ErrTooLarge = fmt.Errorf("%w: a file is at most %d MB", ErrInvalid, MaxAttachmentBytes>>20)
@@ -74,6 +85,13 @@ func (a *Attachments) Upload(ctx context.Context, p auth.Principal, conversation
 	case name == "":
 		return db.MessageAttachment{}, invalid("a file needs a name")
 	}
+	pending, err := db.New(a.pool).PendingUploadBytes(ctx, me.ID)
+	if err != nil {
+		return db.MessageAttachment{}, err
+	}
+	if pending+up.Size > MaxPendingBytes {
+		return db.MessageAttachment{}, invalid("you have %d MB of files not sent yet; send or let go of some first", pending>>20)
+	}
 	contentType := up.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -124,6 +142,51 @@ func (a *Attachments) Open(ctx context.Context, p auth.Principal, id pgtype.UUID
 	return att, r, err
 }
 
+// Sweep deletes the files nobody will read: uploads never sent within UnsentFor, and the files
+// of deleted messages, bytes first. It answers how many went.
+func (a *Attachments) Sweep(ctx context.Context, now time.Time) (int, error) {
+	q := db.New(a.pool)
+	gone := 0
+	for {
+		rows, err := q.ListAbandonedAttachments(ctx, db.ListAbandonedAttachmentsParams{
+			Before: pgtype.Timestamptz{Time: now.Add(-UnsentFor), Valid: true}, MaxRows: sweepBatch,
+		})
+		if err != nil || len(rows) == 0 {
+			return gone, err
+		}
+		for _, att := range rows {
+			if err := a.blobs.Delete(ctx, att.StorageKey); err != nil {
+				return gone, err
+			}
+			if err := q.DeleteAttachment(ctx, att.ID); err != nil {
+				return gone, err
+			}
+			gone++
+		}
+		if len(rows) < sweepBatch {
+			return gone, nil
+		}
+	}
+}
+
+// RunSweeper sweeps every interval until ctx ends.
+func (a *Attachments) RunSweeper(ctx context.Context, every time.Duration, log *slog.Logger) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		if n, err := a.Sweep(ctx, time.Now()); err != nil && ctx.Err() == nil {
+			log.Warn("attachments sweep", "err", err)
+		} else if n > 0 {
+			log.Info("attachments swept", "files", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // attach implements attacher: the files go with the message only if its author uploaded each of
 // them into this conversation and has not sent them yet.
 func (a *Attachments) attach(ctx context.Context, q *db.Queries, msg db.Message, by Author, ids []pgtype.UUID) error {
@@ -156,18 +219,20 @@ func describeAttachments(ctx context.Context, q *db.Queries, ids []pgtype.UUID, 
 	return nil
 }
 
-// cleanName keeps a file's base name, without paths or control characters.
+// cleanName keeps a file's base name, without paths or control characters, as valid UTF-8 of at
+// most maxAttachmentName bytes.
 func cleanName(name string) string {
 	name = name[strings.LastIndexAny(name, `/\`)+1:]
 	name = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || r == 0x7f || r == utf8.RuneError { // control characters, broken bytes
 			return -1
 		}
 		return r
 	}, name)
 	name = strings.TrimSpace(name)
-	if len(name) > maxAttachmentName {
-		name = name[:maxAttachmentName]
+	for len(name) > maxAttachmentName {
+		_, size := utf8.DecodeLastRuneInString(name)
+		name = name[:len(name)-size] // cut whole characters, never half of one
 	}
 	return name
 }

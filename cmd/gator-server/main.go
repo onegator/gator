@@ -214,6 +214,9 @@ func serve(ctx context.Context) error {
 	}
 	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs})
 	go chat.Consumer(hub, log, 0).Run(ctx)
+	if chat.Attachments != nil {
+		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
+	}
 	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
 	go notifier.WithChat(chat.Access).Run(ctx)
 

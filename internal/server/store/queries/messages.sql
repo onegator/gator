@@ -104,3 +104,20 @@ ORDER BY message_id, created_at;
 SELECT DISTINCT author_id FROM messages
 WHERE (conversation_id = sqlc.arg(conversation_id) OR id = sqlc.arg(root_id))
   AND author_kind = 'user' AND author_id IS NOT NULL AND deleted_at IS NULL;
+
+-- name: PendingUploadBytes :one
+-- What a person has uploaded and not sent yet.
+SELECT COALESCE(sum(size_bytes), 0)::bigint FROM message_attachments WHERE uploaded_by = $1 AND message_id IS NULL;
+
+-- name: ListAbandonedAttachments :many
+-- Files nobody will read: uploaded and never sent before the cutoff, or carried by a message
+-- that was deleted.
+SELECT a.* FROM message_attachments a
+LEFT JOIN messages m ON m.id = a.message_id
+WHERE (a.message_id IS NULL AND a.created_at < sqlc.arg(before))
+   OR m.deleted_at IS NOT NULL
+ORDER BY a.created_at
+LIMIT sqlc.arg(max_rows);
+
+-- name: DeleteAttachment :exec
+DELETE FROM message_attachments WHERE id = $1;
