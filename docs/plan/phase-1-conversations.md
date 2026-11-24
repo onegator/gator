@@ -146,7 +146,7 @@ PATCH  /messages/{id}                                             edycja (autor,
 DELETE /messages/{id}                                             soft delete (autor albo admin projektu)
 PUT    /messages/{id}/reactions/{emoji}  /  DELETE …
 GET    /messages/{id}/thread                                      conversation wątku (tworzy przy 1. odpowiedzi)
-POST   /messages/{id}/promote                                     „zrób task" {kind, title?} → task + link
+POST   /messages/{id}/promote                                     „zrób task" {kind, title?, projectId?} → {task, conversationId}
 POST   /conversations/{id}/read                                   {seq}
 GET    /tasks/{taskId}/conversation
 GET    /search/messages?q=&project=                               FTS, tylko w dostępnych conversation
@@ -266,3 +266,10 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   `state: resolved`, a powrót do fazy po rollbacku to nowa karta. Karty `incident`/`release`/`pr` i kanał
   `#incidents` zostają na później (plan PR-ów fazy 1 wymienia w konsumencie tylko `task`, `decision`,
   `job`, `artifact`); `working_state` runnera nie ma karty.
+- **Promote** tworzy task przez `process.Service.Create` (te same reguły consentu i `origin`), a
+  powiązanie wątku robi w tej samej transakcji (nowe pole `process.CreateParams.InTx`). Wątkiem taska
+  zostaje wątek pod wiadomością albo wątek, w którym wiadomość jest odpowiedzią; wiadomość bez
+  odpowiedzi dostaje wątek razem z taskiem. Karta `task` trafia wtedy do środka tego wątku (a nie do
+  kanału, bo wątek wisi pod wiadomością człowieka). Opis taska cytuje wiadomość i do 5 pierwszych
+  odpowiedzi (bez LLM-owego streszczenia) i linkuje `gator://conversations/<id>?seq=<n>`. Wiadomość w
+  DM-ie poza projektem wymaga `projectId`. Rodzaje: `feature`, `bug`, `chore`, `incident`.

@@ -339,3 +339,29 @@ func (s *Server) GetTaskConversation(w http.ResponseWriter, r *http.Request, tas
 	}
 	writeJSON(w, http.StatusOK, toConversationDetail(d))
 }
+
+// PromoteMessage makes a message into a task.
+func (s *Server) PromoteMessage(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	if s.Conversations.Promoter == nil {
+		writeError(w, http.StatusServiceUnavailable, "making messages into tasks is not enabled on this server", "unavailable")
+		return
+	}
+	var in gen.PromoteMessage
+	if !decode(w, r, &in) {
+		return
+	}
+	pr := conversations.Promotion{Kind: string(in.Kind), Title: deref(in.Title)}
+	if in.ProjectId != nil {
+		pr.Project = fromUUID(*in.ProjectId)
+	}
+	out, err := s.Conversations.Promoter.Promote(r.Context(), p, ActorFromContext(r.Context()), fromUUID(messageId), pr)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, gen.PromotedMessage{Task: toTask(out.Task), ConversationId: toUUID(out.Conversation)})
+}

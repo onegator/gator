@@ -1241,6 +1241,26 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /messages/{messageId}/promote:
+    post:
+      operationId: promoteMessage
+      description: >-
+        "Make this a task." Creates a task from the message, through the same door as any other
+        task: the thread under the message (or the thread the message is a reply in) becomes the
+        task's thread, and the task's description quotes the message and its first replies with a
+        link back to the conversation. The title defaults to the message's first line. projectId
+        is needed only for a DM outside every project. 409 when the thread already is a task's.
+        People who may write where the message is and in the project.
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PromoteMessage" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/PromotedMessage" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /messages/{messageId}/thread:
     get:
       operationId: getMessageThread
@@ -2425,3 +2445,16 @@ components:
       properties:
         messages: { type: array, items: { $ref: "#/components/schemas/Message" } }
         hasMore: { type: boolean }
+    PromoteMessage:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [feature, bug, chore, incident] }
+        title: { type: string, description: "defaults to the message's first line" }
+        projectId: { type: string, format: uuid, description: "only for a message in a DM outside every project" }
+    PromotedMessage:
+      type: object
+      required: [task, conversationId]
+      properties:
+        task: { $ref: "#/components/schemas/Task" }
+        conversationId: { type: string, format: uuid, description: "the task's thread: the conversation the message started or is in" }

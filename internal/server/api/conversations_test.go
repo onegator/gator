@@ -623,3 +623,59 @@ func TestCardsAreUpdatedNotDuplicated(t *testing.T) {
 		t.Fatalf("the thread holds %d messages, want a decision, a job and a plan", len(page.Messages))
 	}
 }
+
+// "Make this a task": the thread under a message becomes the task's thread, the task quotes it
+// and links back, and the same thread cannot become a second task.
+func TestPromoteMessageToTask(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("promote")
+	conv := h.channel(c.admin, c.project.Id.String(), "support", "").Id.String()
+	_, root := h.post(c.member, conv, gen.NewMessage{Body: ptr("Login loops on Safari\nSeen it twice today.")})
+	var thread gen.ConversationDetail
+	h.as(c.admin, func() { h.do("GET", "/messages/"+root.Id.String()+"/thread", nil, &thread) })
+	h.post(c.admin, thread.Id.String(), gen.NewMessage{Body: ptr("Same on 17.2")})
+
+	h.as(c.viewer, func() {
+		if code := h.do("POST", "/messages/"+root.Id.String()+"/promote", gen.PromoteMessage{Kind: "bug"}, nil); code != 403 {
+			t.Fatalf("a viewer made a task: %d", code)
+		}
+	})
+	var out gen.PromotedMessage
+	h.as(c.member, func() {
+		if code := h.do("POST", "/messages/"+root.Id.String()+"/promote", gen.PromoteMessage{Kind: "bug"}, &out); code != 201 {
+			t.Fatalf("promote: %d", code)
+		}
+	})
+	if out.Task.Title != "Login loops on Safari" || out.ConversationId != thread.Id || out.Task.Kind != "bug" {
+		t.Fatalf("promoted: %+v", out)
+	}
+	if d := deref(out.Task.Description); !strings.Contains(d, "> Login loops on Safari") || !strings.Contains(d, "Same on 17.2") ||
+		!strings.Contains(d, "gator://conversations/"+conv+"?seq=1") {
+		t.Fatalf("description: %s", d)
+	}
+	var taskThread gen.ConversationDetail
+	h.as(c.member, func() { h.do("GET", "/tasks/"+out.Task.Id.String()+"/conversation", nil, &taskThread) })
+	if taskThread.Id != thread.Id || taskThread.Kind != gen.ConversationDetailKindTask {
+		t.Fatalf("the task's thread is %v (%s), not the message's thread %v", taskThread.Id, taskThread.Kind, thread.Id)
+	}
+	eventually(t, "the task's card in the thread it came from", func() bool {
+		return len(h.cardsIn(c.member, thread.Id.String(), "task")) == 1
+	})
+	h.as(c.member, func() {
+		if code := h.do("POST", "/messages/"+root.Id.String()+"/promote", gen.PromoteMessage{Kind: "feature"}, nil); code != 409 {
+			t.Fatalf("a second task from one thread: %d", code)
+		}
+	})
+	// A message nobody replied to gets its thread with the task.
+	_, lone := h.post(c.member, conv, gen.NewMessage{Body: ptr("Add dark mode")})
+	h.as(c.member, func() {
+		if code := h.do("POST", "/messages/"+lone.Id.String()+"/promote", gen.PromoteMessage{Kind: "feature", Title: ptr("Dark mode")}, &out); code != 201 {
+			t.Fatalf("promote a lone message: %d", code)
+		}
+	})
+	var under gen.ConversationDetail
+	h.as(c.member, func() { h.do("GET", "/messages/"+lone.Id.String()+"/thread", nil, &under) })
+	if under.Id != out.ConversationId || under.TaskId == nil || *under.TaskId != out.Task.Id || out.Task.Title != "Dark mode" {
+		t.Fatalf("the lone message's thread: %+v, promoted %+v", under, out)
+	}
+}

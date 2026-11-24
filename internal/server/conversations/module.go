@@ -17,6 +17,8 @@ type Deps struct {
 	// Decisions answers whether a task waits on a person (process.Service). Nil: no decision
 	// cards.
 	Decisions DecisionSource
+	// Tasks creates tasks (process.Service). Nil: messages cannot be made into tasks.
+	Tasks TaskCreator
 }
 
 // Module is the package's services wired to one database, for the server to hand out. It does
@@ -27,6 +29,8 @@ type Module struct {
 	Messages  *Messages
 	Threads   *Threads
 	Cards     *Projector
+	// Promoter is nil without Deps.Tasks.
+	Promoter *Promoter
 
 	pool *pgxpool.Pool
 	deps Deps
@@ -37,7 +41,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	access := NewAccess(deps.Roles, db.New(pool))
 	directory := NewDirectory(pool, access, deps.Roles)
 	threads := NewThreads(pool, access, directory)
-	return &Module{
+	m := &Module{
 		Access:    access,
 		Directory: directory,
 		Messages:  NewMessages(pool, access),
@@ -46,6 +50,10 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		pool:      pool,
 		deps:      deps,
 	}
+	if deps.Tasks != nil {
+		m.Promoter = NewPromoter(pool, access, deps.Roles, deps.Tasks)
+	}
+	return m
 }
 
 // CardSources are the kinds of cards work leaves in conversations: each task's own card (which

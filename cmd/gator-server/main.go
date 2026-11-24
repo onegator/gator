@@ -202,7 +202,7 @@ func serve(ctx context.Context) error {
 	}
 
 	// People talk in a project's channels; the consumer keeps them in step with the project.
-	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc})
+	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc})
 	go chat.Consumer(hub, log, 0).Run(ctx)
 
 	apiServer := &api.Server{
