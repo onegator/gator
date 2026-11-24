@@ -809,3 +809,69 @@ func TestReactEditDeleteAndAttach(t *testing.T) {
 		t.Fatalf("a viewer uploaded: %d", code)
 	}
 }
+
+// Search finds words only where the caller may read them: the private channel's members find
+// what was said there, the project's admin does not, and a DM is its people's alone.
+func TestSearchKeepsToReadableConversations(t *testing.T) {
+	h := newHarness(t)
+	workspaceAdmin := h.token
+	c := h.crew("search")
+	word := fmt.Sprintf("wdrożenie%d", time.Now().UnixNano())
+	open := h.channel(c.admin, c.project.Id.String(), "open", "").Id.String()
+	secret := h.channel(c.member, c.project.Id.String(), "secret", "private").Id.String()
+	var dm gen.ConversationDetail
+	h.as(c.member, func() {
+		h.do("POST", "/conversations/dm", gen.NewDirectMessage{Members: []openapi_types.UUID{mustOpenUUID(t, c.strangerID)}}, &dm)
+	})
+	_, inOpen := h.post(c.member, open, gen.NewMessage{Body: ptr("Plan na " + word + " w piątek")})
+	_, inSecret := h.post(c.member, secret, gen.NewMessage{Body: ptr(word + " przesuwamy")})
+	_, inDM := h.post(c.stranger, dm.Id.String(), gen.NewMessage{Body: ptr("Co z " + word + "?")})
+	_, gone := h.post(c.member, open, gen.NewMessage{Body: ptr(word + " skasowane")})
+	h.as(c.member, func() { h.do("DELETE", "/messages/"+gone.Id.String(), nil, nil) })
+
+	found := func(token string) map[string]bool {
+		t.Helper()
+		var hits []gen.MessageHit
+		h.as(token, func() {
+			if code := h.do("GET", "/search/messages?q="+url.QueryEscape(word), nil, &hits); code != 200 {
+				t.Fatalf("search: %d", code)
+			}
+		})
+		out := map[string]bool{}
+		for _, hit := range hits {
+			out[hit.Message.Id.String()] = true
+			if hit.Conversation.Id != hit.Message.ConversationId {
+				t.Fatalf("a hit's conversation: %+v", hit)
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name  string
+		token string
+		want  []gen.Message
+	}{
+		{"the private channel's owner, in the DM", c.member, []gen.Message{inOpen, inSecret, inDM}},
+		{"the project's admin", c.admin, []gen.Message{inOpen}},
+		{"a viewer", c.viewer, []gen.Message{inOpen}},
+		{"the workspace admin", workspaceAdmin, []gen.Message{inOpen}},
+		{"somebody outside the project, in the DM", c.stranger, []gen.Message{inDM}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := found(tc.token)
+			if len(got) != len(tc.want) {
+				t.Fatalf("found %d messages, want %d", len(got), len(tc.want))
+			}
+			for _, m := range tc.want {
+				if !got[m.Id.String()] {
+					t.Fatalf("did not find %q", m.Body)
+				}
+			}
+		})
+	}
+	var named []gen.Conversation
+	h.as(c.member, func() { h.do("GET", "/projects/"+c.project.Id.String()+"/conversations?q=SEC", nil, &named) })
+	if len(named) != 1 || *named[0].Name != "secret" {
+		t.Fatalf("channels named like sec: %+v", named)
+	}
+}

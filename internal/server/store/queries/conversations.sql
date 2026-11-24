@@ -70,6 +70,7 @@ LEFT JOIN conversation_members cm
        ON cm.conversation_id = c.id AND cm.member_kind = 'user' AND cm.member_id = sqlc.arg(user_id)
 WHERE c.project_id = sqlc.arg(project_id) AND c.kind = sqlc.arg(kind)
   AND (sqlc.arg(include_archived)::bool OR c.archived_at IS NULL)
+  AND (sqlc.narg(name_like)::text IS NULL OR c.name ILIKE sqlc.narg(name_like)::text)
   AND (cm.member_id IS NOT NULL OR (c.visibility = 'project' AND c.kind <> 'dm'))
 ORDER BY c.name NULLS LAST, c.last_message_at DESC NULLS LAST
 LIMIT 500;

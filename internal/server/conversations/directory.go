@@ -453,16 +453,30 @@ func (d *Directory) RemoveMember(ctx context.Context, p auth.Principal, id pgtyp
 	})
 }
 
+// ListFilter narrows a project's conversation list.
+type ListFilter struct {
+	Kind string // channel when empty
+	// Archived includes archived conversations.
+	Archived bool
+	// Name keeps channels whose name contains it.
+	Name string
+}
+
 // ListProject answers a project's conversations of one kind that the caller may read, with their
 // unread counts. The caller has already been found able to read the project.
-func (d *Directory) ListProject(ctx context.Context, p auth.Principal, project pgtype.UUID, kind string, archived bool) ([]Listed, error) {
-	if !validKind(kind) {
+func (d *Directory) ListProject(ctx context.Context, p auth.Principal, project pgtype.UUID, f ListFilter) ([]Listed, error) {
+	if f.Kind == "" {
+		f.Kind = KindChannel
+	}
+	if !validKind(f.Kind) {
 		return nil, invalid("kind is channel, dm, thread or task")
 	}
 	me, _ := memberOf(p)
-	rows, err := db.New(d.pool).ListProjectConversations(ctx, db.ListProjectConversationsParams{
-		UserID: me.ID, ProjectID: project, Kind: kind, IncludeArchived: archived,
-	})
+	params := db.ListProjectConversationsParams{UserID: me.ID, ProjectID: project, Kind: f.Kind, IncludeArchived: f.Archived}
+	if name := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(f.Name), "#")); name != "" {
+		params.NameLike = ptr("%" + likeEscaper.Replace(name) + "%")
+	}
+	rows, err := db.New(d.pool).ListProjectConversations(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -482,6 +496,9 @@ func (d *Directory) ListProject(ctx context.Context, p auth.Principal, project p
 	}
 	return out, nil
 }
+
+// likeEscaper makes a person's words literal inside a LIKE pattern.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // ListMine answers every conversation the caller is in and may still read, newest first; kind
 // narrows it ("" for all).

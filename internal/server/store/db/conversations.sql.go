@@ -605,6 +605,7 @@ LEFT JOIN conversation_members cm
        ON cm.conversation_id = c.id AND cm.member_kind = 'user' AND cm.member_id = $1
 WHERE c.project_id = $2 AND c.kind = $3
   AND ($4::bool OR c.archived_at IS NULL)
+  AND ($5::text IS NULL OR c.name ILIKE $5::text)
   AND (cm.member_id IS NOT NULL OR (c.visibility = 'project' AND c.kind <> 'dm'))
 ORDER BY c.name NULLS LAST, c.last_message_at DESC NULLS LAST
 LIMIT 500
@@ -615,6 +616,7 @@ type ListProjectConversationsParams struct {
 	ProjectID       pgtype.UUID `json:"project_id"`
 	Kind            string      `json:"kind"`
 	IncludeArchived bool        `json:"include_archived"`
+	NameLike        *string     `json:"name_like"`
 }
 
 type ListProjectConversationsRow struct {
@@ -634,6 +636,7 @@ func (q *Queries) ListProjectConversations(ctx context.Context, arg ListProjectC
 		arg.ProjectID,
 		arg.Kind,
 		arg.IncludeArchived,
+		arg.NameLike,
 	)
 	if err != nil {
 		return nil, err

@@ -149,7 +149,7 @@ GET    /messages/{id}/thread                                      conversation w
 POST   /messages/{id}/promote                                     „zrób task" {kind, title?, projectId?} → {task, conversationId}
 POST   /conversations/{id}/read                                   {seq}
 GET    /tasks/{taskId}/conversation
-GET    /search/messages?q=&project=                               FTS, tylko w dostępnych conversation
+GET    /search/messages?q=&projectId=&limit=                      FTS, tylko w dostępnych conversation
 POST   /attachments                                               upload (multipart: conversationId, file) → id
 GET    /attachments/{id}                                          plik dla czytających rozmowę
 ```
@@ -282,3 +282,8 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
 - **Usunięcie wiadomości** zostawia jej miejsce (`seq`, wątek) i czyści treść w bazie; jej pliki nie są
   już wydawane (sprzątanie magazynu zostaje na później). Edycja nie zmienia wzmianek. Karty nie są
   edytowane ręcznie, a usuwa je tylko moderator.
+- **FTS (00038)** to indeks wyrażeniowy GIN na `to_tsvector('simple', body)` (bez usuniętych), a nie
+  kolumna `tsvector`: to samo wyszukiwanie bez wektora w każdym odczycie wiadomości. SQL zawęża
+  kandydatów (otwarte rozmowy czytelnych projektów i te, w których jestem), a każdy wynik i tak
+  przechodzi przez `Access`. Zapytanie w składni `websearch_to_tsquery`. `pg_trgm` służy filtrowi
+  `?q=` na liście kanałów projektu (`ILIKE` po indeksie trigramowym).

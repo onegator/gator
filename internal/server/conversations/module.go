@@ -31,6 +31,7 @@ type Module struct {
 	Messages  *Messages
 	Threads   *Threads
 	Cards     *Projector
+	Search    *Search
 	// Promoter is nil without Deps.Tasks.
 	Promoter *Promoter
 	// Attachments is nil without Deps.Blobs.
@@ -51,6 +52,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Messages:  NewMessages(pool, access),
 		Threads:   threads,
 		Cards:     NewProjector(pool, threads),
+		Search:    NewSearch(pool, access),
 		pool:      pool,
 		deps:      deps,
 	}

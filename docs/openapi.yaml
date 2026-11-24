@@ -1094,6 +1094,7 @@ paths:
         - { $ref: "#/components/parameters/projectId" }
         - { name: kind, in: query, required: false, schema: { type: string, enum: [channel, dm, thread, task], default: channel } }
         - { name: archived, in: query, required: false, description: include archived channels, schema: { type: boolean } }
+        - { name: q, in: query, required: false, description: "channels whose name contains this", schema: { type: string } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -1283,6 +1284,21 @@ paths:
         "204": { description: removed }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /search/messages:
+    get:
+      operationId: searchMessages
+      description: >-
+        Messages whose words match q (web-search syntax: words, "quoted phrases", -excluded), best
+        first, only from conversations the caller may read. projectId narrows it to one project.
+        Deleted messages are not found.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 200 } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/MessageHit" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /attachments:
     post:
       operationId: uploadAttachment
@@ -2562,3 +2578,9 @@ components:
       properties:
         task: { $ref: "#/components/schemas/Task" }
         conversationId: { type: string, format: uuid, description: "the task's thread: the conversation the message started or is in" }
+    MessageHit:
+      type: object
+      required: [message, conversation]
+      properties:
+        message: { $ref: "#/components/schemas/Message" }
+        conversation: { $ref: "#/components/schemas/Conversation" }

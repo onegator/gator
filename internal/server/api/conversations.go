@@ -53,11 +53,11 @@ func (s *Server) ListProjectConversations(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	kind := conversations.KindChannel
+	f := conversations.ListFilter{Archived: params.Archived != nil && *params.Archived, Name: deref(params.Q)}
 	if params.Kind != nil {
-		kind = string(*params.Kind)
+		f.Kind = string(*params.Kind)
 	}
-	rows, err := s.Conversations.Directory.ListProject(r.Context(), p, fromUUID(projectId), kind, params.Archived != nil && *params.Archived)
+	rows, err := s.Conversations.Directory.ListProject(r.Context(), p, fromUUID(projectId), f)
 	if err != nil {
 		s.failConversation(w, err)
 		return
@@ -417,4 +417,41 @@ func (s *Server) react(w http.ResponseWriter, r *http.Request, messageId gen.Mes
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// SearchMessages finds messages by their words in the conversations the caller may read.
+func (s *Server) SearchMessages(w http.ResponseWriter, r *http.Request, params gen.SearchMessagesParams) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	in := conversations.Query{Text: params.Q}
+	if params.Limit != nil {
+		in.Limit = *params.Limit
+	}
+	if params.ProjectId != nil {
+		in.Project = fromUUID(*params.ProjectId)
+		if _, ok := s.requireProject(w, r, in.Project, auth.RoleViewer); !ok {
+			return
+		}
+	}
+	visible, err := s.visibleProjects(r, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	scope := conversations.Scope{All: visible == nil}
+	for id := range visible {
+		scope.Projects = append(scope.Projects, pgtype.UUID{Bytes: id, Valid: true})
+	}
+	hits, err := s.Conversations.Search.Messages(r.Context(), p, scope, in)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	out := make([]gen.MessageHit, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, gen.MessageHit{Message: toMessage(h.Message), Conversation: toConversation(conversations.Listed{Conversation: h.Conversation})})
+	}
+	writeJSON(w, http.StatusOK, out)
 }

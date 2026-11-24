@@ -59,7 +59,7 @@ func TestDirectoryKeepsConversationsToTheirReaders(t *testing.T) {
 
 	names := func(who auth.Principal) map[string]bool {
 		t.Helper()
-		ls, err := f.directory.ListProject(f.ctx, who, project, KindChannel, false)
+		ls, err := f.directory.ListProject(f.ctx, who, project, ListFilter{Kind: KindChannel})
 		if err != nil {
 			t.Fatal(err)
 		}
