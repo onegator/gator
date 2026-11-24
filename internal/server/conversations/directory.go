@@ -130,8 +130,8 @@ func (d *Directory) CreateChannel(ctx context.Context, p auth.Principal, project
 	return conv, err
 }
 
-// EnsureDefaultChannels gives a project its #general, if it has none yet, and puts people in it.
-// Safe to repeat.
+// EnsureDefaultChannels gives a project its #general, if it has none yet, and puts people in it;
+// an id that names nobody is passed over. Safe to repeat.
 func (d *Directory) EnsureDefaultChannels(ctx context.Context, project pgtype.UUID, people ...pgtype.UUID) (db.Conversation, error) {
 	var conv db.Conversation
 	err := store.InTx(ctx, d.pool, func(q *db.Queries) error {
@@ -146,7 +146,7 @@ func (d *Directory) EnsureDefaultChannels(ctx context.Context, project pgtype.UU
 		default:
 			conv = created
 		}
-		for _, person := range people {
+		for _, person := range unique(people) { // nobody, when the caller is no person
 			if err := q.JoinDefaultChannel(ctx, db.JoinDefaultChannelParams{ProjectID: project, UserID: person, Name: DefaultChannel}); err != nil {
 				return err
 			}

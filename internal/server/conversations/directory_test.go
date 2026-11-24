@@ -120,3 +120,18 @@ func TestDirectoryKeepsConversationsToTheirReaders(t *testing.T) {
 		t.Fatalf("the stranger's DMs: %+v %v", mine, err)
 	}
 }
+
+// Opening #general for a caller who is no person (a runner, a plugin) still opens it.
+func TestDefaultChannelsWithoutAPerson(t *testing.T) {
+	f := newFixture(t)
+	project := f.project(nil)
+	general, err := f.directory.EnsureDefaultChannels(f.ctx, project, pgtype.UUID{})
+	if err != nil || general.Name == nil || *general.Name != DefaultChannel {
+		t.Fatalf("#general: %+v %v", general, err)
+	}
+	var members int
+	_ = f.pool.QueryRow(f.ctx, "SELECT count(*) FROM conversation_members WHERE conversation_id = $1", general.ID).Scan(&members)
+	if members != 0 {
+		t.Fatalf("%d members for nobody", members)
+	}
+}
