@@ -1,0 +1,82 @@
+# Nowy kierunek: rozmowy, agenci, Brain
+
+Stan na 2026-11-24. Plan zmiany kierunku Gatora z „narzędzia procesu" na **przestrzeń roboczą
+zespołu, w której ludzie i agenci rozmawiają ze sobą, a każda rozmowa jest przypięta do pracy**.
+Misja się nie zmienia: jedna aplikacja dla zespołu, który robi oprogramowanie od discovery po
+monitoring produkcji.
+
+Inspiracja: [nightly-labs/openbot](https://github.com/nightly-labs/openbot). Bierzemy z niego wyłącznie
+pomysły, bo licencja PolyForm Noncommercial wyklucza kopiowanie kodu.
+
+## Zasady, które obowiązują we wszystkich fazach
+
+1. **Rozmowa jest przypięta do pracy.** Każdy wątek może stać się taskiem, a każdy task ma swój
+   wątek. Nie budujemy ogólnego czatu, który konkuruje ze Slackiem funkcjami. Konkurujemy tym, że
+   decyzja, plan, PR i incydent dzieją się w rozmowie.
+2. **Proces zostaje kręgosłupem.** Fazy, bramki, zatwierdzenia, consent, budżety i metryki
+   (`internal/server/process`, `jobs`, `usage_records`) nie są przepisywane. Rozmowa to nowy
+   interfejs do nich.
+3. **Agent jest członkiem, a nie funkcją.** Ma tożsamość (`@reviewer`), profil, rolę, budżet i
+   uprawnienia. Wszystko, co zrobi, jest przypisane do niego i do człowieka, który go poprosił.
+4. **Wiedza przechodzi przez człowieka.** Agent proponuje, człowiek zatwierdza. Do promptu trafia
+   tylko to, co zatwierdzone, tak jak dziś w `product_context`. Każdy wpis Brainu ma pochodzenie.
+5. **Sekrety nie opuszczają serwera.** Integracje, w tym zdalne serwery MCP, idą przez gator-server
+   (proxy). Runner dostaje token joba, nigdy klucz do zewnętrznego systemu.
+6. **Słowa z zewnątrz to dane, nie polecenia.** Wiadomość ze Slacka, komentarz w PR czy alert trafia
+   do agenta w znacznikach untrusted, tak jak dziś obiekcje pluginów.
+7. **Mierzymy, nie deklarujemy.** Każda nowa ścieżka do agenta zapisuje koszt, kontekst
+   (`context_bytes`) i cytowania, żeby dało się sprawdzić, czy Brain pomaga.
+
+## Fazy
+
+| # | Faza | Cel | Zależy od | Szacunek |
+|---|---|---|---|---|
+| 1 | [Rozmowy](phase-1-conversations.md) | kanały, wątki, DM-y, wiadomości, karty, wątek ↔ task | — | 3 tyg. |
+| 2 | [Agenci jako członkowie](phase-2-agents.md) | tożsamość agenta, @mention → odpowiedź w wątku, delegacja | 1 | 3 tyg. |
+| 3 | [Brain](phase-3-brain.md) | jeden magazyn wiedzy z zakresami, kontekst użytkownika, serwer MCP | 1, 2 | 4 tyg. |
+| 4 | [Marketplace](phase-4-marketplace.md) | paczki agentów i skilli, katalog integracji, proxy MCP | 2, (3) | 3 tyg. |
+| 5 | [Otwarcie na zewnątrz](phase-5-external.md) | backend ACP w runnerze, A2A, most do Slacka, komentarze GitHub | 2, 4 | 4 tyg. |
+| 6 | [UI](phase-6-ui.md) | trzy panele, rozmowa z kartami, Brain, Marketplace, opcjonalny klient web | 1 → równolegle | 4 tyg. + web |
+
+Szacunki zakładają 1–2 osoby z agentami. Fazy 1 i 6a idą razem, bo rozmowa bez ekranu nie istnieje.
+
+```
+1 Rozmowy ──► 2 Agenci ──► 3 Brain ──► 4 Marketplace ──► 5 Zewnętrzne
+   │              │                                  ▲
+   └── 6a UI ─────┴── 6b UI (Brain, Marketplace) ────┘    6c web (decyzja)
+```
+
+## Pierwszy pionowy wycinek (koniec fazy 2)
+
+W kanale `#<projekt>` piszę „@reviewer zobacz PR #12". Agent odpowiada w wątku i strumieniuje
+odpowiedź na żywo, a koszt widać pod wiadomością. Jednym kliknięciem „Zrób z tego task" wątek staje
+się taskiem `bug` albo `feature`, z tą rozmową jako pierwszym kontekstem. Decyzja „zatwierdź plan"
+przychodzi jako karta w wątku taska i działa tym samym endpointem co dziś `/tasks/{id}/approve`.
+
+## Decyzje przyjęte jako założenia (do potwierdzenia)
+
+| Pytanie | Założenie w planie | Co zmienia inna odpowiedź |
+|---|---|---|
+| Klient natywny czy web? | SwiftUI zostaje głównym klientem; web jako faza 6c, start po fazie 2 | web od razu = +4–6 tyg. przed fazą 3 |
+| Zastąpić Slacka czy most? | nasze kanały są pierwszorzędne, Slack przez most w fazie 5 | bez mostu faza 5 maleje o ~1,5 tyg. |
+| Kontekst użytkownika w Brainie | domyślnie prywatny, udostępnianie per wpis | domyślnie zespołowy = prostsze reguły, większe ryzyko |
+| Marketplace | kurowany rejestr Gatora; społeczność później, z podpisami | otwarty od razu = review, sandbox, zgłaszanie nadużyć w fazie 4 |
+
+## Migracje (numeracja orientacyjna)
+
+| Faza | Migracja |
+|---|---|
+| 1 | `00035_conversations.sql`, `00036_message_search.sql` |
+| 2 | `00037_agents.sql`, `00038_agent_turns.sql` |
+| 3 | `00039_brain.sql`, `00040_brain_backfill.sql`, `00041_brain_embeddings.sql` (opcjonalna, pgvector) |
+| 4 | `00042_marketplace.sql`, `00043_mcp_servers.sql` |
+| 5 | `00044_external_agents.sql`, `00045_messaging_bridges.sql` |
+
+Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
+
+## Co celowo NIE wchodzi
+
+- Wideo, huddle, kalendarz, edytor dokumentów: zostają w narzędziach zespołu i dochodzą integracjami.
+- Własny model językowy czy embeddingi trenowane u nas.
+- Uruchamianie agentów na desktopie członka zespołu jak w OpenBocie. U nas agent działa na runnerze
+  (VPS lub Mac), a desktop jest tylko klientem.
