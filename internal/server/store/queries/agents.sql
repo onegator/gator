@@ -64,12 +64,32 @@ WHERE id = sqlc.arg(id) AND status IN ('queued', 'running')
 RETURNING *;
 
 -- name: ChainCost :one
--- What a chain of delegations has spent so far, in every job of every turn in it.
-SELECT COALESCE(sum(u.cost_usd), 0)::float8
-FROM usage_records u
-JOIN jobs j ON j.id = u.job_id
-JOIN agent_turns t ON t.id = j.turn_id
-WHERE t.chain_id = $1;
+-- What a chain of delegations has spent, or may still spend: the cost of every job of every turn
+-- in it (and of the phase job a chain started from, whose id is the chain's), finished jobs as
+-- they cost, jobs still queued or running at the cap they may spend.
+SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+                  LEFT JOIN agent_turns t ON t.id = j.turn_id
+                  WHERE t.chain_id = sqlc.arg(chain_id) OR j.id = sqlc.arg(chain_id)), 0)
+      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
+                  LEFT JOIN agent_turns t ON t.id = j.turn_id
+                  WHERE (t.chain_id = sqlc.arg(chain_id) OR j.id = sqlc.arg(chain_id))
+                    AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8;
+
+-- name: ChainTurns :one
+-- How many turns a chain has had, and how many the asking turn (or the phase job the chain
+-- started from) has asked for, refusals not counted.
+SELECT count(*)::int AS turns,
+       (count(*) FILTER (WHERE parent_turn_id = sqlc.narg(parent_id)::uuid
+                            OR (sqlc.narg(parent_id)::uuid IS NULL AND hop = 1)))::int AS asked_by_parent
+FROM agent_turns
+WHERE chain_id = sqlc.arg(chain_id) AND status <> 'refused';
+
+-- name: AgentCostSince :one
+-- What an agent's jobs spent since a moment, or may still spend (queued and running at their cap).
+SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+                  WHERE j.agent_id = sqlc.arg(agent_id) AND u.created_at >= sqlc.arg(since)), 0)
+      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
+                  WHERE j.agent_id = sqlc.arg(agent_id) AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8;
 
 -- name: ListActiveTurnsIn :many
 -- The turns still answering in a conversation, oldest first.

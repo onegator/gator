@@ -6,12 +6,11 @@ import (
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
-// Who asks an agent for a turn (agent_turns.requested_by_kind).
+// Who asks an agent for a turn (agent_turns.requested_by_kind also allows automation and
+// process, for the phases to come).
 const (
-	RequestedByUser       = "user"
-	RequestedByAgent      = "agent"
-	RequestedByAutomation = "automation"
-	RequestedByProcess    = "process"
+	RequestedByUser  = "user"
+	RequestedByAgent = "agent"
 )
 
 // Request is one call for an agent's turn: who is asked, by which message, by whom, and the turn
@@ -28,6 +27,9 @@ type Request struct {
 	RequestedBy     pgtype.UUID
 	// Parent is the turn an agent was in when it asked; nil when a person asked.
 	Parent *db.AgentTurn
+	// FromJob is the job an agent asked from when that job answers no turn (a phase job): the
+	// chain starts at that job, which is its first turn.
+	FromJob pgtype.UUID
 	// EscalatedFrom is the chat turn a person let work: this turn answers that turn's ask, and
 	// its trigger is the person's consent.
 	EscalatedFrom *db.AgentTurn
@@ -46,18 +48,25 @@ func (r Request) Question() db.Message {
 // Hop is how far down a chain of delegations the turn is: 0 when a person asks, one more than
 // the turn that delegated otherwise.
 func (r Request) Hop() int {
-	if r.Parent == nil {
-		return 0
+	switch {
+	case r.Parent != nil:
+		return int(r.Parent.Hop) + 1
+	case r.FromJob.Valid:
+		return 1
 	}
-	return int(r.Parent.Hop) + 1
+	return 0
 }
 
-// Chain is the chain the turn belongs to: its parent's, or none yet (a person starts a new one).
+// Chain is the chain the turn belongs to: its parent's, the phase job's it was asked from, or
+// none yet (a person starts a new one).
 func (r Request) Chain() (pgtype.UUID, bool) {
-	if r.Parent == nil {
-		return pgtype.UUID{}, false
+	switch {
+	case r.Parent != nil:
+		return r.Parent.ChainID, true
+	case r.FromJob.Valid:
+		return r.FromJob, true
 	}
-	return r.Parent.ChainID, true
+	return pgtype.UUID{}, false
 }
 
 // OnBehalfOf is the person at the start of the chain.
@@ -87,4 +96,6 @@ const (
 	RefusedChainBudget = "chain_budget"
 	RefusedBudget      = "budget"
 	RefusedNoTask      = "no_task"
+	RefusedFanOut      = "fan_out"
+	RefusedAgentBudget = "agent_budget"
 )

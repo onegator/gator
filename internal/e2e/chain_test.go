@@ -173,7 +173,7 @@ func TestAChainOfAgentsStopsAtItsBudget(t *testing.T) {
 	h.sayAs(worker, "@reviewer check it")
 
 	said := h.lastSaid(turn.Conversation, func(m gen.Message) bool { return m.AuthorKind == "system" && m.Kind == "text" })
-	if !strings.Contains(said.Body, "stopped before @reviewer") || !strings.Contains(said.Body, "$2.50 of its $2.00") {
+	if !strings.Contains(said.Body, "stopped before @reviewer") || !strings.Contains(said.Body, "used $3.50 of its $2.00") {
 		t.Fatalf("the thread says: %q", said.Body)
 	}
 	exec.finish(worker, 0.1)

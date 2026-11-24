@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const agentCostSince = `-- name: AgentCostSince :one
+SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+                  WHERE j.agent_id = $1 AND u.created_at >= $2), 0)
+      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
+                  WHERE j.agent_id = $1 AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8
+`
+
+type AgentCostSinceParams struct {
+	AgentID pgtype.UUID        `json:"agent_id"`
+	Since   pgtype.Timestamptz `json:"since"`
+}
+
+// What an agent's jobs spent since a moment, or may still spend (queued and running at their cap).
+func (q *Queries) AgentCostSince(ctx context.Context, arg AgentCostSinceParams) (float64, error) {
+	row := q.db.QueryRow(ctx, agentCostSince, arg.AgentID, arg.Since)
+	var column_1 float64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const agentForRole = `-- name: AgentForRole :one
 SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents
 WHERE role_key = $1 AND (project_id = $2 OR project_id IS NULL) AND deleted_at IS NULL
@@ -95,19 +115,50 @@ func (q *Queries) AgentStats(ctx context.Context, arg AgentStatsParams) (AgentSt
 }
 
 const chainCost = `-- name: ChainCost :one
-SELECT COALESCE(sum(u.cost_usd), 0)::float8
-FROM usage_records u
-JOIN jobs j ON j.id = u.job_id
-JOIN agent_turns t ON t.id = j.turn_id
-WHERE t.chain_id = $1
+SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+                  LEFT JOIN agent_turns t ON t.id = j.turn_id
+                  WHERE t.chain_id = $1 OR j.id = $1), 0)
+      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
+                  LEFT JOIN agent_turns t ON t.id = j.turn_id
+                  WHERE (t.chain_id = $1 OR j.id = $1)
+                    AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8
 `
 
-// What a chain of delegations has spent so far, in every job of every turn in it.
+// What a chain of delegations has spent, or may still spend: the cost of every job of every turn
+// in it (and of the phase job a chain started from, whose id is the chain's), finished jobs as
+// they cost, jobs still queued or running at the cap they may spend.
 func (q *Queries) ChainCost(ctx context.Context, chainID pgtype.UUID) (float64, error) {
 	row := q.db.QueryRow(ctx, chainCost, chainID)
 	var column_1 float64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const chainTurns = `-- name: ChainTurns :one
+SELECT count(*)::int AS turns,
+       (count(*) FILTER (WHERE parent_turn_id = $1::uuid
+                            OR ($1::uuid IS NULL AND hop = 1)))::int AS asked_by_parent
+FROM agent_turns
+WHERE chain_id = $2 AND status <> 'refused'
+`
+
+type ChainTurnsParams struct {
+	ParentID pgtype.UUID `json:"parent_id"`
+	ChainID  pgtype.UUID `json:"chain_id"`
+}
+
+type ChainTurnsRow struct {
+	Turns         int32 `json:"turns"`
+	AskedByParent int32 `json:"asked_by_parent"`
+}
+
+// How many turns a chain has had, and how many the asking turn (or the phase job the chain
+// started from) has asked for, refusals not counted.
+func (q *Queries) ChainTurns(ctx context.Context, arg ChainTurnsParams) (ChainTurnsRow, error) {
+	row := q.db.QueryRow(ctx, chainTurns, arg.ParentID, arg.ChainID)
+	var i ChainTurnsRow
+	err := row.Scan(&i.Turns, &i.AskedByParent)
+	return i, err
 }
 
 const claimTurn = `-- name: ClaimTurn :one

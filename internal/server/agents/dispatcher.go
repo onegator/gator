@@ -92,9 +92,13 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	if err != nil {
 		return err
 	}
+	var fromJob pgtype.UUID
+	if msg.AuthorKind == conversations.AuthorAgent && parent == nil {
+		_ = fromJob.Scan(conversations.OriginOf(msg).Job)
+	}
 	for _, agent := range asked {
 		r := Request{Agent: agent, Trigger: msg, Conversation: conv, Project: conv.ProjectID,
-			RequestedByKind: msg.AuthorKind, RequestedBy: msg.AuthorID, Parent: parent}
+			RequestedByKind: msg.AuthorKind, RequestedBy: msg.AuthorID, Parent: parent, FromJob: fromJob}
 		no, err := d.guards.Check(ctx, r)
 		if err != nil {
 			return err

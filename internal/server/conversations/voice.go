@@ -36,8 +36,10 @@ func NewVoice(pool *pgxpool.Pool) *Voice { return &Voice{pool: pool} }
 type Speech struct {
 	Agent pgtype.UUID
 	// Turn is the turn it is said in, written in the message's origin so that what it starts
-	// (a mention of another agent) belongs to the same chain.
+	// (a mention of another agent) belongs to the same chain. Job is the job it is said from
+	// when that job answers no turn (a phase job).
 	Turn pgtype.UUID
+	Job  pgtype.UUID
 	Body string
 	// Status is StatusStreaming for an answer still being written, else final.
 	Status string
@@ -51,6 +53,7 @@ type Speech struct {
 // Origin is what an agent's message carries about where it was said.
 type Origin struct {
 	Turn string `json:"turn,omitempty"`
+	Job  string `json:"job,omitempty"`
 }
 
 // OriginOf reads a message's origin.
@@ -65,7 +68,7 @@ func (v *Voice) Say(ctx context.Context, conv db.Conversation, s Speech) (db.Mes
 	if s.Status == "" {
 		s.Status = StatusFinal
 	}
-	origin, _ := json.Marshal(Origin{Turn: uuidString(s.Turn)})
+	origin, _ := json.Marshal(Origin{Turn: uuidString(s.Turn), Job: uuidString(s.Job)})
 	var msg db.Message
 	err := store.InTx(ctx, v.pool, func(q *db.Queries) error {
 		seq, err := q.NextMessageSeq(ctx, conv.ID)

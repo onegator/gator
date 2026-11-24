@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -203,7 +205,7 @@ func TestAChainOfAgentsStops(t *testing.T) {
 			w.spend(first.JobID, 2)
 			worker := w.agent("worker")
 			return worker, w.delegate(first, "@worker build it", worker)
-		}, RefusedChainBudget, "spent $2.00 of its $2.00"},
+		}, RefusedChainBudget, "used $3.00 of its $2.00"},
 		{"an agent asking itself", `{}`, func(w *world, first db.AgentTurn) (db.Agent, db.Message) {
 			planner := w.agent("planner")
 			return planner, w.delegate(first, "@planner think harder", planner)
@@ -233,5 +235,60 @@ func TestAChainOfAgentsStops(t *testing.T) {
 				t.Fatalf("a person's reply starts afresh: %+v", fresh)
 			}
 		})
+	}
+}
+
+// An agent asking @worker where nobody allowed agents gets @worker in chat, and the card that asks
+// a person whether it may work — as when a person asks.
+func TestADelegationToAWorkAgentAsksForConsent(t *testing.T) {
+	w := newWorld(t)
+	planner, worker := w.agent("planner"), w.agent("worker")
+	first := w.turnOf(planner, w.post(w.admin, w.general.ID, "@planner plan the fix", planner))
+	msg := w.delegate(first, "@worker please fix the test", worker)
+	turn := w.turnOf(worker, msg)
+	job, _ := w.q.GetJob(w.ctx, turn.JobID)
+	if turn.Tier != TierChat || job.Tier != TierChat || turn.Hop != 1 || turn.RequestedByKind != RequestedByAgent {
+		t.Fatalf("turn %+v job tier %s", turn, job.Tier)
+	}
+	card, err := w.q.FindCard(w.ctx, db.FindCardParams{CardKey: new("consent:" + uuidText(turn.ID)), ConversationIds: []pgtype.UUID{turn.ConversationID}})
+	if err != nil {
+		t.Fatalf("no consent card: %v", err)
+	}
+	if d := cardData(t, card); d["state"] != ConsentPending || d["title"] != "Let @worker work on this?" {
+		t.Fatalf("card: %+v", d)
+	}
+}
+
+// A chain is bounded in width as well as depth: one turn asks at most three agents, and work
+// still running counts against the chain's budget at its cap, before it has cost anything.
+func TestAChainIsBoundedInWidthAndInFlight(t *testing.T) {
+	w := newWorld(t)
+	planner := w.agent("planner")
+	first := w.turnOf(planner, w.post(w.admin, w.general.ID, "@planner plan it", planner))
+	wide := w.delegate(first, "@worker @reviewer @security @curator all of you", w.agent("worker"), w.agent("reviewer"), w.agent("security"), w.agent("curator"))
+	refused := 0
+	for _, h := range []string{"worker", "reviewer", "security", "curator"} {
+		if tr := w.turnOf(w.agent(h), wide); tr.Status == TurnRefused {
+			if *tr.Refusal != RefusedFanOut {
+				t.Fatalf("@%s: %s", h, *tr.Refusal)
+			}
+			refused++
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("one turn asks three agents; %d were refused", refused)
+	}
+
+	w2 := newWorld(t)
+	w2.policy(`{"policy":{"default":{"max_cost_usd":1}}}`)
+	planner = w2.agent("planner")
+	start := w2.turnOf(planner, w2.post(w2.admin, w2.general.ID, "@planner plan it", planner))
+	hop1 := w2.turnOf(w2.agent("worker"), w2.delegate(start, "@worker build", w2.agent("worker")))
+	if hop1.Status == TurnRefused {
+		t.Fatal("one queued job at its cap is within twice the cap")
+	}
+	hop2 := w2.turnOf(w2.agent("reviewer"), w2.delegate(hop1, "@reviewer check", w2.agent("reviewer")))
+	if hop2.Status != TurnRefused || *hop2.Refusal != RefusedChainBudget {
+		t.Fatalf("two queued jobs at their cap spend the chain's budget: %+v", hop2)
 	}
 }

@@ -66,7 +66,9 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Writers{Access: chat.Access},
 		HopLimit{Max: MaxHops},
 		NoRepeat,
-		ChainBudget{Spent: q, Policies: deps.Process, Factor: DefaultChainFactor},
+		FanOut{Turns: q, PerTurn: MaxDelegationsPerTurn, PerChain: MaxTurnsPerChain},
+		ChainBudget{Spent: q, Policies: deps.Process, Tasks: q, Factor: DefaultChainFactor},
+		AgentDailyBudget{Spent: q, Now: deps.Now},
 		DailyBudget{Budgets: deps.Process, Now: deps.Now},
 	}
 	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})

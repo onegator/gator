@@ -2750,6 +2750,7 @@ components:
         backend: { type: string }
         model: { type: string }
         maxCostUsd: { type: number, format: double }
+        dailyBudgetUsd: { type: number, format: double, description: "what the agent may spend in a UTC day, jobs still running counted at their cap; absent: only the project's budget" }
     NewAgent:
       type: object
       required: [handle, displayName]
@@ -2815,7 +2816,7 @@ components:
         tier: { type: string, enum: [chat, work] }
         jobId: { type: string, format: uuid }
         status: { type: string, enum: [queued, running, done, failed, refused, stopped] }
-        refusal: { type: string, description: "paused | no_access | hop_limit | repeat | chain_budget | budget | no_task" }
+        refusal: { type: string, description: "paused | no_access | hop_limit | repeat | fan_out | chain_budget | agent_budget | budget | no_task" }
         costUsd: { type: number, format: double }
         durationMs: { type: integer, format: int64 }
         createdAt: { type: string, format: date-time }
@@ -2830,7 +2831,7 @@ components:
         status: { type: string, enum: [queued, running, done, failed, refused, stopped] }
         tier: { type: string, enum: [chat, work] }
         jobId: { type: string, format: uuid }
-        refusal: { type: string, description: "why it did not run: paused | no_access | hop_limit | repeat | chain_budget | budget | no_task" }
+        refusal: { type: string, description: "why it did not run: paused | no_access | hop_limit | repeat | fan_out | chain_budget | agent_budget | budget | no_task" }
         costUsd: { type: number, format: double }
         durationMs: { type: integer, format: int64 }
         costEstimated: { type: boolean, description: "priced from list rates (a subscription), not billed" }

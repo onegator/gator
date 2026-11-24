@@ -166,11 +166,13 @@ func toAgent(a db.Agent) gen.Agent {
 		Description: a.Description, Avatar: a.Avatar, RoleKey: a.RoleKey, Instructions: a.Instructions, Tier: gen.AgentTier(a.Tier),
 		Status: gen.AgentStatus(a.Status), Builtin: agents.SourceOf(a) == agents.SourceBuiltin, CreatedBy: toUUIDPtr(a.CreatedBy),
 		CreatedAt: a.CreatedAt.Time, UpdatedAt: a.UpdatedAt.Time, Tools: []string{}, Skills: []string{}, Source: map[string]any{}}
-	var pol process.RolePolicy
-	_ = json.Unmarshal(a.Policy, &pol)
+	pol := agents.PolicyOf(a)
 	out.Policy = gen.AgentPolicy{Backend: optString(pol.Backend), Model: optString(pol.Model)}
 	if pol.MaxCostUSD > 0 {
 		out.Policy.MaxCostUsd = &pol.MaxCostUSD
+	}
+	if pol.DailyBudgetUSD > 0 {
+		out.Policy.DailyBudgetUsd = &pol.DailyBudgetUSD
 	}
 	_ = json.Unmarshal(a.Tools, &out.Tools)
 	_ = json.Unmarshal(a.Skills, &out.Skills)
@@ -178,13 +180,16 @@ func toAgent(a db.Agent) gen.Agent {
 	return out
 }
 
-func fromAgentPolicy(p *gen.AgentPolicy) *process.RolePolicy {
+func fromAgentPolicy(p *gen.AgentPolicy) *agents.Policy {
 	if p == nil {
 		return nil
 	}
-	out := &process.RolePolicy{Backend: deref(p.Backend), Model: deref(p.Model)}
+	out := &agents.Policy{RolePolicy: process.RolePolicy{Backend: deref(p.Backend), Model: deref(p.Model)}}
 	if p.MaxCostUsd != nil {
 		out.MaxCostUSD = *p.MaxCostUsd
+	}
+	if p.DailyBudgetUsd != nil {
+		out.DailyBudgetUSD = *p.DailyBudgetUsd
 	}
 	return out
 }

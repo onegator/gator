@@ -97,7 +97,7 @@ func (t *Talk) Say(ctx context.Context, job db.Job, body string) (db.Message, er
 	if err != nil {
 		return db.Message{}, err
 	}
-	return t.voice.Say(ctx, conv, conversations.Speech{Agent: agent.ID, Turn: job.TurnID, Body: body, Mentions: mentions})
+	return t.voice.Say(ctx, conv, conversations.Speech{Agent: agent.ID, Turn: job.TurnID, Job: job.ID, Body: body, Mentions: mentions})
 }
 
 // mentions are the agents of the project a text names by handle.

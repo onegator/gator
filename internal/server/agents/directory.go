@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/auth"
-	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -52,13 +51,13 @@ func NewDirectory(store directoryStore, roles roleResolver, rights conversationR
 type Draft struct {
 	Handle, DisplayName, Description, Avatar, Instructions, Tier string
 	RoleKey                                                      *string
-	Policy                                                       *process.RolePolicy
+	Policy                                                       *Policy
 }
 
 // Patch names what changes; nil leaves a field as it is.
 type Patch struct {
 	Handle, DisplayName, Description, Avatar, Instructions, Tier, Status, RoleKey *string
-	Policy                                                                        *process.RolePolicy
+	Policy                                                                        *Policy
 }
 
 // Stats is an agent's record over a window.
@@ -319,11 +318,11 @@ func validate(handle, name, description, tier, status string) error {
 	return nil
 }
 
-func policyJSON(p *process.RolePolicy) ([]byte, error) {
+func policyJSON(p *Policy) ([]byte, error) {
 	if p == nil {
 		return []byte("{}"), nil
 	}
-	if p.MaxCostUSD < 0 {
+	if p.MaxCostUSD < 0 || p.DailyBudgetUSD < 0 {
 		return nil, fmt.Errorf("%w: a cost cap is not negative", ErrInvalid)
 	}
 	return json.Marshal(p)
