@@ -40,7 +40,8 @@ func (decisionCards) Events() []string {
 	return []string{"task.created", "task.updated", "task.phase_changed", "task.closed", "task.reopened",
 		"task.admitted", "task.agents_allowed", "task.requirements_changed", "task.handed_off",
 		"gate.approved", "gate.blocked", "gate.unblocked", "gate.check_set",
-		"task.job_queued", "task.job_started", "task.job_finished"}
+		"task.job_queued", "task.job_leased", "task.job_started", "task.job_finished", "task.job_requeued",
+		"task.job_stalled", "task.job_no_runner"}
 }
 
 // Cards implements CardSource.

@@ -344,7 +344,7 @@ func (q *Queries) FindTaskByExternalRef(ctx context.Context, arg FindTaskByExter
 }
 
 const getCurrentPhaseJob = `-- name: GetCurrentPhaseJob :one
-SELECT j.id AS job_id, j.status
+SELECT j.id AS job_id, j.status, (j.status = 'queued' AND j.unassignable_since IS NOT NULL)::bool AS unassignable
 FROM jobs j
 JOIN tasks t ON t.id = j.task_id
 WHERE j.task_id = $1 AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
@@ -353,15 +353,17 @@ LIMIT 1
 `
 
 type GetCurrentPhaseJobRow struct {
-	JobID  pgtype.UUID `json:"job_id"`
-	Status string      `json:"status"`
+	JobID        pgtype.UUID `json:"job_id"`
+	Status       string      `json:"status"`
+	Unassignable bool        `json:"unassignable"`
 }
 
-// The newest job of a task's current phase entry, as ListCurrentPhaseJobs answers for all.
+// The newest job of a task's current phase entry, as ListCurrentPhaseJobs answers for all, and
+// whether no runner can take it (as ListUnassignableTaskIDs answers for all).
 func (q *Queries) GetCurrentPhaseJob(ctx context.Context, taskID pgtype.UUID) (GetCurrentPhaseJobRow, error) {
 	row := q.db.QueryRow(ctx, getCurrentPhaseJob, taskID)
 	var i GetCurrentPhaseJobRow
-	err := row.Scan(&i.JobID, &i.Status)
+	err := row.Scan(&i.JobID, &i.Status, &i.Unassignable)
 	return i, err
 }
 

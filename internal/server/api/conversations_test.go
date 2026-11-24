@@ -1049,3 +1049,53 @@ func TestARedeliveredTaskCreatedChangesNothing(t *testing.T) {
 		t.Fatalf("%d threads for one task", n)
 	}
 }
+
+// A card a moderator deleted loses its card, and the next event about its object does not bring
+// it back.
+func TestADeletedCardStaysDeleted(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("delcard")
+	ctx := context.Background()
+	var task gen.Task
+	h.as(c.member, func() {
+		h.do("POST", "/projects/"+c.project.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "Del"}, &task)
+	})
+	var thread gen.ConversationDetail
+	h.as(c.member, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &thread) })
+	var job string
+	if err := h.pool.QueryRow(ctx, `INSERT INTO jobs (task_id, project_id, phase, role, backend) VALUES ($1, $2, 'planning', 'planner', 'claude') RETURNING id`,
+		task.Id.String(), c.project.Id.String()).Scan(&job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.pool.Exec(ctx, `INSERT INTO events (type, aggregate, aggregate_id, payload) VALUES ('job.queued', 'job', $1, '{}')`, job); err != nil {
+		t.Fatal(err)
+	}
+	var card gen.Message
+	eventually(t, "a job card", func() bool {
+		cards := h.cardsIn(c.member, thread.Id.String(), "job")
+		if len(cards) == 1 {
+			card = cards[0]
+		}
+		return len(cards) == 1
+	})
+	h.as(c.admin, func() {
+		if code := h.do("DELETE", "/messages/"+card.Id.String(), nil, nil); code != 204 {
+			t.Fatalf("a moderator deletes a card: %d", code)
+		}
+	})
+	if _, err := h.pool.Exec(ctx, `UPDATE jobs SET status = 'failed' WHERE id = $1`, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.pool.Exec(ctx, `INSERT INTO events (type, aggregate, aggregate_id, payload) VALUES ('job.finished', 'job', $1, '{}')`, job); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	var raw []byte
+	var deleted bool
+	if err := h.pool.QueryRow(ctx, "SELECT card, deleted_at IS NOT NULL FROM messages WHERE id = $1", card.Id.String()).Scan(&raw, &deleted); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted || raw != nil {
+		t.Fatalf("the deleted card came back: deleted %v, card %s", deleted, raw)
+	}
+}

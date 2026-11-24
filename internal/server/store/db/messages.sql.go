@@ -737,12 +737,12 @@ func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) 
 }
 
 const softDeleteMessage = `-- name: SoftDeleteMessage :one
-UPDATE messages SET deleted_at = now(), body = ''
+UPDATE messages SET deleted_at = now(), body = '', card = NULL
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at
 `
 
-// A deleted message keeps its place (its seq, its thread) and loses its words.
+// A deleted message keeps its place (its seq, its thread) and loses its words, a card its card.
 func (q *Queries) SoftDeleteMessage(ctx context.Context, id pgtype.UUID) (Message, error) {
 	row := q.db.QueryRow(ctx, softDeleteMessage, id)
 	var i Message

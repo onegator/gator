@@ -70,7 +70,8 @@ func writeCard(ctx context.Context, q *db.Queries, conv db.Conversation, c Card)
 	case err != nil:
 		return db.Message{}, cardUnchanged, err
 	}
-	if existing.Body == c.Body && sameJSON(existing.Card, data) {
+	// A card a moderator took away stays away; one that says nothing new is left alone.
+	if existing.DeletedAt.Valid || (existing.Body == c.Body && sameJSON(existing.Card, data)) {
 		return existing, cardUnchanged, nil
 	}
 	msg, err := q.UpdateCard(ctx, db.UpdateCardParams{ID: existing.ID, Body: c.Body, Card: data})

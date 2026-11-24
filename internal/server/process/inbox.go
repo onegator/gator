@@ -166,14 +166,15 @@ func (s *Service) DecisionFor(ctx context.Context, taskID pgtype.UUID) (Decision
 	}
 	var status string
 	var jobID pgtype.UUID
+	unassignable := false
 	job, err := db.New(s.pool).GetCurrentPhaseJob(ctx, taskID)
 	switch {
 	case err == nil:
-		status, jobID = job.Status, job.JobID
+		status, jobID, unassignable = job.Status, job.JobID, job.Unassignable
 	case !errors.Is(err, pgx.ErrNoRows):
 		return Decision{}, false, err
 	}
-	reason, ok := decisionReason(d.Task, d.Gate, d.Phase, status, false, false, false)
+	reason, ok := decisionReason(d.Task, d.Gate, d.Phase, status, unassignable, false, false)
 	if !ok {
 		return Decision{}, false, nil
 	}

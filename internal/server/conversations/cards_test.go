@@ -3,6 +3,7 @@ package conversations
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -206,5 +207,28 @@ func TestSourcesLeaveNoCardForWhatIsGone(t *testing.T) {
 	}
 	if got, err := (jobCards{jobs: jobs}).Cards(ctx, db.EventsAfterRow{AggregateID: newID(6)}); err != nil || len(got) != 0 {
 		t.Fatalf("a deleted job: %+v %v", got, err)
+	}
+}
+
+// Whatever can start or end a wait reaches the decision card, the runner's sweep included, and
+// a job nobody can take says so on its card.
+func TestCardsHearTheSweep(t *testing.T) {
+	for _, src := range []struct {
+		name   string
+		events []string
+		want   []string
+	}{
+		{"decision", decisionCards{}.Events(), []string{"task.job_no_runner", "task.job_stalled", "task.job_requeued"}},
+		{"job", jobCards{}.Events(), []string{"job.no_runner", "job.requeued", "job.stalled"}},
+	} {
+		for _, w := range src.want {
+			if !slices.Contains(src.events, w) {
+				t.Errorf("%s cards miss %s", src.name, w)
+			}
+		}
+	}
+	job := db.Job{ID: newID(5), Status: "queued", UnassignableSince: ts(time.Now())}
+	if c := JobCard(job); c.Data["state"] != "no_runner" {
+		t.Fatalf("a job no runner can take: %v", c.Data["state"])
 	}
 }

@@ -65,8 +65,8 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL
 RETURNING *;
 
 -- name: SoftDeleteMessage :one
--- A deleted message keeps its place (its seq, its thread) and loses its words.
-UPDATE messages SET deleted_at = now(), body = ''
+-- A deleted message keeps its place (its seq, its thread) and loses its words, a card its card.
+UPDATE messages SET deleted_at = now(), body = '', card = NULL
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
 

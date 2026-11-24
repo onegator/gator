@@ -23,7 +23,8 @@ type jobCards struct {
 
 // Events implements CardSource.
 func (jobCards) Events() []string {
-	return []string{"job.queued", "job.leased", "job.started", "job.stalled", "job.resumed", "job.requeued", "job.finished"}
+	return []string{"job.queued", "job.leased", "job.started", "job.stalled", "job.resumed", "job.requeued",
+		"job.no_runner", "job.provisioned", "job.provision_failed", "job.finished"}
 }
 
 // Cards implements CardSource.
@@ -52,14 +53,18 @@ func JobCard(j db.Job) Card {
 	case "queued", "leased", "running", "stalled":
 		actions = []string{"stop", "steer", "logs"}
 	}
+	state := j.Status
+	if j.Status == "queued" && j.UnassignableSince.Valid {
+		state = "no_runner" // queued, and no runner online can take it
+	}
 	return Card{
 		Key:  "job:" + id,
 		Type: CardJob,
-		Body: fmt.Sprintf("Job · %s in %s · %s", who, j.Phase, j.Status),
+		Body: fmt.Sprintf("Job · %s in %s · %s", who, j.Phase, state),
 		Data: map[string]any{
 			"ref":     Ref("job", id, map[string]any{"taskId": uuidString(j.TaskID)}),
 			"title":   who,
-			"state":   j.Status,
+			"state":   state,
 			"summary": j.Phase + " · " + j.Backend,
 			"actions": actions,
 			"phase":   j.Phase,
