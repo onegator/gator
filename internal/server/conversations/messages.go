@@ -57,7 +57,8 @@ func NewMessages(pool *pgxpool.Pool, access *Access) *Messages {
 // Draft is a message about to be posted.
 type Draft struct {
 	Body string
-	// ClientID is the sender's idempotency key: posting it again answers the message it made.
+	// ClientID is the sender's idempotency key: the same sender posting it again in the same
+	// conversation answers the message it made. Another sender's key is theirs.
 	ClientID string
 	// Mentions are the people the message names. Someone who cannot read the conversation is
 	// left out rather than told about it.
@@ -138,7 +139,9 @@ func (m *Messages) Post(ctx context.Context, p auth.Principal, conversation pgty
 			return err
 		}
 		if d.ClientID != "" {
-			prior, err := q.GetMessageByClientID(ctx, db.GetMessageByClientIDParams{ConversationID: conv.ID, ClientID: &d.ClientID})
+			prior, err := q.GetMessageByClientID(ctx, db.GetMessageByClientIDParams{
+				ConversationID: conv.ID, AuthorKind: author.Kind, AuthorID: author.ID, ClientID: &d.ClientID,
+			})
 			if err == nil {
 				return replay{prior}
 			}

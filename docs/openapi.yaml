@@ -1209,8 +1209,8 @@ paths:
     post:
       operationId: postMessage
       description: >-
-        Posts a message. Its seq is the next in the conversation, without gaps. A clientId already
-        posted in this conversation answers that message with 200 and writes nothing. Mentioned
+        Posts a message. Its seq is the next in the conversation, without gaps. A clientId the caller
+        already posted in this conversation answers that message with 200 and writes nothing. Mentioned
         people who cannot read the conversation are left out. Posting joins the conversation.
         Emits message.posted (and message.replied on the root's conversation for a reply).
       parameters: [ { $ref: "#/components/parameters/conversationId" } ]
@@ -2489,7 +2489,7 @@ components:
       type: object
       properties:
         body: { type: string, description: "Markdown; up to 40000 characters" }
-        clientId: { type: string, maxLength: 200, description: "the sender's idempotency key, unique in the conversation" }
+        clientId: { type: string, maxLength: 200, description: "the sender's idempotency key, unique per sender in the conversation" }
         mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
         attachments: { type: array, items: { type: string, format: uuid }, description: "files the sender uploaded into this conversation (POST /attachments) and has not sent yet" }
     MessagePatch:

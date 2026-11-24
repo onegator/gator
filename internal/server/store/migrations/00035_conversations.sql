@@ -73,14 +73,14 @@ CREATE TABLE messages (
     reply_count     integer NOT NULL DEFAULT 0,
     status          text NOT NULL DEFAULT 'final' CHECK (status IN ('streaming', 'final', 'failed')),
     origin          jsonb NOT NULL DEFAULT '{}'::jsonb,  -- e.g. {"source":"slack","ts":"…"} (phase 5)
-    client_id       text,                                -- the sender's idempotency key
+    client_id       text,                                -- the sender's idempotency key, per author
     edited_at       timestamptz,
     deleted_at      timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
     CHECK ((kind = 'card') = (card_type IS NOT NULL)),
     CHECK (kind = 'card' OR (card IS NULL AND card_key IS NULL)),
     UNIQUE (conversation_id, seq),
-    UNIQUE (conversation_id, client_id),
+    UNIQUE (conversation_id, author_kind, author_id, client_id),
     UNIQUE (conversation_id, card_key)
 );
 ALTER TABLE conversations ADD CONSTRAINT conversations_parent_message_fk

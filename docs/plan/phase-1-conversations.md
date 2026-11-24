@@ -91,7 +91,7 @@ CREATE TABLE messages (
     CHECK ((kind = 'card') = (card_type IS NOT NULL)),
     CHECK (kind = 'card' OR (card IS NULL AND card_key IS NULL)),
     UNIQUE (conversation_id, seq),
-    UNIQUE (conversation_id, client_id),
+    UNIQUE (conversation_id, author_kind, author_id, client_id),
     UNIQUE (conversation_id, card_key)
 );
 ALTER TABLE conversations ADD CONSTRAINT conversations_parent_message_fk

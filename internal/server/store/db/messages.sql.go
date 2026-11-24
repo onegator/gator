@@ -277,16 +277,25 @@ func (q *Queries) GetMessage(ctx context.Context, id pgtype.UUID) (Message, erro
 }
 
 const getMessageByClientID = `-- name: GetMessageByClientID :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE conversation_id = $1 AND client_id = $2
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages
+WHERE conversation_id = $1 AND author_kind = $2 AND author_id = $3 AND client_id = $4
 `
 
 type GetMessageByClientIDParams struct {
 	ConversationID pgtype.UUID `json:"conversation_id"`
+	AuthorKind     string      `json:"author_kind"`
+	AuthorID       pgtype.UUID `json:"author_id"`
 	ClientID       *string     `json:"client_id"`
 }
 
+// A client id is the sender's own: another author's message with the same one is not this.
 func (q *Queries) GetMessageByClientID(ctx context.Context, arg GetMessageByClientIDParams) (Message, error) {
-	row := q.db.QueryRow(ctx, getMessageByClientID, arg.ConversationID, arg.ClientID)
+	row := q.db.QueryRow(ctx, getMessageByClientID,
+		arg.ConversationID,
+		arg.AuthorKind,
+		arg.AuthorID,
+		arg.ClientID,
+	)
 	var i Message
 	err := row.Scan(
 		&i.ID,

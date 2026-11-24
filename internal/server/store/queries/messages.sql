@@ -8,7 +8,9 @@ RETURNING *;
 SELECT * FROM messages WHERE id = $1;
 
 -- name: GetMessageByClientID :one
-SELECT * FROM messages WHERE conversation_id = $1 AND client_id = $2;
+-- A client id is the sender's own: another author's message with the same one is not this.
+SELECT * FROM messages
+WHERE conversation_id = $1 AND author_kind = $2 AND author_id = $3 AND client_id = $4;
 
 -- name: ListMessagesBefore :many
 -- The newest messages below a seq, newest first; the caller puts them back in order.

@@ -181,6 +181,7 @@ func TestConcurrentPostsGetConsecutiveSeqs(t *testing.T) {
 
 	const n = 20
 	seqs := make([]int64, n)
+	codes := make([]int, n)
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Add(1)
@@ -190,10 +191,15 @@ func TestConcurrentPostsGetConsecutiveSeqs(t *testing.T) {
 			if i%2 == 1 {
 				token = c.member
 			}
-			seqs[i] = h.postRaw(token, conv, gen.NewMessage{Body: ptr(fmt.Sprintf("m%d", i))})
+			codes[i], seqs[i] = h.postRaw(token, conv, gen.NewMessage{Body: ptr(fmt.Sprintf("m%d", i))})
 		}(i)
 	}
 	wg.Wait()
+	for i, code := range codes {
+		if code != 201 {
+			t.Fatalf("post %d answered %d", i, code)
+		}
+	}
 	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
 	for i, s := range seqs {
 		if s != int64(i+1) {
@@ -213,8 +219,9 @@ func TestConcurrentPostsGetConsecutiveSeqs(t *testing.T) {
 	}
 }
 
-// postRaw posts from a goroutine without failing the test there, and answers the seq.
-func (h *harness) postRaw(token, conversation string, in gen.NewMessage) int64 {
+// postRaw posts from a goroutine without failing the test there, and answers the status and
+// the seq; a request that did not get through answers status 0.
+func (h *harness) postRaw(token, conversation string, in gen.NewMessage) (int, int64) {
 	var buf strings.Builder
 	_ = json.NewEncoder(&buf).Encode(in)
 	req, _ := http.NewRequest("POST", h.srv.URL+"/api/v1/conversations/"+conversation+"/messages", strings.NewReader(buf.String()))
@@ -222,12 +229,12 @@ func (h *harness) postRaw(token, conversation string, in gen.NewMessage) int64 {
 	req.Header.Set("Authorization", "Bearer "+token)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return -1
+		return 0, -1
 	}
 	defer res.Body.Close()
 	var m gen.Message
 	_ = json.NewDecoder(res.Body).Decode(&m)
-	return m.Seq
+	return res.StatusCode, m.Seq
 }
 
 // A client that sends the same message twice, even at the same moment, gets the one message
@@ -246,19 +253,28 @@ func TestClientIDMakesPostingIdempotent(t *testing.T) {
 		t.Fatalf("again: %d %+v", code, again)
 	}
 	var wg sync.WaitGroup
-	seqs := make([]int64, 8)
+	seqs, codes := make([]int64, 8), make([]int, 8)
 	for i := range seqs {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			seqs[i] = h.postRaw(c.member, conv, gen.NewMessage{Body: ptr("racing"), ClientId: ptr("race")})
+			codes[i], seqs[i] = h.postRaw(c.member, conv, gen.NewMessage{Body: ptr("racing"), ClientId: ptr("race")})
 		}(i)
 	}
 	wg.Wait()
-	for _, s := range seqs {
-		if s != seqs[0] {
+	created := 0
+	for i, s := range seqs {
+		if codes[i] == 201 {
+			created++
+		} else if codes[i] != 200 {
+			t.Fatalf("a racing post answered %d", codes[i])
+		}
+		if s != seqs[0] || s <= 0 {
 			t.Fatalf("one client id made several messages: %v", seqs)
 		}
+	}
+	if created != 1 {
+		t.Fatalf("%d racing posts created a message, want 1 (codes %v)", created, codes)
 	}
 	code, next := h.post(c.member, conv, gen.NewMessage{Body: ptr("next")})
 	if code != 201 || next.Seq != 3 {
@@ -993,5 +1009,18 @@ func TestOwnMessagesAreNotUnread(t *testing.T) {
 		if d.Unread != tc.unread || d.LastReadSeq != tc.read {
 			t.Fatalf("%s: unread %d, read up to %d", tc.name, d.Unread, d.LastReadSeq)
 		}
+	}
+}
+
+// A client id is its sender's: somebody else using the same one posts their own message, and
+// never gets the first sender's back.
+func TestClientIDIsPerSender(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("idemauthor")
+	conv := h.channel(c.admin, c.project.Id.String(), "idem", "").Id.String()
+	_, mine := h.post(c.member, conv, gen.NewMessage{Body: ptr("member's"), ClientId: ptr("1")})
+	code, theirs := h.post(c.admin, conv, gen.NewMessage{Body: ptr("admin's"), ClientId: ptr("1")})
+	if code != 201 || theirs.Id == mine.Id || theirs.Body != "admin's" || theirs.Seq != 2 {
+		t.Fatalf("another sender's same client id: %d %+v", code, theirs)
 	}
 }
