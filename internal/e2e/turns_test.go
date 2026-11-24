@@ -249,3 +249,31 @@ func eventually(t *testing.T, what string, ok func() bool) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// An agent asked in chat about a task reads the branch the task's work was pushed to.
+func TestAChatReplyReadsTheTasksBranch(t *testing.T) {
+	h := newHarness(t)
+	backend := uniqueBackend()
+	task := h.task()
+	project := task.ProjectId.String()
+	if _, err := h.pool.Exec(context.Background(), "UPDATE projects SET process_config = $2 WHERE id = $1",
+		project, `{"autopilot":{"backend":"`+backend+`"}}`); err != nil {
+		t.Fatal(err)
+	}
+	def, primary := "main", true
+	if code := h.do("PUT", "/projects/"+project+"/repos", gen.ProjectRepo{Name: "app", Url: "https://example.invalid/app.git", DefaultBranch: &def, Primary: &primary}, nil); code != 200 {
+		t.Fatalf("repo: %d", code)
+	}
+	if _, err := h.pool.Exec(context.Background(), `INSERT INTO jobs (task_id, project_id, phase, role, backend, status, receipt, finished_at)
+		VALUES ($1, $2, 'implementation', 'worker', 'claude', 'done', '{"branch":"gator/abc-123"}', now())`, task.Id.String(), project); err != nil {
+		t.Fatal(err)
+	}
+	var thread gen.ConversationDetail
+	h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, &thread)
+	h.turnOf(h.say(project, thread.Id.String(), "@reviewer is the fix right?", "reviewer"), project, "reviewer")
+	raw, _ := h.dialRaw(h.runner, backend, proto.Version, 1)
+	jobs := raw.lease(1)
+	if len(jobs) != 1 || jobs[0].Repo == nil || jobs[0].Repo.ReadBranch != "gator/abc-123" {
+		t.Fatalf("lease: %+v", jobs)
+	}
+}

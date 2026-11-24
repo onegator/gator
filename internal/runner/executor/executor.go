@@ -73,6 +73,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q is not available on this runner", job.Backend)}
 	}
 	access := AccessFor(job)
+	if !backend.Supports(be, access) {
+		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q cannot hold an agent to what this job may touch", job.Backend)}
+	}
 	if access.NoTools {
 		job.Repo, job.AgentToken = nil, "" // nothing to read and nobody to talk to: an empty directory
 	}
@@ -192,6 +195,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	changed := len(changedPaths)
 	pushed, keep := false, false
 	var pushErr string
+	if ws.Branch == "" {
+		commits, changedPaths, changed = nil, nil, 0 // on no branch nothing is the job's to push
+	}
 	if gerr == nil && len(commits) > 0 {
 		fin.Branch, fin.Commits, fin.ChangedFiles = ws.Branch, commits, changed
 		fin.ChangedPaths = changedPaths

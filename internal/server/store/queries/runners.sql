@@ -49,6 +49,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF(sqlc.arg(p
         COALESCE(NULLIF(sqlc.arg(kind)::text, ''), 'phase'))
 RETURNING *;
 
+-- name: TaskWorkBranch :one
+-- The branch a task's latest finished work was pushed to: what an agent reading the task reads.
+SELECT (receipt->>'branch')::text AS branch FROM jobs
+WHERE task_id = $1 AND status = 'done' AND COALESCE(receipt->>'branch', '') <> ''
+ORDER BY finished_at DESC NULLS LAST LIMIT 1;
+
 -- name: GetJob :one
 SELECT * FROM jobs WHERE id = $1;
 

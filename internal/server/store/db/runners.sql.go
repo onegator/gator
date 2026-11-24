@@ -1159,6 +1159,20 @@ func (q *Queries) StopQueuedJob(ctx context.Context, arg StopQueuedJobParams) (i
 	return result.RowsAffected(), nil
 }
 
+const taskWorkBranch = `-- name: TaskWorkBranch :one
+SELECT (receipt->>'branch')::text AS branch FROM jobs
+WHERE task_id = $1 AND status = 'done' AND COALESCE(receipt->>'branch', '') <> ''
+ORDER BY finished_at DESC NULLS LAST LIMIT 1
+`
+
+// The branch a task's latest finished work was pushed to: what an agent reading the task reads.
+func (q *Queries) TaskWorkBranch(ctx context.Context, taskID pgtype.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, taskWorkBranch, taskID)
+	var branch string
+	err := row.Scan(&branch)
+	return branch, err
+}
+
 const upsertRunner = `-- name: UpsertRunner :one
 INSERT INTO runners (token_id, name, location, status, capabilities, protocol_version, binary_version, connected_at, last_heartbeat_at,
                      placement, owner_id)

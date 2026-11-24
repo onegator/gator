@@ -459,6 +459,12 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	}
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
+		if j.Tier == TierChat {
+			// A reviewer asked about a task reads the task's work, not the default branch.
+			if b, err := q.TaskWorkBranch(ctx, j.TaskID); err == nil {
+				pj.Repo.ReadBranch = b
+			}
+		}
 	}
 	// Record what this job was handed. Context is meant to save an agent from
 	// hunting for what it needs; whether it does is a question about tokens spent

@@ -32,8 +32,11 @@ type Workspace struct {
 	Dir    string
 	Branch string // empty for a read-only checkout, which is on no branch
 	Base   string // commit the branch started from; empty without a repo
-	// ReadOnly is a checkout nobody may write in: its files and directories are not writable.
+	// ReadOnly is a checkout nobody may write in: its files, its directories and its git metadata
+	// are not writable. Read is the branch it reads.
 	ReadOnly bool
+	Read     string
+	meta     string // a read-only worktree's git metadata in the cache
 	bare     string
 	hooks    string // the job's git hooks, outside the checkout; see SignCommits
 	m        *Manager
@@ -84,6 +87,7 @@ func (m *Manager) Prepare(ctx context.Context, job proto.Job) (*Workspace, error
 		_, _ = m.run(ctx, bare, "config", "user.email", "runner@gator.local")
 	}
 	br := fmt.Sprintf("gator/%s-%s", short(job.TaskID), short(job.JobID))
+	_ = setWritable(filepath.Join(bare, "worktrees", filepath.Base(dir)), true) // a read-only attempt before
 	_, _ = m.run(ctx, bare, "worktree", "prune")
 	_, _ = m.run(ctx, bare, "branch", "-D", br) // leftover from an earlier attempt
 	if _, err := m.run(ctx, bare, "worktree", "add", "--quiet", "-b", br, dir, "refs/remotes/origin/"+def); err != nil {
@@ -120,8 +124,15 @@ func (m *Manager) PrepareReadOnly(ctx context.Context, job proto.Job) (*Workspac
 		if err != nil {
 			return nil, err
 		}
+		ref := "refs/remotes/origin/" + def
+		if b := job.Repo.ReadBranch; b != "" && !strings.HasPrefix(b, "-") {
+			if _, err := m.run(ctx, bare, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+b); err == nil {
+				ref = "refs/remotes/origin/" + b
+			}
+		}
+		_ = setWritable(filepath.Join(bare, "worktrees", filepath.Base(dir)), true) // a read-only attempt before
 		_, _ = m.run(ctx, bare, "worktree", "prune")
-		_, err = m.run(ctx, bare, "worktree", "add", "--quiet", "--detach", dir, "refs/remotes/origin/"+def)
+		_, err = m.run(ctx, bare, "worktree", "add", "--quiet", "--detach", dir, ref)
 		unlock()
 		if err != nil {
 			return nil, fmt.Errorf("worktree: %w", err)
@@ -130,10 +141,17 @@ func (m *Manager) PrepareReadOnly(ctx context.Context, job proto.Job) (*Workspac
 		if err != nil {
 			return nil, err
 		}
-		ws.Base, ws.bare = strings.TrimSpace(base), bare
+		ws.Base, ws.bare, ws.Read = strings.TrimSpace(base), bare, strings.TrimPrefix(ref, "refs/remotes/origin/")
+		// The worktree's own git metadata lives in the cache; it is made unwritable too, so
+		// not even git can record a commit here.
+		if gitDir, err := m.run(ctx, dir, "rev-parse", "--absolute-git-dir"); err == nil {
+			ws.meta = strings.TrimSpace(gitDir)
+		}
 	}
-	if err := setWritable(dir, false); err != nil {
-		return nil, fmt.Errorf("making the checkout read-only: %w", err)
+	for _, d := range []string{dir, ws.meta} {
+		if err := setWritable(d, false); err != nil {
+			return nil, fmt.Errorf("making the checkout read-only: %w", err)
+		}
 	}
 	return ws, nil
 }
@@ -194,6 +212,9 @@ func (m *Manager) fetch(ctx context.Context, url, bare string) error {
 // setWritable makes everything under dir writable by its owner again, or unwritable by anyone.
 // A missing dir is nothing to do.
 func setWritable(dir string, writable bool) error {
+	if dir == "" {
+		return nil
+	}
 	if _, err := os.Lstat(dir); os.IsNotExist(err) {
 		return nil
 	}
@@ -266,8 +287,13 @@ func (w *Workspace) Cleanup(ctx context.Context, keepBranch bool) error {
 		_ = os.RemoveAll(w.hooks)
 	}
 	if w.ReadOnly {
-		if err := setWritable(w.Dir, true); err != nil {
-			return err
+		for _, d := range []string{w.Dir, w.meta} {
+			if d == "" {
+				continue
+			}
+			if err := setWritable(d, true); err != nil {
+				return err
+			}
 		}
 	}
 	if !w.HasRepo() {

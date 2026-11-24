@@ -138,3 +138,17 @@ func TestASummaryJobIsJustTheSummary(t *testing.T) {
 		t.Fatal("no digest is asked of a summary")
 	}
 }
+
+// A backend that cannot hold an agent to read-only never runs a chat job.
+func TestAChatJobNeedsABackendThatKeepsLimits(t *testing.T) {
+	be := &scripted{noLimits: true, run: func(context.Context, int, backend.Spec, backend.Emit) backend.Outcome {
+		t.Fatal("a backend without limits ran a chat job")
+		return backend.Outcome{}
+	}}
+	e := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _, _, _ := jobIO()
+	fin := e.Run(context.Background(), replyJob(originRepo(t), proto.TierChat), io)
+	if fin.Status != proto.StatusFailed || !strings.Contains(fin.StopReason, "cannot hold") {
+		t.Fatalf("finish: %+v", fin)
+	}
+}

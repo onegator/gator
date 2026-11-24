@@ -190,6 +190,9 @@ type Repo struct {
 	Name          string `json:"name"`
 	URL           string `json:"url"`
 	DefaultBranch string `json:"default_branch"`
+	// ReadBranch is what a read-only job reads instead of the default branch: the branch the
+	// task's work was pushed to (v3). A branch the remote does not have falls back to the default.
+	ReadBranch string `json:"read_branch,omitempty"`
 }
 
 // ContextDoc is earlier work a job should read before starting.

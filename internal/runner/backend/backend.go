@@ -65,3 +65,19 @@ type Backend interface {
 	// they were already logged in on.
 	AuthState() string
 }
+
+// Limited is a backend that can hold an agent to less than full access. A backend says which
+// limits it can keep; one that cannot keep a limit never runs a job that needs it.
+type Limited interface {
+	Supports(a Access) bool
+}
+
+// Supports says whether b can run an agent with access a: full access always, anything less only
+// where b says it can keep it.
+func Supports(b Backend, a Access) bool {
+	if !a.ReadOnly && !a.NoTools {
+		return true
+	}
+	l, ok := b.(Limited)
+	return ok && l.Supports(a)
+}

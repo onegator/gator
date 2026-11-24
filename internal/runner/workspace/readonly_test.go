@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -12,6 +13,9 @@ import (
 // A read-only checkout is on no branch and cannot be written in, a second attempt of the job can
 // replace it, and cleaning up takes it away whole.
 func TestReadOnlyCheckout(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes wherever it likes; file modes prove nothing here")
+	}
 	ctx := context.Background()
 	remote := origin(t)
 	m := &Manager{Root: t.TempDir()}
@@ -39,6 +43,11 @@ func TestReadOnlyCheckout(t *testing.T) {
 		if err := w.Push(ctx); err != nil {
 			t.Fatal(err)
 		}
+		commit := exec.Command("git", "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-q", "--allow-empty", "-m", "sneak")
+		commit.Dir = w.Dir
+		if out, err := commit.CombinedOutput(); err == nil {
+			t.Fatalf("git committed in a read-only checkout: %s", out)
+		}
 		if attempt == 1 {
 			if err := w.Cleanup(ctx, false); err != nil {
 				t.Fatal(err)
@@ -58,5 +67,38 @@ func TestReadOnlyCheckout(t *testing.T) {
 	}
 	if err := w.Cleanup(ctx, false); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A read-only job reads the branch the task's work was pushed to, when the remote has it.
+func TestReadOnlyCheckoutReadsTheTasksBranch(t *testing.T) {
+	ctx := context.Background()
+	remote := origin(t)
+	work := t.TempDir()
+	git(t, work, "clone", "-q", remote, "w")
+	clone := filepath.Join(work, "w")
+	git(t, clone, "checkout", "-q", "-b", "gator/task-1")
+	_ = os.WriteFile(filepath.Join(clone, "fix.go"), []byte("package fix\n"), 0o644)
+	git(t, clone, "add", ".")
+	git(t, clone, "commit", "-q", "-m", "fix")
+	git(t, clone, "push", "-q", "origin", "gator/task-1")
+
+	m := &Manager{Root: t.TempDir()}
+	for _, tc := range []struct {
+		branch, read string
+		has          bool
+	}{{"gator/task-1", "gator/task-1", true}, {"gator/gone", "main", false}, {"", "main", false}} {
+		w, err := m.PrepareReadOnly(ctx, proto.Job{JobID: "ro-" + tc.read + tc.branch[len(tc.branch)/2:], TaskID: "t",
+			Repo: &proto.Repo{Name: "app", URL: remote, DefaultBranch: "main", ReadBranch: tc.branch}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = os.Stat(filepath.Join(w.Dir, "fix.go"))
+		if w.Read != tc.read || (err == nil) != tc.has {
+			t.Fatalf("%q: reads %s, has the fix %v", tc.branch, w.Read, err == nil)
+		}
+		if err := w.Cleanup(ctx, false); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

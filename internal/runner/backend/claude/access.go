@@ -16,6 +16,10 @@ var readOnlyTools = []string{"Read", "Grep", "Glob", "WebFetch"}
 // cannot.
 var writingTools = []string{"Edit", "Write", "NotebookEdit"}
 
+// Supports implements backend.Limited: Claude Code keeps read-only and no-tools sessions with the
+// flags below.
+func (Backend) Supports(backend.Access) bool { return true }
+
 // permissionArgs are the flags that give a session the access asked for. Full access is
 // today's job: bypassPermissions, since nobody is there to answer a prompt. Read-only is
 // dontAsk — anything not allowed up front is denied, never asked about — with only the reading
