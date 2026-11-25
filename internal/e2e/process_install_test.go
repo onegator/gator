@@ -3,9 +3,11 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/marketplace/marketplacetest"
 )
 
 func (h *harness) processConfig(projectID string) map[string]any {
@@ -82,5 +84,41 @@ func TestAProcessPackageSetsAKindsProcessAndGivesItBack(t *testing.T) {
 	}
 	if tpl := h.template(other.Id.String(), "incident"); *tpl.Source != "default" {
 		t.Fatalf("after: %+v", tpl)
+	}
+}
+
+// One kind of task has one process package in a scope: a second is refused, rather than each
+// putting back, on removal, what the other replaced. What a person changed after installing is
+// theirs, and removal leaves it.
+func TestAKindsProcessHasOneOwner(t *testing.T) {
+	h := newHarness(t)
+	r := marketplacetest.New(t)
+	other := map[string]string{}
+	for k, v := range marketplacetest.IncidentPostmortem {
+		other[k] = strings.ReplaceAll(v, "incident-postmortem", "incident-lite")
+	}
+	r.Package("process/incident-lite", other)
+	r.Publish()
+	reg, _ := h.registry(r)
+	p := h.oneProject("own")
+	project := p.Id.String()
+	inst := h.install(project, gen.NewInstallation{Kind: "process", Name: "incident-postmortem", AcceptedPermissions: h.accept("process", "incident-postmortem", "")})
+	var refusal gen.InstallRefusal
+	if code := h.do("POST", "/projects/"+project+"/installations", gen.NewInstallation{Kind: "process", Name: "incident-lite", RegistryId: &reg.Id,
+		AcceptedPermissions: h.accept("process", "incident-lite", reg.Id.String())}, &refusal); code != 409 || !strings.Contains(refusal.Error, "incident-postmortem sets the process of incident") {
+		t.Fatalf("a second owner: %d %+v", code, refusal)
+	}
+	own := `{"templates":{"incident":{"kind":"incident","max_rollbacks":0,"phases":[{"name":"implementation","owner":"runner","role":"worker","gate":"human","timeout":"1h"},{"name":"approved","owner":"human","gate":"auto","timeout":"0"}]}},"roles":{"postmortem":"Ours now."}}`
+	if _, err := h.pool.Exec(context.Background(), `UPDATE projects SET process_config = $2 WHERE id = $1`, project, own); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.do("DELETE", "/installations/"+inst.Id.String(), nil, nil); code != 204 {
+		t.Fatalf("remove: %d", code)
+	}
+	if tpl := h.template(project, "incident"); len(tpl.Phases) != 2 {
+		t.Fatalf("the person's own template was put back over: %+v", tpl)
+	}
+	if cfg := h.processConfig(project); cfg["roles"].(map[string]any)["postmortem"] != "Ours now." {
+		t.Fatalf("the person's own prompt: %v", cfg)
 	}
 }

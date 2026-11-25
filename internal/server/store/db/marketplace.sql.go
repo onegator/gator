@@ -747,6 +747,17 @@ func (q *Queries) LockProjectConfig(ctx context.Context, id pgtype.UUID) ([]byte
 	return process_config, err
 }
 
+const lockWorkspaceConfig = `-- name: LockWorkspaceConfig :one
+SELECT process_config FROM workspace_settings WHERE id FOR UPDATE
+`
+
+func (q *Queries) LockWorkspaceConfig(ctx context.Context) ([]byte, error) {
+	row := q.db.QueryRow(ctx, lockWorkspaceConfig)
+	var process_config []byte
+	err := row.Scan(&process_config)
+	return process_config, err
+}
+
 const setRegistryFetchError = `-- name: SetRegistryFetchError :exec
 UPDATE marketplace_registries SET fetch_error = $1 WHERE id = $2
 `

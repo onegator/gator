@@ -172,3 +172,6 @@ RETURNING *;
 
 -- name: GetSkill :one
 SELECT * FROM skills WHERE id = $1;
+
+-- name: LockWorkspaceConfig :one
+SELECT process_config FROM workspace_settings WHERE id FOR UPDATE;

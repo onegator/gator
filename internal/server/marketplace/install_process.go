@@ -27,7 +27,36 @@ const (
 	stateRoles    = "previous_roles"
 	stateKind     = "kind"
 	stateProcess  = "template" // the template as installed, to tell a local edit
+	stateWritten  = "roles"    // the prompts it wrote, by role
 )
+
+// owned refuses a kind or a role another process package of the scope already set: two owners
+// of one template would each put back, on removal, what the other replaced.
+func owned(ctx context.Context, tx *db.Queries, project pgtype.UUID, self pgtype.UUID, kind string, roles map[string]string) error {
+	others, err := tx.ListInstallations(ctx, project)
+	if err != nil {
+		return err
+	}
+	for _, o := range others {
+		if o.Kind != KindProcess || o.ID == self {
+			continue
+		}
+		var rec installedRecord
+		if json.Unmarshal(o.Installed, &rec) != nil {
+			continue
+		}
+		if rec.State[stateKind] == kind {
+			return fmt.Errorf("%w: %s sets the process of %s tasks here already; remove it first", ErrConflict, o.Name, kind)
+		}
+		pm, _ := processOf(rec)
+		for role := range roles {
+			if _, taken := pm.Roles[role]; taken {
+				return fmt.Errorf("%w: %s sets the prompt of the role %s here already; remove it first", ErrConflict, o.Name, role)
+			}
+		}
+	}
+	return nil
+}
 
 // Install implements Installer.
 func (ProcessInstaller) Install(ctx context.Context, tx *db.Queries, in Input) (Installed, error) {
@@ -39,8 +68,11 @@ func (ProcessInstaller) Install(ctx context.Context, tx *db.Queries, in Input) (
 	if err != nil {
 		return Installed{}, err
 	}
-	templates, roles := cfg.object("templates"), cfg.object("roles")
 	kind := pp.Template.Kind
+	if err := owned(ctx, tx, in.Project, pgtype.UUID{}, kind, pp.Roles); err != nil {
+		return Installed{}, err
+	}
+	templates, roles := cfg.object("templates"), cfg.object("roles")
 	prevRoles := map[string]json.RawMessage{}
 	for role := range pp.Roles {
 		if prev, ok := roles[role]; ok {
@@ -57,6 +89,8 @@ func (ProcessInstaller) Install(ctx context.Context, tx *db.Queries, in Input) (
 	for role, prompt := range pp.Roles {
 		roles[role], _ = json.Marshal(prompt)
 	}
+	written, _ := json.Marshal(pp.Roles)
+	state[stateWritten] = string(written)
 	cfg.set("templates", templates)
 	cfg.set("roles", roles)
 	if err := writeConfig(ctx, tx, in.Project, cfg); err != nil {
@@ -82,14 +116,26 @@ func (ProcessInstaller) Remove(ctx context.Context, tx *db.Queries, inst db.Inst
 	}
 	templates, roles := cfg.object("templates"), cfg.object("roles")
 	kind := rec.State[stateKind]
-	if prev := rec.State[stateTemplate]; prev != "" {
-		templates[kind] = json.RawMessage(prev)
-	} else {
-		delete(templates, kind)
+	// Only what is still what this installation wrote is put back: a person (or anything else)
+	// that changed it since owns it now.
+	if mine, ok := rec.State[stateProcess]; !ok || same(mine, string(templates[kind])) {
+		if prev := rec.State[stateTemplate]; prev != "" {
+			templates[kind] = json.RawMessage(prev)
+		} else {
+			delete(templates, kind)
+		}
 	}
 	var prevRoles map[string]json.RawMessage
 	_ = json.Unmarshal([]byte(rec.State[stateRoles]), &prevRoles)
+	var wrote map[string]string
+	_ = json.Unmarshal([]byte(rec.State[stateWritten]), &wrote)
 	for role := range pp.Roles {
+		if mine, ok := wrote[role]; ok {
+			var now string
+			if json.Unmarshal(roles[role], &now) != nil || now != mine {
+				continue
+			}
+		}
 		if prev, ok := prevRoles[role]; ok {
 			roles[role] = prev
 		} else {
@@ -135,11 +181,14 @@ func readConfig(ctx context.Context, tx *db.Queries, project pgtype.UUID) (confi
 		}
 		raw = b
 	} else {
-		ws, err := tx.GetWorkspaceSettings(ctx)
+		if _, err := tx.GetWorkspaceSettings(ctx); err != nil { // the row is there to lock
+			return nil, err
+		}
+		b, err := tx.LockWorkspaceConfig(ctx)
 		if err != nil {
 			return nil, err
 		}
-		raw = ws.ProcessConfig
+		raw = b
 	}
 	cfg := config{}
 	if len(raw) > 0 {
@@ -212,6 +261,9 @@ func (ProcessInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Inst
 	if pp.Template.Kind != kind {
 		return Installed{}, invalid("the new version is the process of %s tasks, not %s; remove it and install that", pp.Template.Kind, kind)
 	}
+	if err := owned(ctx, tx, inst.ProjectID, inst.ID, kind, pp.Roles); err != nil {
+		return Installed{}, err
+	}
 	cfg, err := readConfig(ctx, tx, inst.ProjectID)
 	if err != nil {
 		return Installed{}, err
@@ -249,6 +301,8 @@ func (ProcessInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Inst
 	}
 	pr, _ := json.Marshal(prevRoles)
 	state[stateRoles] = string(pr)
+	written, _ := json.Marshal(pp.Roles)
+	state[stateWritten] = string(written)
 	cfg.set("templates", templates)
 	cfg.set("roles", roles)
 	return Installed{State: state}, writeConfig(ctx, tx, inst.ProjectID, cfg)
