@@ -38,7 +38,9 @@ func render(m plugin.BridgedMessage) (string, []block) {
 		who += " (outside the workspace)"
 	}
 	body := m.Body
-	if m.Status == "streaming" {
+	// An answer still being written says so — unless it does already ("@reviewer is reading the
+	// conversation…").
+	if m.Status == "streaming" && !strings.HasSuffix(strings.TrimSpace(body), "…") {
 		body += " …"
 	}
 	text := clip(fmt.Sprintf("*%s*: %s", escape(who), escape(body)), maxText)

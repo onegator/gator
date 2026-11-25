@@ -340,3 +340,19 @@ func TestTheBotTokenGoesOnlyWhereTheOperatorAllows(t *testing.T) {
 		t.Error("the fake API was called")
 	}
 }
+
+// A placeholder that ends with an ellipsis gets no second one; an answer half written gets one.
+func TestStreamingSaysSoOnce(t *testing.T) {
+	text, _ := render(plugin.BridgedMessage{Kind: "text", Status: "streaming", AuthorName: "@reviewer", Body: "@reviewer is reading the conversation…"})
+	if strings.Count(text, "…") != 1 || !strings.HasSuffix(text, "conversation…") {
+		t.Errorf("%q", text)
+	}
+	text, _ = render(plugin.BridgedMessage{Kind: "text", Status: "streaming", AuthorName: "@reviewer", Body: "Half of"})
+	if !strings.HasSuffix(text, "Half of …") {
+		t.Errorf("%q", text)
+	}
+	text, _ = render(plugin.BridgedMessage{Kind: "text", Status: "final", AuthorName: "@reviewer", Body: "Done"})
+	if strings.Contains(text, "…") {
+		t.Errorf("%q", text)
+	}
+}
