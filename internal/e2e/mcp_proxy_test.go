@@ -35,6 +35,7 @@ type fakeIssues struct {
 	hits  atomic.Int32
 	mu    sync.Mutex
 	auth  []string // every Authorization header it was sent
+	mux   *http.ServeMux
 }
 
 // The issue's text carries what a hostile reporter would write: a fence of its own and an order.
@@ -42,7 +43,7 @@ const issueText = "ISSUE-1: NullPointerException in checkout.go:42 since release
 
 func newFakeIssues(t *testing.T, token string) *fakeIssues {
 	t.Helper()
-	f := &fakeIssues{token: token}
+	f := &fakeIssues{token: token, mux: http.NewServeMux()}
 	srv := sdk.NewServer(&sdk.Implementation{Name: "issues", Version: "1"}, nil)
 	ro := &sdk.ToolAnnotations{ReadOnlyHint: true}
 	type query struct {
@@ -67,7 +68,8 @@ func newFakeIssues(t *testing.T, token string) *fakeIssues {
 		return text(in.ID + " deleted"), nil, nil
 	})
 	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, &sdk.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
-	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.Server = httptest.NewServer(f.mux)
+	f.mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.auth = append(f.auth, r.Header.Get("Authorization"))
 		f.mu.Unlock()
@@ -77,11 +79,12 @@ func newFakeIssues(t *testing.T, token string) *fakeIssues {
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer "+f.token {
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.URL+`/.well-known/oauth-protected-resource/mcp"`)
 			http.Error(w, "who are you", http.StatusUnauthorized)
 			return
 		}
 		h.ServeHTTP(w, r)
-	}))
+	})
 	t.Cleanup(f.Close)
 	return f
 }

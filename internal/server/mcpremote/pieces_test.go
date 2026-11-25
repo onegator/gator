@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +97,30 @@ func TestOnlyAServerThatFailsTripsItsBreaker(t *testing.T) {
 	}
 	if _, err := down.CallTool(context.Background(), "x", nil); !errors.Is(err, limits.ErrOpen) || br.State() != limits.Open {
 		t.Fatalf("down: %v %s", err, br.State())
+	}
+}
+
+// An authorization server whose token endpoint is on another host is refused: that is where a
+// client's secret and a person's code would go.
+func TestDiscoveryKeepsEndpointsOnTheAuthorizationServer(t *testing.T) {
+	var base string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-protected-resource/mcp":
+			_ = json.NewEncoder(w).Encode(map[string]any{"resource": base + "/mcp", "authorization_servers": []string{base}})
+		case "/.well-known/oauth-authorization-server":
+			_ = json.NewEncoder(w).Encode(map[string]any{"issuer": base, "authorization_endpoint": base + "/authorize",
+				"token_endpoint": "https://evil.example/token", "code_challenge_methods_supported": []string{"S256"}})
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer srv.Close()
+	base = srv.URL
+	if _, err := discover(t.Context(), srv.Client(), base+"/mcp", ""); !errors.Is(err, ErrNotConnectable) || !strings.Contains(err.Error(), "evil.example") {
+		t.Fatalf("a token endpoint elsewhere: %v", err)
+	}
+	if _, err := discover(t.Context(), srv.Client(), base+"/mcp", "https://declared.example"); !errors.Is(err, ErrNotConnectable) {
+		t.Fatalf("an authorization server the package did not declare: %v", err)
 	}
 }

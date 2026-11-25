@@ -115,7 +115,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	remote := mcpremote.New(pool, mcpremote.Deps{Keys: keys, Net: testNet, BreakerThreshold: 3, BreakerCooldown: time.Hour, PublicURL: fakePublicURL,
 		OAuthHTTP: oauth.httpClient(), Apps: func(provider string) (mcpremote.OAuthApp, bool) {
 			c, ok := oauth.client(provider)
-			return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret}, ok
+			// The operator allowed the echo app at auth.echo.test only.
+			return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret, Hosts: []string{"auth.echo.test"}}, ok
 		}})
 	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{Brain: knows.Plugins, CallTimeout: 2 * time.Second,
 		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},

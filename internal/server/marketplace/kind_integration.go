@@ -48,13 +48,30 @@ type IntegrationManifest struct {
 	Binaries map[string]Binary `yaml:"binaries,omitempty" json:"binaries,omitempty"`
 }
 
-// IntegrationOAuth is how a person connects a remote MCP server that signs in with OAuth: the
-// provider's endpoints, and the server's own OAuth app for it (GATOR_<PROVIDER>_CLIENT_ID).
+// IntegrationOAuth is how a person connects a remote MCP server that signs in with OAuth. Its
+// endpoints are never the package's to say: the server names its authorization server (RFC 9728),
+// which names its endpoints (RFC 8414), and Gator registers a client there (RFC 7591). The package
+// says which authorization server that must be (default: the server's own origin, as hosted MCP
+// servers are), and may name a provider whose app the operator allowed at that host.
 type IntegrationOAuth struct {
-	Provider     string   `yaml:"provider" json:"provider"`
-	AuthorizeURL string   `yaml:"authorize_url" json:"authorize_url"`
-	TokenURL     string   `yaml:"token_url" json:"token_url"`
-	Scopes       []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`
+	AuthorizationServer string   `yaml:"authorization_server,omitempty" json:"authorization_server,omitempty"`
+	Provider            string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Scopes              []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`
+}
+
+// OAuthOf is the OAuth an integration declares, its authorization server resolved: a server that
+// says none is its own.
+func OAuthOf(im IntegrationManifest) IntegrationOAuth {
+	o := IntegrationOAuth{}
+	if im.OAuth != nil {
+		o = *im.OAuth
+	}
+	if o.AuthorizationServer == "" {
+		if u, err := url.Parse(im.URL); err == nil {
+			o.AuthorizationServer = u.Scheme + "://" + u.Host
+		}
+	}
+	return o
 }
 
 // Binary is one build of a native plugin.
@@ -92,7 +109,11 @@ func (Integration) Describe(_ Item, files Files) (Manifest, error) {
 		m.Permissions = append(m.Permissions, "agents reach "+host+" through Gator's MCP proxy; its credentials stay on the server")
 		switch im.Auth {
 		case AuthOAuth:
-			m.Permissions = append(m.Permissions, "signs in to "+im.OAuth.Provider+" for the project (OAuth)")
+			o := OAuthOf(im)
+			m.Permissions = append(m.Permissions, "signs in at "+hostOf(o.AuthorizationServer)+" for the project (OAuth)")
+			if o.Provider != "" {
+				m.Permissions = append(m.Permissions, "may sign in with this server's "+o.Provider+" app there, where its operator allows that host")
+			}
 		case AuthBearer:
 			m.Permissions = append(m.Permissions, "keeps a token for "+host+" on the server")
 		}
@@ -146,14 +167,12 @@ func checkMCP(im IntegrationManifest) error {
 			return invalid("oauth is for auth: oauth")
 		}
 	case AuthOAuth:
-		o := im.OAuth
-		if o == nil || !ValidName(o.Provider) {
-			return invalid("auth: oauth needs oauth.provider, authorize_url and token_url")
+		o := OAuthOf(im)
+		if o.Provider != "" && !ValidName(o.Provider) {
+			return invalid("oauth.provider %q is not a name", o.Provider)
 		}
-		for _, u := range []string{o.AuthorizeURL, o.TokenURL} {
-			if err := CheckServerURL(u); err != nil {
-				return err
-			}
+		if err := CheckServerURL(o.AuthorizationServer); err != nil {
+			return err
 		}
 	default:
 		return invalid("auth must be oauth, bearer or none, not %q", im.Auth)

@@ -199,6 +199,11 @@ func TestKindsReadTheirManifests(t *testing.T) {
 		!containsPrefix(m.Permissions, "agents given it may call: search_issues, get_issue_details") {
 		t.Fatalf("integration: %v %v", err, m.Permissions)
 	}
+	oauthEndpoints := map[string]string{"integration.yaml": strings.Replace(marketplacetest.SentryLike("https://mcp.example.com/mcp")["integration.yaml"],
+		"auth: bearer", "auth: oauth\noauth: {provider: github, token_url: \"https://evil.example/token\"}", 1)}
+	if _, err := (marketplace.Integration{}).Describe(marketplace.Item{}, filesOf(oauthEndpoints)); err == nil {
+		t.Error("a package names no OAuth endpoints: they are discovered")
+	}
 	if m, err := (marketplace.Process{}).Describe(marketplace.Item{}, filesOf(marketplacetest.IncidentPostmortem)); err != nil ||
 		!containsPrefix(m.Permissions, "sets the process of incident tasks: implementation → verification → postmortem → approved") {
 		t.Fatalf("process: %v %v", err, m.Permissions)

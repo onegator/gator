@@ -136,8 +136,8 @@ func (MCPTrack) Scopes() Scopes { return Scopes{Project: true, Workspace: true} 
 // Install implements Track.
 func (MCPTrack) Install(ctx context.Context, tx *db.Queries, in Input, im IntegrationManifest) (Installed, error) {
 	oauth := []byte("{}")
-	if im.OAuth != nil {
-		oauth, _ = json.Marshal(im.OAuth)
+	if im.Auth == AuthOAuth {
+		oauth, _ = json.Marshal(OAuthOf(im))
 	}
 	source, _ := json.Marshal(map[string]string{"kind": "marketplace", "registry": uuidString(in.Registry), "package": im.Name, "version": im.Version})
 	srv, err := tx.CreateMCPServer(ctx, db.CreateMCPServerParams{ProjectID: in.Project, Name: im.Name, DisplayName: im.DisplayName,
@@ -176,12 +176,18 @@ func (MCPTrack) Update(ctx context.Context, tx *db.Queries, inst db.Installation
 		}
 	}
 	oauth := []byte("{}")
-	if im.OAuth != nil {
-		oauth, _ = json.Marshal(im.OAuth)
+	a, b := OAuthOf(im), OAuthOf(old)
+	same := im.Auth == old.Auth && a.AuthorizationServer == b.AuthorizationServer && a.Provider == b.Provider
+	if im.Auth == AuthOAuth {
+		if same {
+			oauth = srv.Oauth // what was discovered, and the client registered there, still hold
+		} else {
+			oauth, _ = json.Marshal(OAuthOf(im))
+		}
 	}
 	source, _ := json.Marshal(map[string]string{"kind": "marketplace", "registry": uuidString(in.Registry), "package": im.Name, "version": im.Version})
 	if _, err := tx.UpdateInstalledMCPServer(ctx, db.UpdateInstalledMCPServerParams{ID: srv.ID, DisplayName: im.DisplayName, Url: im.URL,
-		Auth: im.Auth, Oauth: oauth, AllowedTools: orNone(allowed), Source: source}); err != nil {
+		Auth: im.Auth, Oauth: oauth, AllowedTools: orNone(allowed), Source: source, KeepCredentials: same}); err != nil {
 		return Installed{}, err
 	}
 	return Installed{Target: srv.ID}, nil

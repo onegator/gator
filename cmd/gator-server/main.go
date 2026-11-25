@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -360,10 +361,18 @@ func marketplacePluginDir(catalogue string) string {
 }
 
 // oauthApps are the server's OAuth apps for remote MCP servers, from the environment as plugins'
-// are (GATOR_<PROVIDER>_CLIENT_ID, _CLIENT_SECRET, _SCOPES).
+// are (GATOR_<PROVIDER>_CLIENT_ID, _CLIENT_SECRET, _SCOPES), each usable only at the authorization
+// server hosts the operator lists for it (GATOR_<PROVIDER>_OAUTH_HOSTS); without them, remote
+// servers register clients of their own.
 func oauthApps(provider string) (mcpremote.OAuthApp, bool) {
 	c, ok := plugins.OAuthClientFromEnv(provider)
-	return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret, Scopes: c.Scopes}, ok
+	app := mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret, Scopes: c.Scopes}
+	for h := range strings.SplitSeq(os.Getenv("GATOR_"+strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))+"_OAUTH_HOSTS"), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			app.Hosts = append(app.Hosts, h)
+		}
+	}
+	return app, ok && len(app.Hosts) > 0
 }
 
 func parseLevel(s string) slog.Level {

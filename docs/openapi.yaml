@@ -1895,11 +1895,13 @@ paths:
     post:
       operationId: connectProjectMcpServer
       description: >
-        Start connecting a server that signs in with OAuth: answers the provider's address for the person's browser.
-        The provider sends it back to /connect/callback, as for a plugin, and the token is kept on the server
-        (renewed before it expires); a job only ever reaches the server through the proxy. Needs the server's
-        OAuth app for the provider (GATOR_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET) and GATOR_PUBLIC_URL. For the
-        project's admins.
+        Start connecting a server that signs in with OAuth, as the MCP authorization spec says: Gator reads the
+        server's protected resource metadata (RFC 9728) and its authorization server's metadata (RFC 8414) —
+        which must be the authorization server its package declared — registers a client of its own there
+        (RFC 7591, kept encrypted with the server) and answers the sign-in address, with PKCE, for the person's
+        browser. A provider app of this server (GATOR_<PROVIDER>_CLIENT_ID) is used instead only at the hosts
+        its operator listed (GATOR_<PROVIDER>_OAUTH_HOSTS). The browser comes back to /connect/callback; the
+        token stays on the server, renewed before it expires. Needs GATOR_PUBLIC_URL. For the project's admins.
       parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
       requestBody:
         required: false

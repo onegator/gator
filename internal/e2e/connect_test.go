@@ -63,17 +63,20 @@ func (f *fakeProvider) client(provider string) (plugins.OAuthClient, bool) {
 	return plugins.OAuthClient{ID: "echo-client", Secret: "echo-client-secret"}, true
 }
 
-// httpClient sends every request to the fake, whatever host it names.
+// httpClient sends requests for auth.echo.test to the fake; anything else goes where it says.
 func (f *fakeProvider) httpClient() *http.Client {
-	c := f.Client()
+	c := *f.Client() // a copy: the fake's own client stays as it is for the next caller
 	inner := c.Transport
 	target, _ := url.Parse(f.URL)
 	c.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "auth.echo.test" {
+			return http.DefaultTransport.RoundTrip(r)
+		}
 		r = r.Clone(r.Context())
 		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
 		return inner.RoundTrip(r)
 	})
-	return c
+	return &c
 }
 
 type roundTripper func(*http.Request) (*http.Response, error)
@@ -92,6 +95,11 @@ func (f *fakeProvider) token(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(v)
+	}
+	if r.URL.Path == "/.well-known/oauth-authorization-server" {
+		reply(200, map[string]any{"issuer": "https://auth.echo.test", "authorization_endpoint": "https://auth.echo.test/authorize",
+			"token_endpoint": "https://auth.echo.test/token", "code_challenge_methods_supported": []string{"S256"}})
+		return
 	}
 	if r.URL.Path != "/token" || r.Form.Get("client_id") != "echo-client" || r.Form.Get("client_secret") != "echo-client-secret" {
 		reply(401, map[string]any{"error": "invalid_client"})

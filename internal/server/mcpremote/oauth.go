@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,24 +24,40 @@ import (
 )
 
 // OAuthApp is the server's own OAuth app at a provider (GATOR_<PROVIDER>_CLIENT_ID and
-// _CLIENT_SECRET, as plugins have).
+// _CLIENT_SECRET, as plugins have). It is used for a remote server only at the authorization
+// servers its operator named for it (GATOR_<PROVIDER>_OAUTH_HOSTS): a package that says
+// "provider: github" gets no GitHub secret unless the server it names signs in at a host the
+// operator listed.
 type OAuthApp struct {
 	ID, Secret string
 	Scopes     []string // replace the server's when set
+	Hosts      []string // authorization server hosts it may be used at
 }
 
-// oauthSpec is mcp_servers.oauth, as the integration package wrote it.
+// oauthSpec is mcp_servers.oauth: what the integration package declared (the authorization server
+// a person accepted, an optional provider whose app may be used there, scopes) and what discovery
+// found and which client signs in.
 type oauthSpec struct {
-	Provider     string   `json:"provider"`
-	AuthorizeURL string   `json:"authorize_url"`
-	TokenURL     string   `json:"token_url"`
-	Scopes       []string `json:"scopes"`
+	Provider            string      `json:"provider,omitempty"`
+	AuthorizationServer string      `json:"authorization_server,omitempty"`
+	Scopes              []string    `json:"scopes,omitempty"`
+	Discovered          *Discovered `json:"discovered,omitempty"`
+	// Client is "registered" (a client of this server's own, its id and secret in its secrets)
+	// or "app" (the provider's app the operator allowed at this authorization server).
+	Client string `json:"client,omitempty"`
 }
+
+// Secret names of a registered client.
+const (
+	SecretClientID     = "client_id"
+	SecretClientSecret = "client_secret"
+)
 
 // oauthStore is what connecting reads and writes. *db.Queries is one.
 type oauthStore interface {
 	GetMCPServerIn(ctx context.Context, arg db.GetMCPServerInParams) (db.McpServer, error)
 	SetMCPServerSecrets(ctx context.Context, arg db.SetMCPServerSecretsParams) (db.McpServer, error)
+	SetMCPServerOAuth(ctx context.Context, arg db.SetMCPServerOAuthParams) (db.McpServer, error)
 	InsertPluginConnectState(ctx context.Context, arg db.InsertPluginConnectStateParams) error
 	DeleteExpiredPluginConnectStates(ctx context.Context) error
 }
@@ -100,7 +117,10 @@ func (o *OAuth) Connect(ctx context.Context, p auth.Principal, project pgtype.UU
 	if err != nil {
 		return "", err
 	}
-	cfg, _, err := o.config(srv)
+	if srv, err = o.prepare(ctx, srv); err != nil {
+		return "", err
+	}
+	cfg, spec, err := o.config(srv)
 	if err != nil {
 		return "", err
 	}
@@ -112,7 +132,7 @@ func (o *OAuth) Connect(ctx context.Context, p auth.Principal, project pgtype.UU
 		ExpiresAt: pgtype.Timestamptz{Time: o.now().Add(connectTTL), Valid: true}}); err != nil {
 		return "", err
 	}
-	return cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)), nil
+	return cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("resource", spec.Discovered.Resource)), nil
 }
 
 // CompleteConnect implements plugins.Connector: the provider sent the browser back with a code,
@@ -125,11 +145,12 @@ func (o *OAuth) CompleteConnect(ctx context.Context, st db.PluginConnectState, c
 	if err != nil {
 		return err
 	}
-	cfg, _, err := o.config(srv)
+	cfg, spec, err := o.config(srv)
 	if err != nil {
 		return err
 	}
-	tok, err := cfg.Exchange(context.WithValue(ctx, oauth2.HTTPClient, o.http), code, oauth2.VerifierOption(st.Verifier))
+	tok, err := cfg.Exchange(context.WithValue(ctx, oauth2.HTTPClient, o.http), code, oauth2.VerifierOption(st.Verifier),
+		oauth2.SetAuthURLParam("resource", spec.Discovered.Resource))
 	if err != nil {
 		return plugins.DescribeOAuthErr(err)
 	}
@@ -213,28 +234,109 @@ func (o *OAuth) store1(ctx context.Context, srv db.McpServer, tok *oauth2.Token)
 	return out, err
 }
 
-// config is the OAuth flow of a server, with this server's app for its provider.
-func (o *OAuth) config(srv db.McpServer) (*oauth2.Config, oauthSpec, error) {
-	var spec oauthSpec
-	_ = json.Unmarshal(srv.Oauth, &spec)
-	if srv.Auth != AuthOAuth || spec.Provider == "" || spec.AuthorizeURL == "" || spec.TokenURL == "" {
-		return nil, spec, fmt.Errorf("%w: %s does not sign in with OAuth", ErrNotConnectable, srv.Name)
-	}
-	app, ok := o.apps(spec.Provider)
-	if !ok {
-		env := "GATOR_" + strings.ToUpper(strings.ReplaceAll(spec.Provider, "-", "_"))
-		return nil, spec, fmt.Errorf("%w: this server has no %s OAuth app; set %s_CLIENT_ID and %s_CLIENT_SECRET", ErrNotConnectable, spec.Provider, env, env)
+// prepare follows the server's metadata to its authorization server and makes sure there is a
+// client to sign in with: the provider's app where the operator allowed it at that host, else one
+// registered for this server alone (kept encrypted in its secrets, reused while the
+// authorization server stays the same).
+func (o *OAuth) prepare(ctx context.Context, srv db.McpServer) (db.McpServer, error) {
+	spec, err := specOf(srv)
+	if err != nil {
+		return srv, err
 	}
 	if o.publicURL == "" {
-		return nil, spec, fmt.Errorf("%w: set GATOR_PUBLIC_URL so the provider can send the browser back", ErrNotConnectable)
+		return srv, fmt.Errorf("%w: set GATOR_PUBLIC_URL so the provider can send the browser back", ErrNotConnectable)
 	}
-	scopes := spec.Scopes
-	if len(app.Scopes) > 0 {
-		scopes = app.Scopes
+	found, err := discover(ctx, o.http, srv.Url, spec.AuthorizationServer)
+	if err != nil {
+		return srv, err
 	}
-	return &oauth2.Config{ClientID: app.ID, ClientSecret: app.Secret, RedirectURL: o.publicURL + "/connect/callback", Scopes: scopes,
-		Endpoint: oauth2.Endpoint{AuthURL: spec.AuthorizeURL, TokenURL: spec.TokenURL, AuthStyle: oauth2.AuthStyleInParams}}, spec, nil
+	moved := spec.Discovered == nil || spec.Discovered.Issuer != found.Issuer
+	spec.Discovered = &found
+	sec, err := o.keys.Secrets(srv)
+	if err != nil {
+		return srv, err
+	}
+	switch {
+	case o.appAllowed(spec):
+		spec.Client = "app"
+	case !moved && spec.Client == "registered" && sec[SecretClientID] != "":
+	case found.RegistrationEndpoint != "":
+		c, err := register(ctx, o.http, found.RegistrationEndpoint, o.redirect())
+		if err != nil {
+			return srv, err
+		}
+		sec[SecretClientID], sec[SecretClientSecret] = c.ClientID, c.ClientSecret
+		if c.ClientSecret == "" {
+			delete(sec, SecretClientSecret)
+		}
+		enc, err := o.keys.Seal(sec)
+		if err != nil {
+			return srv, err
+		}
+		if srv, err = o.store.SetMCPServerSecrets(ctx, db.SetMCPServerSecretsParams{ID: srv.ID, Secrets: enc, TokenExpiresAt: srv.TokenExpiresAt}); err != nil {
+			return srv, err
+		}
+		spec.Client = "registered"
+	default:
+		return srv, fmt.Errorf("%w: %s registers no clients, and this server has no app the operator allowed there (GATOR_<PROVIDER>_OAUTH_HOSTS)",
+			ErrNotConnectable, hostOf(found.Issuer))
+	}
+	raw, _ := json.Marshal(spec)
+	return o.store.SetMCPServerOAuth(ctx, db.SetMCPServerOAuthParams{ID: srv.ID, Oauth: raw})
 }
+
+// appAllowed says whether the provider's app may sign in at the server's authorization server.
+func (o *OAuth) appAllowed(spec oauthSpec) bool {
+	if spec.Provider == "" || spec.Discovered == nil {
+		return false
+	}
+	app, ok := o.apps(spec.Provider)
+	host := hostOf(spec.Discovered.Issuer)
+	return ok && slices.ContainsFunc(app.Hosts, func(h string) bool { return strings.EqualFold(h, host) })
+}
+
+// config is the OAuth flow of a server, from what discovery found and with the client prepare chose.
+func (o *OAuth) config(srv db.McpServer) (*oauth2.Config, oauthSpec, error) {
+	spec, err := specOf(srv)
+	if err != nil {
+		return nil, spec, err
+	}
+	d := spec.Discovered
+	if d == nil || spec.Client == "" {
+		return nil, spec, fmt.Errorf("%w: %s has not been connected yet", ErrNotConnectable, srv.Name)
+	}
+	cfg := &oauth2.Config{RedirectURL: o.redirect(), Scopes: spec.Scopes,
+		Endpoint: oauth2.Endpoint{AuthURL: d.AuthorizationEndpoint, TokenURL: d.TokenEndpoint, AuthStyle: oauth2.AuthStyleInParams}}
+	switch spec.Client {
+	case "app":
+		if !o.appAllowed(spec) {
+			return nil, spec, fmt.Errorf("%w: the %s app is no longer allowed at %s", ErrNotConnectable, spec.Provider, hostOf(d.Issuer))
+		}
+		app, _ := o.apps(spec.Provider)
+		cfg.ClientID, cfg.ClientSecret = app.ID, app.Secret
+		if len(app.Scopes) > 0 {
+			cfg.Scopes = app.Scopes
+		}
+	default:
+		sec, err := o.keys.Secrets(srv)
+		if err != nil {
+			return nil, spec, err
+		}
+		cfg.ClientID, cfg.ClientSecret = sec[SecretClientID], sec[SecretClientSecret]
+	}
+	return cfg, spec, nil
+}
+
+func specOf(srv db.McpServer) (oauthSpec, error) {
+	var spec oauthSpec
+	_ = json.Unmarshal(srv.Oauth, &spec)
+	if srv.Auth != AuthOAuth {
+		return spec, fmt.Errorf("%w: %s does not sign in with OAuth", ErrNotConnectable, srv.Name)
+	}
+	return spec, nil
+}
+
+func (o *OAuth) redirect() string { return o.publicURL + "/connect/callback" }
 
 func randomToken() string {
 	b := make([]byte, 32)

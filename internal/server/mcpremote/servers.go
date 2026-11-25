@@ -195,8 +195,8 @@ func (s *Servers) setSecrets(ctx context.Context, srv db.McpServer, in map[strin
 		}
 	}
 	for k, v := range in {
-		if k == SecretRefreshToken || k == SecretAccessToken {
-			return srv, fmt.Errorf("%w: an OAuth token comes from connecting, not from a request", ErrInvalid)
+		if k == SecretRefreshToken || k == SecretAccessToken || k == SecretClientID || k == SecretClientSecret {
+			return srv, fmt.Errorf("%w: an OAuth token or client comes from connecting, not from a request", ErrInvalid)
 		}
 		if v == "" {
 			delete(sec, k)
@@ -277,7 +277,7 @@ func (s *Servers) view(srv db.McpServer) View {
 	sec, err := s.keys.Secrets(srv)
 	if err == nil {
 		for k := range sec {
-			if k != SecretRefreshToken {
+			if k != SecretRefreshToken && k != SecretClientID && k != SecretClientSecret {
 				v.SecretsSet = append(v.SecretsSet, k)
 			}
 		}

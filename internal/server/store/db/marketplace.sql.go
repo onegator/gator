@@ -944,25 +944,26 @@ const updateInstalledMCPServer = `-- name: UpdateInstalledMCPServer :one
 UPDATE mcp_servers
 SET display_name = $1, url = $2, auth = $3, oauth = $4,
     allowed_tools = $5, source = $6,
-    secrets = CASE WHEN url = $2 AND auth = $3 THEN secrets ELSE '' END,
-    token_expires_at = CASE WHEN url = $2 AND auth = $3 THEN token_expires_at END,
+    secrets = CASE WHEN url = $2 AND auth = $3 AND $7::boolean THEN secrets ELSE '' END,
+    token_expires_at = CASE WHEN url = $2 AND auth = $3 AND $7::boolean THEN token_expires_at END,
     updated_at = now()
-WHERE id = $7
+WHERE id = $8
 RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
 `
 
 type UpdateInstalledMCPServerParams struct {
-	DisplayName  string      `json:"display_name"`
-	Url          string      `json:"url"`
-	Auth         string      `json:"auth"`
-	Oauth        []byte      `json:"oauth"`
-	AllowedTools []string    `json:"allowed_tools"`
-	Source       []byte      `json:"source"`
-	ID           pgtype.UUID `json:"id"`
+	DisplayName     string      `json:"display_name"`
+	Url             string      `json:"url"`
+	Auth            string      `json:"auth"`
+	Oauth           []byte      `json:"oauth"`
+	AllowedTools    []string    `json:"allowed_tools"`
+	Source          []byte      `json:"source"`
+	KeepCredentials bool        `json:"keep_credentials"`
+	ID              pgtype.UUID `json:"id"`
 }
 
-// A remote server brought to a new version of its package. A new address takes its credentials
-// away: they were given for the old one.
+// A remote server brought to a new version of its package. A new address, or a new way of
+// signing in, takes its credentials away: they were given for the old one.
 func (q *Queries) UpdateInstalledMCPServer(ctx context.Context, arg UpdateInstalledMCPServerParams) (McpServer, error) {
 	row := q.db.QueryRow(ctx, updateInstalledMCPServer,
 		arg.DisplayName,
@@ -971,6 +972,7 @@ func (q *Queries) UpdateInstalledMCPServer(ctx context.Context, arg UpdateInstal
 		arg.Oauth,
 		arg.AllowedTools,
 		arg.Source,
+		arg.KeepCredentials,
 		arg.ID,
 	)
 	var i McpServer

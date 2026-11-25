@@ -51,3 +51,6 @@ SELECT DISTINCT name FROM mcp_servers WHERE (project_id = sqlc.arg(project_id) O
 
 -- name: ListWorkspaceMCPServers :many
 SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY name;
+
+-- name: SetMCPServerOAuth :one
+UPDATE mcp_servers SET oauth = sqlc.arg(oauth), updated_at = now() WHERE id = sqlc.arg(id) RETURNING *;

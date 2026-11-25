@@ -351,6 +351,37 @@ func (q *Queries) MCPServerFor(ctx context.Context, arg MCPServerForParams) (Mcp
 	return i, err
 }
 
+const setMCPServerOAuth = `-- name: SetMCPServerOAuth :one
+UPDATE mcp_servers SET oauth = $1, updated_at = now() WHERE id = $2 RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
+`
+
+type SetMCPServerOAuthParams struct {
+	Oauth []byte      `json:"oauth"`
+	ID    pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetMCPServerOAuth(ctx context.Context, arg SetMCPServerOAuthParams) (McpServer, error) {
+	row := q.db.QueryRow(ctx, setMCPServerOAuth, arg.Oauth, arg.ID)
+	var i McpServer
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Url,
+		&i.Auth,
+		&i.Secrets,
+		&i.AllowedTools,
+		&i.Enabled,
+		&i.Oauth,
+		&i.TokenExpiresAt,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const setMCPServerSecrets = `-- name: SetMCPServerSecrets :one
 UPDATE mcp_servers SET secrets = $1, token_expires_at = $2, updated_at = now()
 WHERE id = $3
