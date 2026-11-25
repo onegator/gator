@@ -571,6 +571,18 @@ to częsty kontekst. Wzór: `provider/userInputAttachments.ts`, `AttachmentClaim
   Live Activity (tokeny i aktualizacje ActivityKit) i ustawienia osoby dla nowych reguł — aplikacja
   filtruje po kategorii.
 - **CLI:** `gator job checkpoints`, `gator job diff`, `gator approvals`, `gator decide`.
+- **Po przeglądzie** (szczegóły w commicie): wyłączenia filtrów checkpointu idą przez
+  `GIT_CONFIG_KEY_n`/`VALUE_n` (nazwa sterownika z `=` nie rozcina już `-c`), a konfiguracja
+  globalna nie jest czytana; reguły `mcp:` są tłumaczone na nazwy Claude Code w `--disallowedTools`;
+  runner wysyła czekające prośby jeszcze raz po każdym połączeniu (decyzja podjęta, gdy go nie było,
+  dochodzi), a prośby nie trafiają do journala (zgody są tylko na żywo); job wzięty ponownie zaczyna
+  checkpointy od nowa (stare są usuwane, klucze diffów mają numer próby); sesja zamyka wejście po
+  `UnreadWait` także wtedy, gdy odtworzenia wiadomości nie da się dopasować; `settling` przeżywa
+  ponowienie zdarzenia i zastój; „Needs you” filtruje projekty osoby w SQL; ścieżka z diffu w
+  wiadomości z uwagami jest oczyszczona. Prośby są anulowane też przy `job.requeued`.
+- **Zawężone:** kolejka wiadomości rusza tylko na końcu joba odpowiedzi; ponownie dostarczone
+  `job.finished` zanim następna tura wystartuje może wziąć z kolejki drugą wiadomość. Pliki diffów
+  wcześniejszej próby joba zostają w magazynie (wiersze są usuwane).
 
 ## Do zrobienia w gator-app
 

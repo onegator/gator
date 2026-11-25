@@ -802,7 +802,9 @@ func (q *Queries) LockTask(ctx context.Context, key string) error {
 
 const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
-SET status = CASE WHEN status = 'settling' THEN 'settling' ELSE 'running' END,
+SET status = CASE WHEN status = 'settling'
+                    OR (status = 'stalled' AND EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = jobs.id AND e.type = 'settling'))
+                  THEN 'settling' ELSE 'running' END,
     started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
 WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled', 'settling')
 RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
@@ -814,7 +816,8 @@ type MarkJobActiveParams struct {
 }
 
 // First event moves leased → running; any event revives a stalled job. A job settling (its agent
-// done, the runner checkpointing and pushing) stays settling.
+// done, the runner checkpointing and pushing) stays settling, and one that stalled while settling
+// goes back to it.
 func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (Job, error) {
 	row := q.db.QueryRow(ctx, markJobActive, arg.ID, arg.RunnerID)
 	var i Job

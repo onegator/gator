@@ -94,3 +94,28 @@ func TestQueuedMessagesWaitForTheTurnToEnd(t *testing.T) {
 		t.Fatal("a message left the queue twice")
 	}
 }
+
+// A queued message's message.posted, read after the message left its queue, asks nobody: the
+// message.dequeued that took it out asks, once.
+func TestALateMessagePostedOfADequeuedMessageAsksNobody(t *testing.T) {
+	w := newWorld(t)
+	rec := &steers{}
+	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, nil))
+	reviewer := w.agent("reviewer")
+	turn := w.turnOf(reviewer, w.post(w.admin, w.general.ID, "@reviewer look", reviewer))
+	posted, err := w.chat.Messages.Post(w.ctx, w.admin, turn.ConversationID, conversations.Draft{Body: "and the tests", Intent: conversations.IntentQueued})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.chat.Queue.SendNow(w.ctx, w.admin, posted.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.dispatch(posted.Message) // the posted event, late
+	if got := rec.got[turn.JobID.Bytes]; len(got) != 0 {
+		t.Fatalf("the late posted event steered: %v", got)
+	}
+	w.dequeued(posted.Message)
+	if got := rec.got[turn.JobID.Bytes]; len(got) != 1 {
+		t.Fatalf("the dequeued event steers once: %v", got)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -578,6 +579,20 @@ func (s *Service) Waiting(ctx context.Context, p auth.Principal, project pgtype.
 	projects := []pgtype.UUID{}
 	if project.Valid {
 		projects = append(projects, project)
+	}
+	if !p.IsWorkspaceAdmin() {
+		// Only the caller's projects, in the query: others' requests must not fill the page.
+		mine, err := q.ListUserProjectIDs(ctx, p.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if project.Valid {
+			mine = slices.DeleteFunc(mine, func(id pgtype.UUID) bool { return id != project })
+		}
+		if len(mine) == 0 {
+			return []db.RuntimeRequest{}, nil
+		}
+		projects = mine
 	}
 	rows, err := q.ListPendingRuntimeRequests(ctx, projects)
 	if err != nil {

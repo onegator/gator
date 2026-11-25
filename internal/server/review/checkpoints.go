@@ -92,8 +92,8 @@ func (c *Checkpoints) Record(ctx context.Context, job db.Job, cp proto.Checkpoin
 		BaseCommit: cp.BaseCommit, HeadCommit: cp.HeadCommit, Files: files, DiffBytes: int64(len(diff)), Truncated: cp.Truncated,
 		WholeFiles: whole, WholeBytes: int64(len(wholeDiff)), WholeTruncated: cp.WholeTruncated, TookMs: int32(min(cp.TookMS, 1<<30))}
 	if c.blobs != nil {
-		// The key is the checkpoint's own: a resend writes the same file again.
-		prefix := fmt.Sprintf("checkpoints/%s/%s/%d", uuidString(job.ID), repoKey(cp.Repo), cp.Seq)
+		// The key is the checkpoint's own, of this attempt: a resend writes the same file again.
+		prefix := fmt.Sprintf("checkpoints/%s/%d/%s/%d", uuidString(job.ID), job.Attempts, repoKey(cp.Repo), cp.Seq)
 		turnKey, wholeKey := prefix+"/turn.diff", prefix+"/whole.diff"
 		if err := c.blobs.Put(ctx, turnKey, bytes.NewReader(diff), int64(len(diff)), "text/x-diff"); err != nil {
 			return fmt.Errorf("storing the diff: %w", err)

@@ -483,6 +483,13 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 		}
 	}
 	if s.version >= liveVersion && j.Tier != TierChat {
+		if j.Attempts > 1 {
+			// The attempt before was lost with its runner; its checkpoints (and the comments on
+			// them) are not this attempt's, which starts again at the first turn.
+			if err := q.DeleteJobCheckpoints(ctx, j.ID); err != nil {
+				s.m.log.Warn("dropping an earlier attempt's checkpoints", "job", uuidString(j.ID), "err", err)
+			}
+		}
 		pj.NoCheckpoints = !s.m.process.CheckpointsOn(ctx, j.ProjectID)
 		pj.Approvals = s.approvals(ctx, q, j)
 	}
@@ -693,7 +700,8 @@ func (s *session) events(ev proto.Events) error {
 	}
 	jobID := job.ID
 	prev := job.Status
-	if _, err := q.MarkJobActive(ctx, db.MarkJobActiveParams{ID: jobID, RunnerID: s.runnerID}); err != nil {
+	active, err := q.MarkJobActive(ctx, db.MarkJobActiveParams{ID: jobID, RunnerID: s.runnerID})
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("job %s is %s, not active", ev.JobID, job.Status)
 		}
@@ -704,7 +712,7 @@ func (s *session) events(ev proto.Events) error {
 		if prev == "stalled" {
 			typ = "job.resumed"
 		}
-		job.Status = "running"
+		job.Status = active.Status // running, or settling again after a stall
 		_ = s.m.tx(ctx, func(q *db.Queries) error { return s.m.emitJob(ctx, q, typ, job, nil) })
 	}
 	for _, e := range ev.Events {
@@ -720,10 +728,14 @@ func (s *session) events(ev proto.Events) error {
 		if err != nil {
 			return errRetry
 		}
-		if n == 1 {
+		// Settling holds on a resend too: the step is idempotent, and a failure of it the first
+		// time would otherwise be lost with the event already stored.
+		if n == 1 || e.Type == EventSettling {
 			if err := s.lifecycle(ctx, q, job, e); err != nil {
 				return errRetry
 			}
+		}
+		if n == 1 {
 			out, _ := json.Marshal(e)
 			s.m.hub.Publish(events.Event{Type: "job.output", Aggregate: "job", AggregateID: ev.JobID, Payload: out, CreatedAt: at})
 		}

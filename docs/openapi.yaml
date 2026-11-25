@@ -4085,6 +4085,10 @@ components:
       description: >-
         What a card shows. It points at an object (ref) whose current state a client reads; the
         rest is a summary for the list. Its buttons call the endpoints the object already has.
+        A job card's state is the job's status (settling: "finishing"); a tool_approval or question
+        card (ref kind runtime_request, key approval:<id>) has the actions allow,
+        allow_for_session, deny, stop (a question: answer, stop) while it waits — POST
+        /runtime-requests/{id}/decide — and none once decided.
       properties:
         ref: { $ref: "#/components/schemas/CardRef" }
         title: { type: string }
@@ -4094,6 +4098,13 @@ components:
         day: { type: string, description: "brain_proposal: the day (YYYY-MM-DD) whose proposals the card lists" }
         proposals: { type: array, items: { $ref: "#/components/schemas/BrainCardProposal" }, description: "brain_proposal: what the Brain was proposed from the task that day" }
         changes: { $ref: "#/components/schemas/CardChanges" }
+        startup: { type: string, enum: [checkout, mcp, initialize, ready], x-enum-varnames: [CardStartupCheckout, CardStartupMCP, CardStartupInitialize, CardStartupReady], description: "job: how far the start got, until the first tool call" }
+        tool: { type: string, description: "tool_approval: the tool the agent asks to use" }
+        rule: { type: string, description: "tool_approval: the rule of the approvals policy that asks" }
+        input: { type: object, additionalProperties: true, description: "tool_approval and question: the tool's input, redacted (a note of its size when long)" }
+        expiresAt: { type: string, format: date-time, description: "tool_approval and question: when nobody answering makes it a denial" }
+        decidedBy: { type: string, description: "tool_approval and question: who decided, by name" }
+        feedback: { type: string, description: "tool_approval: the reason of a denial; question: the answer" }
     CardChanges:
       type: object
       description: "job: what the job changed so far, from its last checkpoint (a line under the card, and the diff action: GET /jobs/{id}/diff)"

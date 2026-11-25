@@ -78,3 +78,7 @@ ORDER BY rc.message_id, rc.path, rc.line_start, rc.created_at;
 -- How far a job's start got, by what its runner said last.
 SELECT COALESCE((SELECT payload->>'phase' FROM job_events e WHERE e.job_id = $1 AND e.type = 'startup_phase'
                  ORDER BY e.seq DESC LIMIT 1), '')::text AS phase;
+
+-- name: DeleteJobCheckpoints :exec
+-- A job leased again starts its checkpoints over: what the attempt before left is not this one's.
+DELETE FROM turn_checkpoints WHERE job_id = $1;

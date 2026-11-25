@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -31,9 +32,13 @@ func TestAJobSettlesBeforeItIsDone(t *testing.T) {
 		h.threadCard(task, "job", ok)
 	}
 	event(1, "startup_phase", map[string]string{"phase": "checkout"})
-	jobCard(func(m gen.Message) bool { return m.Card != nil && m.Card.AdditionalProperties["startup"] == "checkout" })
+	jobCard(func(m gen.Message) bool {
+		return m.Card != nil && m.Card.Startup != nil && *m.Card.Startup == gen.CardStartupCheckout
+	})
 	event(2, "startup_phase", map[string]string{"phase": "ready"})
-	jobCard(func(m gen.Message) bool { return m.Card != nil && m.Card.AdditionalProperties["startup"] == "ready" })
+	jobCard(func(m gen.Message) bool {
+		return m.Card != nil && m.Card.Startup != nil && *m.Card.Startup == gen.CardStartupReady
+	})
 
 	event(3, "settling", map[string]string{"status": "done"})
 	if j := h.waitJob(id, "settling"); j.Status != "settling" {
@@ -45,6 +50,15 @@ func TestAJobSettlesBeforeItIsDone(t *testing.T) {
 	event(4, "git", map[string]int{"commits": 0})
 	if j := h.waitJob(id, "settling"); j.Status != "settling" {
 		t.Fatalf("an event after settling: %+v", j)
+	}
+	// A job that stalls while settling settles again when its runner speaks.
+	if _, err := h.mgr.Sweep(context.Background(), time.Now().Add(testStallAfter+time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	h.waitJob(id, "stalled")
+	event(5, "git", map[string]int{"pushed": 1})
+	if j := h.waitJob(id, "settling"); j.Status != "settling" {
+		t.Fatalf("after a stall: %+v", j)
 	}
 	raw.send(proto.TypeFinish, proto.Finish{JobID: id, Status: proto.StatusDone, Usage: proto.Usage{DurationMS: 10, InputTokens: 1}})
 	raw.recvType(proto.TypeAck)

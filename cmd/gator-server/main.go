@@ -260,7 +260,7 @@ func serve(ctx context.Context) error {
 	waits.UseRuntime(runnerMgr)
 	runnerMgr.UseRuntime(waits)
 	cancelWaits := conversations.NewCursorConsumer("approvals", db.Pool, hub, log, 0)
-	cancelWaits.On(waits.Handler(), "job.finished")
+	cancelWaits.On(waits.Handler(), "job.finished", "job.requeued")
 	go cancelWaits.Run(ctx)
 	go waits.Run(ctx, 15*time.Second)
 

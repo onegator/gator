@@ -249,7 +249,7 @@ func notesMessage(handle string, drafts []db.ReviewComment) string {
 	}
 	fmt.Fprintf(&b, "@%s, %d %s on your changes:", handle, len(drafts), word)
 	for _, d := range drafts {
-		fmt.Fprintf(&b, "\n- `%s` %s: %s", d.Path, lineRange(int(d.LineStart), int(d.LineEnd)), firstLine(d.Body))
+		fmt.Fprintf(&b, "\n- `%s` %s: %s", inlinePath(d.Path), lineRange(int(d.LineStart), int(d.LineEnd)), firstLine(d.Body))
 	}
 	return b.String()
 }
@@ -268,4 +268,21 @@ func firstLine(s string) string {
 		l = string(r[:160]) + "…"
 	}
 	return l
+}
+
+// inlinePath is a path from the agent's diff as one line of the person's message: no line breaks,
+// no backticks to end the code span, no fence-like text, bounded. The agent reads the path whole,
+// fenced, in its notes.
+func inlinePath(p string) string {
+	p = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '`' {
+			return '_'
+		}
+		return r
+	}, p)
+	p = strings.ReplaceAll(p, "<<<", "<‹<")
+	if r := []rune(p); len(r) > 200 {
+		p = "…" + string(r[len(r)-200:])
+	}
+	return p
 }

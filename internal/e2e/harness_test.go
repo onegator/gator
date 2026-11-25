@@ -159,7 +159,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	cancelWaits := conversations.NewCursorConsumer("approvals", pool, hub, slog.Default(), 50*time.Millisecond)
-	cancelWaits.On(waits.Handler(), "job.finished")
+	cancelWaits.On(waits.Handler(), "job.finished", "job.requeued")
 	go cancelWaits.Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	// The curator follows the outbox on its own; sweeping for quiet threads is a test's to ask.

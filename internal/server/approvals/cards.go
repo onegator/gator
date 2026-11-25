@@ -205,7 +205,8 @@ func decidedNote(r db.RuntimeRequest, by string) string {
 	return ""
 }
 
-// Handler cancels what a job that ended was waiting for: a conversations.Handler on job.finished.
+// Handler cancels what a job that ended was waiting for: a conversations.Handler on job.finished,
+// and on job.requeued — the runner that held the job lost it, and with it the agent that waited.
 func (s *Service) Handler() conversations.Handler {
 	return conversations.HandlerFunc(func(ctx context.Context, e db.EventsAfterRow) error {
 		return s.CancelForJob(ctx, e.AggregateID)

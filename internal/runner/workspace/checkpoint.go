@@ -207,22 +207,31 @@ func (g checkpointGit) stream(ctx context.Context, index string, filters []strin
 	if g.workTree != "" {
 		full = append(full, "--work-tree="+g.workTree)
 	}
-	full = append(full, "-c", "core.fsmonitor=false", "-c", "core.attributesFile="+os.DevNull, "-c", "diff.external=",
-		"-c", "core.hooksPath="+g.hooksDir(), "-c", "core.quotePath=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false")
-	for _, f := range filters {
-		full = append(full, "-c", "filter."+f+".clean=", "-c", "filter."+f+".smudge=", "-c", "filter."+f+".process=",
-			"-c", "filter."+f+".required=false")
-	}
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, g.bin, full...)
 	cmd.Dir = g.gitDir
 	if g.workTree != "" {
 		cmd.Dir = g.workTree // pathspecs are the worktree's
 	}
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_ATTR_NOSYSTEM=1",
-		"GIT_ATTR_SOURCE="+emptyTree, "GIT_OPTIONAL_LOCKS=0",
+	// The overrides go through GIT_CONFIG_KEY_n/VALUE_n, not -c: a key there is taken whole, so a
+	// driver named with "=" in it (which -c would split) is switched off like any other. The
+	// user's global configuration is not read at all, only the repository's, whose drivers are.
+	settings := [][2]string{{"core.fsmonitor", "false"}, {"core.attributesFile", os.DevNull}, {"diff.external", ""},
+		{"core.hooksPath", g.hooksDir()}, {"core.quotePath", "false"}, {"gc.auto", "0"}, {"maintenance.auto", "false"}}
+	for _, f := range filters {
+		for _, k := range []string{"clean", "smudge", "process"} {
+			settings = append(settings, [2]string{"filter." + f + "." + k, ""})
+		}
+		settings = append(settings, [2]string{"filter." + f + ".required", "false"})
+	}
+	cmd.Env = append(withoutGitConfigEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_ATTR_NOSYSTEM=1", "GIT_ATTR_SOURCE="+emptyTree, "GIT_OPTIONAL_LOCKS=0",
 		"GIT_AUTHOR_NAME=Gator Runner", "GIT_AUTHOR_EMAIL=runner@gator.local",
-		"GIT_COMMITTER_NAME=Gator Runner", "GIT_COMMITTER_EMAIL=runner@gator.local")
+		"GIT_COMMITTER_NAME=Gator Runner", "GIT_COMMITTER_EMAIL=runner@gator.local",
+		fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(settings)))
+	for i, kv := range settings {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i, kv[0]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i, kv[1]))
+	}
 	if index != "" {
 		cmd.Env = append(cmd.Env, "GIT_INDEX_FILE="+index)
 	}
@@ -250,6 +259,20 @@ func (g checkpointGit) stream(ctx context.Context, index string, filters []strin
 		return fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return copyErr
+}
+
+// withoutGitConfigEnv is the runner's environment without the configuration git would take from
+// it: the checkpoint says its own.
+func withoutGitConfigEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_CONFIG") || strings.HasPrefix(kv, "GIT_DIR=") || strings.HasPrefix(kv, "GIT_WORK_TREE=") ||
+			strings.HasPrefix(kv, "GIT_INDEX_FILE=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 func (g checkpointGit) hooksDir() string {

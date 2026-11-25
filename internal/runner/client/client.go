@@ -125,8 +125,11 @@ type runningJob struct {
 	steer  chan string
 	// cont carries the server's answer to a turn_ending question, one per question.
 	cont chan proto.Continue
-	// decisions are the runtime requests waiting for a person, by request id.
+	// decisions are the runtime requests waiting for a person, by request id, and waiting the
+	// requests themselves, sent again on every new connection: a decision sent while this runner
+	// was away is heard when the server answers the request again.
 	decisions map[string]chan proto.RuntimeDecision
+	waiting   map[string]proto.RuntimeRequest
 }
 
 // Client is one runner.
@@ -218,6 +221,10 @@ func (c *Client) persistLocked() {
 	}
 	entries := make([]journalEntry, 0, len(c.pending))
 	for _, m := range c.pending {
+		if m.typ == proto.TypeRuntimeRequest {
+			// Live only: a restarted runner has no agent waiting on it any more.
+			continue
+		}
 		b, err := json.Marshal(m.payload)
 		if err != nil {
 			continue
@@ -400,6 +407,11 @@ func (c *Client) attach(ctx context.Context, conn *websocket.Conn) {
 	c.inflight = map[uint64]*outMsg{}
 	for _, m := range c.pending {
 		c.writeLocked(m)
+	}
+	for _, rj := range c.jobs {
+		for _, r := range rj.waiting {
+			c.writeLocked(&outMsg{typ: proto.TypeRuntimeRequest, payload: r})
+		}
 	}
 }
 
@@ -657,7 +669,7 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 		cancel = func(err error) { prev(err); tcancel() }
 	}
 	rj := &runningJob{cancel: cancel, steer: make(chan string, 8), cont: make(chan proto.Continue, 1),
-		decisions: map[string]chan proto.RuntimeDecision{}}
+		decisions: map[string]chan proto.RuntimeDecision{}, waiting: map[string]proto.RuntimeRequest{}}
 	c.jobs[job.JobID] = rj
 	c.mu.Unlock()
 
@@ -781,11 +793,12 @@ func (c *Client) request(ctx context.Context, jobID string, rj *runningJob, r pr
 	}
 	ch := make(chan proto.RuntimeDecision, 1)
 	c.mu.Lock()
-	rj.decisions[r.ID] = ch
+	rj.decisions[r.ID], rj.waiting[r.ID] = ch, r
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
 		delete(rj.decisions, r.ID)
+		delete(rj.waiting, r.ID)
 		c.mu.Unlock()
 	}()
 	c.sendReliable(&outMsg{typ: proto.TypeRuntimeRequest, payload: r})

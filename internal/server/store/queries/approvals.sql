@@ -41,3 +41,6 @@ SELECT r.* FROM runtime_requests r JOIN jobs j ON j.id = r.job_id
 WHERE r.status = 'pending' AND (cardinality(sqlc.arg(projects)::uuid[]) = 0 OR j.project_id = ANY(sqlc.arg(projects)::uuid[]))
 ORDER BY r.created_at DESC
 LIMIT 200;
+
+-- name: ListUserProjectIDs :many
+SELECT project_id FROM memberships WHERE user_id = $1;

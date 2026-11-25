@@ -118,9 +118,11 @@ func TestCheckpointRunsNothingAndReadsNothingOutsideTheWorktree(t *testing.T) {
 	// A clean filter, declared where the agent can write: the repository's config and attributes.
 	git(t, w.Dir, "config", "filter.evil.clean", "touch "+ran+"; cat")
 	git(t, w.Dir, "config", "filter.evil.required", "true")
+	// A driver whose name has "=" in it, which `git -c` would split at.
+	git(t, w.Dir, "config", "filter.a=b.clean", "touch "+ran+"; cat")
+	write(t, filepath.Join(w.bare, "info", "attributes"), "* filter=evil\n*.txt filter=a=b\n")
 	write(t, filepath.Join(w.Dir, ".gitattributes"), "* filter=evil\n")
 	write(t, filepath.Join(w.gitDir, "info", "attributes"), "* filter=evil\n")
-	write(t, filepath.Join(w.bare, "info", "attributes"), "* filter=evil\n")
 	// The worktree pointed elsewhere, and fsmonitor and a hook asked to run.
 	git(t, w.Dir, "config", "core.fsmonitor", "touch "+ran+";")
 	write(t, filepath.Join(w.bare, "hooks", "reference-transaction"), "#!/bin/sh\ntouch "+ran+"\n")

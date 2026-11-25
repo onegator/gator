@@ -35,6 +35,16 @@ func (q *Queries) CheckpointDiff(ctx context.Context, id pgtype.UUID) (Checkpoin
 	return i, err
 }
 
+const deleteJobCheckpoints = `-- name: DeleteJobCheckpoints :exec
+DELETE FROM turn_checkpoints WHERE job_id = $1
+`
+
+// A job leased again starts its checkpoints over: what the attempt before left is not this one's.
+func (q *Queries) DeleteJobCheckpoints(ctx context.Context, jobID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteJobCheckpoints, jobID)
+	return err
+}
+
 const deleteReviewComment = `-- name: DeleteReviewComment :exec
 DELETE FROM review_comments WHERE id = $1 AND message_id IS NULL
 `

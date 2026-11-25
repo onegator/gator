@@ -371,3 +371,27 @@ func (q *Queries) ListPendingRuntimeRequestsOfJob(ctx context.Context, jobID pgt
 	}
 	return items, nil
 }
+
+const listUserProjectIDs = `-- name: ListUserProjectIDs :many
+SELECT project_id FROM memberships WHERE user_id = $1
+`
+
+func (q *Queries) ListUserProjectIDs(ctx context.Context, userID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listUserProjectIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var project_id pgtype.UUID
+		if err := rows.Scan(&project_id); err != nil {
+			return nil, err
+		}
+		items = append(items, project_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

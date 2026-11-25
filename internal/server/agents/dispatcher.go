@@ -86,6 +86,9 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	if !asks(msg) {
 		return nil
 	}
+	if e.Type == conversations.EventMessagePosted && dequeued(msg) {
+		return nil // it left the queue since it was posted: its message.dequeued asks, once
+	}
 	conv, err := d.store.GetConversation(ctx, msg.ConversationID)
 	if err != nil {
 		return ignoreGone(err)
@@ -142,6 +145,12 @@ func asks(m db.Message) bool {
 	return !m.DeletedAt.Valid && !queued && m.Kind == "text" && m.Status == conversations.StatusFinal &&
 		(m.AuthorKind == conversations.AuthorUser || m.AuthorKind == conversations.AuthorAgent ||
 			m.AuthorKind == conversations.AuthorExternal)
+}
+
+// dequeued says whether a message left a queue: only taking it out of one makes it a turn's start
+// or a steer sent at once.
+func dequeued(m db.Message) bool {
+	return m.InputIntent != nil && (*m.InputIntent == conversations.IntentTurnStart || *m.InputIntent == conversations.IntentPromotedToSteer)
 }
 
 // asked are the agents a message asks: those it was queued for (also), those it mentions and, for

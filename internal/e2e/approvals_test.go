@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -178,6 +179,39 @@ func TestRuntimeRequestsOverTheRunnerConnection(t *testing.T) {
 	if err := raw.recvType(proto.TypeRuntimeDecision).Into(&d); err != nil || d.ID != first || d.Decision != proto.DecisionAllowForSession {
 		t.Fatalf("decision: %+v %v", d, err)
 	}
+	// Two people deciding at once: one decision, one conflict, however many try.
+	race := "77777777-7777-4777-8777-777777777777"
+	ask(race)
+	codes := make(chan int, 6)
+	var wg sync.WaitGroup
+	for i := range 6 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d := gen.DecideAllow
+			if i%2 == 1 {
+				d = gen.DecideDeny
+			}
+			codes <- h.do("POST", "/runtime-requests/"+race+"/decide", gen.RuntimeDecision{Decision: d}, nil)
+		}()
+	}
+	wg.Wait()
+	close(codes)
+	won := 0
+	for c := range codes {
+		switch c {
+		case 200:
+			won++
+		case 409:
+		default:
+			t.Fatalf("a racing decision answered %d", c)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d decisions won the race", won)
+	}
+	raw.recvType(proto.TypeRuntimeDecision)
+
 	// Sent again after a reconnect: the decision again, before the ack.
 	raw.send(proto.TypeRuntimeRequest, proto.RuntimeRequest{ID: first, JobID: id, Kind: proto.RequestToolApproval, Tool: "Bash",
 		Input: []byte(`{"command":"curl https://x"}`), Rule: "Bash(curl:*)", TimeoutSeconds: 600})

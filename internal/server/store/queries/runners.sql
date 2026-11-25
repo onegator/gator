@@ -108,9 +108,12 @@ WHERE runner_id = sqlc.arg(runner_id) AND id = ANY(sqlc.arg(job_ids)::uuid[])
 
 -- name: MarkJobActive :one
 -- First event moves leased → running; any event revives a stalled job. A job settling (its agent
--- done, the runner checkpointing and pushing) stays settling.
+-- done, the runner checkpointing and pushing) stays settling, and one that stalled while settling
+-- goes back to it.
 UPDATE jobs
-SET status = CASE WHEN status = 'settling' THEN 'settling' ELSE 'running' END,
+SET status = CASE WHEN status = 'settling'
+                    OR (status = 'stalled' AND EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = jobs.id AND e.type = 'settling'))
+                  THEN 'settling' ELSE 'running' END,
     started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
 WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled', 'settling')
 RETURNING *;

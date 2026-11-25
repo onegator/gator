@@ -32,6 +32,10 @@ const (
 	ModeSession = "session"
 )
 
+// UnreadWait is how long the input stays open after a turn that left a message not seen read: the
+// CLI reads what is queued before it exits, so closing only stops later steers going in live.
+const UnreadWait = 30 * time.Second
+
 // InterruptWait is how long a stop waits for the turn to end after the interrupt request, before
 // the process is closed and, after the grace period, killed.
 const InterruptWait = 2 * time.Second
@@ -99,7 +103,12 @@ func (b Backend) runSession(ctx context.Context, spec backend.Spec, emit backend
 		s.closeInput() // the CLI is gone: nothing more can go in
 	}()
 	exited := make(chan struct{})
-	go s.steer(runCtx, exited)
+	var steering sync.WaitGroup
+	steering.Add(1)
+	go func() {
+		defer steering.Done()
+		s.steer(runCtx, exited)
+	}()
 	go s.supervise(runCtx, exited, b.grace())
 
 	waitErr := p.cmd.Wait()
@@ -116,6 +125,7 @@ func (b Backend) runSession(ctx context.Context, spec backend.Spec, emit backend
 	// here: its approver is told, and the run returns once every answer gave up.
 	cancel(errors.New("the session ended"))
 	s.answers.Wait()
+	steering.Wait() // a steer it took as the run ended is in unread by now
 	s.mu.Lock()
 	out.Unread = s.unread
 	s.mu.Unlock()
@@ -248,7 +258,12 @@ func (s *session) ended(ctx context.Context) {
 	s.mu.Unlock()
 	if done || ctx.Err() != nil {
 		s.closeInput()
+		return
 	}
+	// Something written is not seen read yet: the next turn should read it. A text the CLI
+	// replays changed (or merged with another) is never matched, so the input closes after a
+	// while anyway rather than leave the CLI waiting for input for good.
+	time.AfterFunc(UnreadWait, s.closeInput)
 }
 
 // replayed says whether a user line is one of ours, replayed as the CLI read it.
@@ -308,7 +323,12 @@ func (s *session) say(text string, more ...map[string]any) error {
 	s.mu.Unlock()
 	if err := s.write(msg); err != nil {
 		s.mu.Lock()
-		s.pending = s.pending[:len(s.pending)-1]
+		for i := len(s.pending) - 1; i >= 0; i-- {
+			if s.pending[i] == text {
+				s.pending = append(s.pending[:i], s.pending[i+1:]...)
+				break
+			}
+		}
 		s.mu.Unlock()
 		return err
 	}
@@ -407,7 +427,7 @@ func sessionPermissionArgs(spec backend.Spec, mcp []string, skills bool) []strin
 	// policy denies is denied by the CLI too.
 	args = []string{"--permission-mode", "manual", "--permission-prompts", "host"}
 	if len(spec.Access.Deny) > 0 {
-		args = append(args, "--disallowedTools", strings.Join(spec.Access.Deny, ","))
+		args = append(args, "--disallowedTools", strings.Join(cliRules(spec.Access.Deny), ","))
 	}
 	return args
 }

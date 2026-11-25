@@ -36,8 +36,8 @@ type approver struct {
 // had before them: nothing.
 func approvals(job proto.Job, be backend.Backend, io client.JobIO) (backend.Approver, []string) {
 	a := job.Approvals
-	if a == nil || job.ReadOnly() {
-		return nil, nil
+	if a == nil || job.ReadOnly() || len(a.Ask)+len(a.Deny) == 0 {
+		return nil, nil // nothing to hold the job to: it works as it always did
 	}
 	if !be.Capabilities().ToolApprovals || io.Request == nil {
 		io.Emit("approvals_held_as_denials", map[string]any{"rules": len(a.Ask) + len(a.Deny)})
