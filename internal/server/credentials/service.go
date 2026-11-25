@@ -104,7 +104,7 @@ func (s *Service) Put(ctx context.Context, user pgtype.UUID, kind, raw string) (
 	if err != nil {
 		return View{}, err
 	}
-	sealed, err := s.seal(sec.Value)
+	sealed, err := s.seal(user, kind, sec.Value)
 	if err != nil {
 		return View{}, err
 	}
@@ -198,8 +198,8 @@ func (s *Service) RunnerLogins(ctx context.Context) (bool, error) {
 	return ws.RunnerLogins, err
 }
 
-// SetRunnerLogins sets that rule for the workspace.
-func (s *Service) SetRunnerLogins(ctx context.Context, on bool) error {
+// SetRunnerLogins sets that rule for the workspace, recording who did (by, zero for the host).
+func (s *Service) SetRunnerLogins(ctx context.Context, on bool, by pgtype.UUID) error {
 	err := s.locked(ctx, func(q *db.Queries) error {
 		if _, err := q.GetWorkspaceSettings(ctx); err != nil { // the row, if a test emptied the table
 			return err
@@ -207,7 +207,11 @@ func (s *Service) SetRunnerLogins(ctx context.Context, on bool) error {
 		if _, err := q.SetRunnerLogins(ctx, on); err != nil {
 			return err
 		}
-		_, err := q.ReleaseAllWaitingJobs(ctx)
+		if _, err := q.ReleaseAllWaitingJobs(ctx); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{"runner_logins": on, "by": uuidString(by)})
+		_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: "workspace.runner_logins_changed", Aggregate: "workspace", Payload: payload})
 		return err
 	})
 	if err == nil {
@@ -224,18 +228,24 @@ func (s *Service) setStatus(ctx context.Context, q *db.Queries, row db.UserCrede
 	return q.SetUserCredentialStatus(ctx, p)
 }
 
-func (s *Service) seal(v string) (string, error) {
+// binding is what a login's ciphertext is bound to: its owner and kind. A ciphertext copied into
+// another person's row, or another kind's, does not decrypt.
+func binding(user pgtype.UUID, kind string) string {
+	return "user_credentials:" + uuidString(user) + ":" + kind
+}
+
+func (s *Service) seal(user pgtype.UUID, kind, v string) (string, error) {
 	if s.keys == nil {
 		return "", ErrNoKeyring
 	}
-	return s.keys.Encrypt([]byte(v))
+	return s.keys.EncryptBound([]byte(v), binding(user, kind))
 }
 
 func (s *Service) open(row db.UserCredential) (string, error) {
 	if s.keys == nil {
 		return "", ErrNoKeyring
 	}
-	b, err := s.keys.Decrypt(row.Secret)
+	b, err := s.keys.DecryptBound(row.Secret, binding(row.UserID, row.Kind))
 	if err != nil {
 		return "", fmt.Errorf("the stored %s cannot be read with this server's keys; save it again", row.Kind)
 	}

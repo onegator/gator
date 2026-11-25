@@ -91,3 +91,17 @@ func TestLoginEventsReachTheOwnersMeTopic(t *testing.T) {
 		}
 	}
 }
+
+// The workspace's rule for logins is read by people, not by a runner or a plugin.
+func TestTheLoginRuleIsReadByPeople(t *testing.T) {
+	h := newHarness(t)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/v1/workspace/model-credentials", nil)
+	h.api.GetModelCredentialPolicy(rec, req.WithContext(auth.WithPrincipal(req.Context(), auth.Principal{Kind: auth.KindRunner})))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a runner read it: %d", rec.Code)
+	}
+	if code := h.do("GET", "/workspace/model-credentials", nil, nil); code != 200 {
+		t.Fatalf("a person: %d", code)
+	}
+}

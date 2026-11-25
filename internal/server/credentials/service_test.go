@@ -96,7 +96,7 @@ func (f *fixture) user(name string) pgtype.UUID {
 
 func (f *fixture) runnerLogins(on bool) {
 	f.t.Helper()
-	if err := f.svc.SetRunnerLogins(f.ctx, on); err != nil {
+	if err := f.svc.SetRunnerLogins(f.ctx, on, pgtype.UUID{}); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -451,5 +451,46 @@ func TestAnOutsidersTurnHasNoPayer(t *testing.T) {
 		CreatedBy: process.Actor{Kind: process.ActorSystem}, Turn: turn})
 	if err != nil || who.Valid {
 		t.Fatalf("an outsider's turn is paid by %v (%v)", who, err)
+	}
+}
+
+// A waiting job names its payer to everyone who reads it by their display name, never by their
+// email address; and changing the workspace's rule is recorded with who changed it.
+func TestAWaitingJobNamesItsPayerWithoutTheirEmail(t *testing.T) {
+	f := newFixture(t)
+	var nameless pgtype.UUID
+	email := "quiet-" + suffix() + "@t.local"
+	if err := f.pool.QueryRow(f.ctx, "INSERT INTO users(email,name,workspace_role) VALUES($1,'','member') RETURNING id", email).Scan(&nameless); err != nil {
+		t.Fatal(err)
+	}
+	j := f.job(nameless, nameless, BackendClaude)
+	if strings.Contains(j.WaitingReason, email) || !strings.Contains(j.WaitingReason, "The person who pays for this job") {
+		t.Fatalf("reason %q", j.WaitingReason)
+	}
+	admin := f.user("Admin")
+	if err := f.svc.SetRunnerLogins(f.ctx, true, admin); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = f.pool.QueryRow(f.ctx, "SELECT count(*) FROM events WHERE type = 'workspace.runner_logins_changed' AND payload->>'by' = $1", uuidString(admin)).Scan(&n)
+	if n != 1 {
+		t.Fatalf("recorded %d times", n)
+	}
+}
+
+// A login's ciphertext is bound to its owner and kind: copied into another person's row it does
+// not open, and their job waits instead of running on it.
+func TestALoginCopiedToAnotherRowDoesNotOpen(t *testing.T) {
+	f := newFixture(t)
+	ann, bob := f.user("Ann"), f.user("Bob")
+	f.put(ann, ClaudeSubscription, claudeToken)
+	f.put(bob, ClaudeSubscription, strings.Replace(claudeToken, "wxyz", "bobs", 1))
+	if _, err := f.pool.Exec(f.ctx, `UPDATE user_credentials b SET secret = a.secret FROM user_credentials a
+		WHERE a.user_id = $1 AND b.user_id = $2 AND a.kind = b.kind`, ann, bob); err != nil {
+		t.Fatal(err)
+	}
+	c := f.choose(f.job(bob, bob, BackendClaude))
+	if c.Credential != nil || c.Wait == "" {
+		t.Fatalf("Bob's job ran on Ann's login: %+v", c)
 	}
 }

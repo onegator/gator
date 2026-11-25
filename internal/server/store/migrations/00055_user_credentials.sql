@@ -11,7 +11,9 @@ CREATE TABLE user_credentials (
     -- The backend the kind serves ("claude", "acp:codex"), as the kind said when it was saved, so a
     -- query can tell whether a person can pay for a job without knowing the kinds.
     backend      text NOT NULL,
-    secret       text NOT NULL,                       -- encrypted with the server's keyring
+    -- Encrypted with the server's keyring and bound to (user_id, kind): a ciphertext copied into another
+    -- row does not decrypt. The table is new here, so there are no rows sealed any other way.
+    secret       text NOT NULL,
     hint         text NOT NULL DEFAULT '',
     -- unchecked: well formed, never tried; ok: the last check or job went through; error: refused.
     status       text NOT NULL DEFAULT 'unchecked' CHECK (status IN ('unchecked', 'ok', 'error')),

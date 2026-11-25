@@ -147,7 +147,12 @@ func (s *Server) GetModelCredentialPolicy(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusServiceUnavailable, "people's own model logins are not enabled on this server", "unavailable")
 		return
 	}
-	if _, ok := s.principal(w, r); !ok {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
+	if p.Kind != auth.KindUser {
+		writeError(w, http.StatusForbidden, "the workspace's rule for model logins is read by people", "forbidden")
 		return
 	}
 	on, err := s.Credentials.RunnerLogins(r.Context())
@@ -167,7 +172,8 @@ func (s *Server) SetModelCredentialPolicy(w http.ResponseWriter, r *http.Request
 	if !decode(w, r, &in) {
 		return
 	}
-	if err := s.Credentials.SetRunnerLogins(r.Context(), in.RunnerLogins); err != nil {
+	p, _ := auth.FromContext(r.Context())
+	if err := s.Credentials.SetRunnerLogins(r.Context(), in.RunnerLogins, p.UserID); err != nil {
 		s.fail(w, err)
 		return
 	}

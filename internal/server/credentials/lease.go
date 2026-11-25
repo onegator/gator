@@ -123,16 +123,13 @@ func anyOf(kinds []Kind) string {
 	return strings.Join(parts, " or ")
 }
 
+// name is how a waiting job names its payer to whoever reads the job: their display name, never
+// their email address.
 func (s *Service) name(ctx context.Context, q *db.Queries, user pgtype.UUID) string {
-	u, err := q.GetUser(ctx, user)
-	switch {
-	case err != nil:
-		return "The person who pays for this job"
-	case u.Name != "":
-		return u.Name
-	default:
-		return u.Email
+	if u, err := q.GetUser(ctx, user); err == nil && strings.TrimSpace(u.Name) != "" {
+		return strings.TrimSpace(u.Name)
 	}
+	return "The person who pays for this job"
 }
 
 // Refreshed implements runners.Credentials: what the agent's CLI left of a rotating login replaces
@@ -173,7 +170,7 @@ func (s *Service) Refreshed(ctx context.Context, job db.Job, r proto.CredentialR
 	if sec.Value == old {
 		return nil
 	}
-	sealed, err := s.seal(sec.Value)
+	sealed, err := s.seal(row.UserID, row.Kind, sec.Value)
 	if err != nil {
 		return err
 	}

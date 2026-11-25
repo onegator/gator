@@ -20,6 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/proto"
@@ -143,7 +144,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	models := newFakeModels(t)
 	logins := credentials.New(pool, credentials.Deps{Keys: keys, Kinds: credentials.DefaultKinds(credentials.Endpoints{
 		Anthropic: models.srv.URL, OpenAI: models.srv.URL, HTTP: models.srv.Client()})})
-	if err := logins.SetRunnerLogins(ctx, true); err != nil {
+	if err := logins.SetRunnerLogins(ctx, true, pgtype.UUID{}); err != nil {
 		t.Fatal(err)
 	}
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
