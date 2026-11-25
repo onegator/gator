@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -58,7 +59,7 @@ func TestGatorsOwnRegistryIsThereFromTheStart(t *testing.T) {
 	h := newHarness(t)
 	var regs []gen.Registry
 	h.do("GET", "/registries", nil, &regs)
-	if len(regs) == 0 || !regs[0].Builtin || !regs[0].Signed || regs[0].Url != h.starter.URL || regs[0].FetchedAt == nil || regs[0].FetchError != "" {
+	if len(regs) == 0 || !regs[0].Builtin || !regs[0].Signed || deref(regs[0].Url) != h.starter.URL || regs[0].FetchedAt == nil || deref(regs[0].FetchError) != "" {
 		t.Fatalf("registries: %+v", regs)
 	}
 	got := h.catalogue("")
@@ -123,8 +124,8 @@ func TestAPackageChangedAfterPublishingIsTurnedAway(t *testing.T) {
 	var regs []gen.Registry
 	h.do("GET", "/registries", nil, &regs)
 	for _, x := range regs {
-		if x.Id == reg.Id && !strings.Contains(x.FetchError, "goose-migrations") {
-			t.Fatalf("the registry says what it turned away: %q", x.FetchError)
+		if x.Id == reg.Id && !strings.Contains(deref(x.FetchError), "goose-migrations") {
+			t.Fatalf("the registry says what it turned away: %q", deref(x.FetchError))
 		}
 	}
 
@@ -415,4 +416,30 @@ func (h *harness) fetchRefused(registry string) string {
 		h.t.Fatalf("fetch: %d, want 400", code)
 	}
 	return e.Error
+}
+
+// Where a registry is fetched from, and what git said about it, are a workspace admin's to read,
+// and never with a credential: one in a new registry's address is refused, and one in Gator's own
+// (a private mirror's token in GATOR_MARKETPLACE_URL) is masked everywhere it would show.
+func TestARegistrysAddressIsAnAdminsAndCarriesNoSecret(t *testing.T) {
+	h := newHarness(t)
+	if code := h.do("POST", "/registries", gen.NewRegistry{Name: fmt.Sprintf("cred-%d", time.Now().UnixNano()),
+		Url: "https://x-token:ghp_SECRET@github.example/registry.git"}, nil); code != 400 {
+		t.Fatalf("an address with a credential: %d", code)
+	}
+	if _, err := h.pool.Exec(context.Background(), `UPDATE marketplace_registries SET url = 'https://ghp_SECRET@mirror.example/r.git',
+		fetch_error = 'fatal: could not read from https://ghp_SECRET@mirror.example/r.git' WHERE builtin`); err != nil {
+		t.Fatal(err)
+	}
+	var regs []gen.Registry
+	h.do("GET", "/registries", nil, &regs)
+	raw, _ := json.Marshal(regs)
+	if strings.Contains(string(raw), "ghp_SECRET") || regs[0].Url == nil || !strings.Contains(*regs[0].Url, "mirror.example") {
+		t.Fatalf("an admin's view: %s", raw)
+	}
+	var theirs []gen.Registry
+	h.asJob(h.person(), "GET", "/registries", nil, &theirs)
+	if len(theirs) == 0 || theirs[0].Url != nil || theirs[0].FetchError != nil {
+		t.Fatalf("a person's view: %+v", theirs[0])
+	}
 }

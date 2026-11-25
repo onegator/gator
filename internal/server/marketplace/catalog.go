@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
+	neturl "net/url"
 	"slices"
 	"strings"
 	"time"
@@ -89,6 +89,10 @@ func (c *Catalog) AddRegistry(ctx context.Context, p auth.Principal, name, url, 
 	}
 	if strings.TrimSpace(url) == "" {
 		return db.MarketplaceRegistry{}, invalid("a registry needs an address")
+	}
+	if u, err := neturl.Parse(url); err == nil && u.User != nil {
+		// A credential in the address would be in every error git prints, and in the database.
+		return db.MarketplaceRegistry{}, invalid("a registry's address carries no credentials; give the server's git its own (a deploy key, a credential helper)")
 	}
 	if publicKey == "" && !securedTransport(url) {
 		// Without a signature, the transport is all that vouches for the index: a directory or
@@ -399,9 +403,34 @@ func (c *Catalog) Package(ctx context.Context, registry pgtype.UUID, kind, name,
 // securedTransport says whether a registry's address is fetched over a transport that checks the
 // other end: https, or ssh.
 func securedTransport(raw string) bool {
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
+	if u, err := neturl.Parse(raw); err == nil && u.Scheme != "" {
 		return u.Scheme == "https" || u.Scheme == "ssh"
 	}
 	at := strings.Index(raw, "@")
 	return at > 0 && strings.Contains(raw[at:], ":") && !strings.HasPrefix(raw, "/")
+}
+
+// RedactURL is an address with its user part (a name may be a token) masked.
+func RedactURL(raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = neturl.User("xxxxx")
+	return u.String()
+}
+
+// RedactIn masks in text the credentials raw carries: git repeats the address it was given.
+func RedactIn(text, raw string) string {
+	u, err := neturl.Parse(raw)
+	if err != nil || u.User == nil {
+		return text
+	}
+	if p, has := u.User.Password(); has && p != "" {
+		text = strings.ReplaceAll(text, p, "xxxxx")
+	}
+	if name := u.User.Username(); name != "" {
+		text = strings.ReplaceAll(text, name, "xxxxx")
+	}
+	return text
 }

@@ -3483,16 +3483,16 @@ components:
         conversation: { $ref: "#/components/schemas/Conversation" }
     Registry:
       type: object
-      required: [id, name, url, signed, builtin, fetchError, createdAt]
+      required: [id, name, signed, builtin, createdAt]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        url: { type: string }
+        url: { type: string, description: "workspace admins only; a credential in it is never shown" }
         publicKey: { type: string, description: "the keys its index is signed with (ed25519:<base64>, comma-separated)" }
         signed: { type: boolean, description: "false: an unsigned registry, whose packages only their checksums vouch for" }
         builtin: { type: boolean, description: "Gator's own; it follows the server's configuration" }
         fetchedAt: { type: string, format: date-time }
-        fetchError: { type: string, description: "why the last fetch failed or what it turned away; empty when all was well" }
+        fetchError: { type: string, description: "workspace admins only: why the last fetch failed or what it turned away; empty when all was well" }
         createdAt: { type: string, format: date-time }
     NewRegistry:
       type: object

@@ -51,7 +51,11 @@ func (s *Server) ListRegistries(w http.ResponseWriter, r *http.Request) {
 		s.failMarketplace(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, mapAll(rows, toRegistry))
+	out := make([]gen.Registry, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toRegistry(r, p.IsWorkspaceAdmin()))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) AddRegistry(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +72,7 @@ func (s *Server) AddRegistry(w http.ResponseWriter, r *http.Request) {
 		s.failMarketplace(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toRegistry(reg))
+	writeJSON(w, http.StatusCreated, toRegistry(reg, true))
 }
 
 func (s *Server) DeleteRegistry(w http.ResponseWriter, r *http.Request, registryId gen.RegistryId) {
@@ -93,7 +97,7 @@ func (s *Server) FetchRegistry(w http.ResponseWriter, r *http.Request, registryI
 		s.failMarketplace(w, err)
 		return
 	}
-	out := gen.RegistryFetch{Registry: toRegistry(res.Registry), Fetched: []gen.PackageRef{}, Rejected: []gen.RejectedPackage{}}
+	out := gen.RegistryFetch{Registry: toRegistry(res.Registry, true), Fetched: []gen.PackageRef{}, Rejected: []gen.RejectedPackage{}}
 	for _, it := range res.Fetched {
 		out.Fetched = append(out.Fetched, gen.PackageRef{Kind: gen.PackageRefKind(it.Kind), Name: it.Name, Version: it.Version})
 	}
@@ -190,9 +194,15 @@ func (s *Server) GetMarketplacePackage(w http.ResponseWriter, r *http.Request, k
 	writeJSON(w, http.StatusOK, out)
 }
 
-func toRegistry(r db.MarketplaceRegistry) gen.Registry {
-	out := gen.Registry{Id: toUUID(r.ID), Name: r.Name, Url: r.Url, Signed: r.PublicKey != "", Builtin: r.Builtin,
-		FetchError: r.FetchError, CreatedAt: r.CreatedAt.Time}
+// toRegistry is a registry as the API shows it. Where it is fetched from and what its last fetch
+// said (git's own words, which name the address) are a workspace admin's to read, never with
+// a credential the address may carry.
+func toRegistry(r db.MarketplaceRegistry, admin bool) gen.Registry {
+	out := gen.Registry{Id: toUUID(r.ID), Name: r.Name, Signed: r.PublicKey != "", Builtin: r.Builtin, CreatedAt: r.CreatedAt.Time}
+	if admin {
+		u, why := marketplace.RedactURL(r.Url), marketplace.RedactIn(r.FetchError, r.Url)
+		out.Url, out.FetchError = &u, &why
+	}
 	if r.PublicKey != "" {
 		out.PublicKey = &r.PublicKey
 	}
