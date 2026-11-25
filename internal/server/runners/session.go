@@ -458,6 +458,10 @@ func (s *session) lease(ctx context.Context, free int) ([]leasedJob, error) {
 		if err := q.LockLeases(ctx); err != nil {
 			return err
 		}
+		domains, err := q.ActiveTrustDomains(ctx, s.runnerID)
+		if err != nil {
+			return err
+		}
 		jobs, err := q.LeaseCandidates(ctx, db.LeaseCandidatesParams{
 			Backends: backends, Projects: projects, Slots: int32(free + candidateSlack),
 			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
@@ -471,7 +475,8 @@ func (s *session) lease(ctx context.Context, free int) ([]leasedJob, error) {
 			if len(out) >= free {
 				break
 			}
-			choice, err := s.m.cfg.Credentials.Choose(ctx, q, j, s.caps.PayerLogins)
+			payerLogins := slices.Contains(s.caps.PayerLogins, j.Backend)
+			choice, err := s.m.cfg.Credentials.Choose(ctx, q, j, payerLogins)
 			if err != nil {
 				return err
 			}
@@ -492,9 +497,14 @@ func (s *session) lease(ctx context.Context, free int) ([]leasedJob, error) {
 				}
 			case s.owner.Valid && j.PayerID != s.owner:
 				continue // a person's login goes to their own machine or a shared runner, never another's
-			case !s.caps.PayerLogins:
+			case !payerLogins:
 				continue // it would run on this runner's own login
 			}
+			domain := trustDomain(choice, j)
+			if !sharesTrust(domains, domain) {
+				continue // another payer's login is on this runner now; this one waits for its own slot
+			}
+			domains = append(domains, domain)
 			leased, err := q.LeaseJob(ctx, db.LeaseJobParams{ID: j.ID, RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
 				CredentialID: choice.ID, CredentialKind: choice.Kind, CredentialExclusive: choice.Exclusive})
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1019,6 +1029,27 @@ func artifactContent(role string, fin proto.Finish) string {
 	}
 	_ = role
 	return b.String()
+}
+
+// trustDomain is whose login a job holds while it runs: its payer's, or "" for the runner's own.
+func trustDomain(c CredentialChoice, j db.Job) string {
+	if c.Runner() {
+		return ""
+	}
+	return uuidString(j.PayerID)
+}
+
+// sharesTrust says whether a job of domain may run beside the runner's active jobs. The agents of
+// one runner run as one user and can read each other's environment (/proc/<pid>/environ) and
+// files, and no runner isolates its jobs from each other today: so a person's login runs only
+// beside jobs on that same person's login, and the runner's own only beside jobs on the runner's.
+func sharesTrust(active []string, domain string) bool {
+	for _, d := range active {
+		if d != domain {
+			return false
+		}
+	}
+	return true
 }
 
 // runnable is the runner's backends minus those whose command it does not have: a job on its

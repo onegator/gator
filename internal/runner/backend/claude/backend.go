@@ -39,6 +39,9 @@ type Backend struct {
 	// AllowEnv names variables the agent gets beyond agentenv's allow-list; a trailing *
 	// matches a prefix. The runner's own GATOR_* never pass.
 	AllowEnv []string
+	// ManagedSettings are the administrator's settings files PayerLoginBlocked reads; nil: the
+	// platform's.
+	ManagedSettings []string
 }
 
 // noMCP is the default: a job session gets no MCP servers.
@@ -126,6 +129,11 @@ func keychainState(lookup func() (int, error)) string {
 
 // Run implements backend.Backend.
 func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) backend.Outcome {
+	if spec.PayerLogin {
+		if why := repoBlocked(spec.Dir); why != "" {
+			return failed("this job runs on its payer's login, and " + why + "; it does not run")
+		}
+	}
 	prompt := spec.Prompt
 	if strings.HasPrefix(prompt, "-") { // would be parsed as a flag
 		prompt = "Task: " + prompt

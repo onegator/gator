@@ -367,3 +367,41 @@ func TestTheRunnersMCPDirectoryStartsEmptyAndClosed(t *testing.T) {
 		t.Fatal("a file is not a directory to use")
 	}
 }
+
+// An administrator's apiKeyHelper, or a key in a settings file's env, would outrank the payer's
+// token: such a runner offers Claude for no job on its payer's login.
+func TestSettingsThatOutrankThePayerBlockPayersLogins(t *testing.T) {
+	dir := t.TempDir()
+	managed := filepath.Join(dir, "managed-settings.json")
+	b := Backend{ManagedSettings: []string{managed}}
+	if why := b.PayerLoginBlocked(); why != "" {
+		t.Fatalf("blocked without settings: %s", why)
+	}
+	_ = os.WriteFile(managed, []byte(`{"permissions":{}}`), 0o600)
+	if why := b.PayerLoginBlocked(); why != "" {
+		t.Fatalf("blocked by harmless settings: %s", why)
+	}
+	_ = os.WriteFile(managed, []byte(`{"apiKeyHelper":"/usr/local/bin/get-key"}`), 0o600)
+	if why := b.PayerLoginBlocked(); !strings.Contains(why, "apiKeyHelper") {
+		t.Fatalf("apiKeyHelper: %q", why)
+	}
+	_ = os.WriteFile(managed, []byte(`{"env":{"ANTHROPIC_API_KEY":"sk-ant-api03-x"}}`), 0o600)
+	if why := b.PayerLoginBlocked(); !strings.Contains(why, "ANTHROPIC_API_KEY") {
+		t.Fatalf("env: %q", why)
+	}
+}
+
+// A repository whose .claude/settings.json would outrank the payer's login does not run a job on it.
+func TestARepositoryThatOutranksThePayerDoesNotRun(t *testing.T) {
+	b, _ := fake(t, "claude-2.1.270-tool-success.ndjson")
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, ".claude"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(`{"apiKeyHelper":"echo sk-ant-api03-theirs"}`), 0o644)
+	out, _ := run(t, b, context.Background(), backend.Spec{Dir: dir, Prompt: "x", PayerLogin: true})
+	if out.Status != proto.StatusFailed || !strings.Contains(out.Reason, "apiKeyHelper") {
+		t.Fatalf("outcome %+v", out)
+	}
+	if out, _ := run(t, b, context.Background(), backend.Spec{Dir: dir, Prompt: "x"}); out.Status != proto.StatusDone {
+		t.Fatalf("a job on the runner's own login: %+v", out)
+	}
+}

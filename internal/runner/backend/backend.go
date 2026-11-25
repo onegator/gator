@@ -110,6 +110,22 @@ func AgentEnv(spec Spec, allow []string) []string {
 	return append(base, spec.Env...)
 }
 
+// ConfigIsolator is a backend whose CLI keeps its settings, sessions and transcripts in a
+// directory a variable names. A job on its payer's login gets a directory of its own, so what one
+// person's job wrote — a transcript holding tool output, a settings file — is not another's to read
+// or to be steered by.
+type ConfigIsolator interface {
+	ConfigEnv(dir string) []string
+}
+
+// PayerLoginGuard is a backend that can tell when something would put another login above a
+// payer's: a managed setting that supplies a key, a repository's settings that do. Blocked says
+// why, or "" when nothing does.
+type PayerLoginGuard interface {
+	// PayerLoginBlocked looks at the runner's own configuration, once, at start.
+	PayerLoginBlocked() string
+}
+
 // Backend runs an agent CLI.
 type Backend interface {
 	Name() string

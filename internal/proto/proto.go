@@ -160,10 +160,11 @@ type Capabilities struct {
 	// every backend keeps both, as Claude Code, the only one there was, does.
 	ReadOnly []string `json:"read_only,omitempty"`
 	NoTools  []string `json:"no_tools,omitempty"`
-	// PayerLogins says this runner runs a job on the Credential it carries, and then on none of its
-	// own logins. A runner that does not say so would run such a job on its own login, so it is only
-	// ever handed jobs that run on the runner's own. Additive: no protocol version depends on it.
-	PayerLogins bool `json:"payer_logins,omitempty"`
+	// PayerLogins are the backends this runner runs on the Credential a job carries, and then on
+	// none of its own logins. A backend not listed — every one, for a runner from before the field,
+	// or one whose settings would put another login above the payer's — is only ever handed jobs
+	// on the runner's own login. Additive: no protocol version depends on it.
+	PayerLogins []string `json:"payer_logins,omitempty"`
 }
 
 // Registered acknowledges a registration.
@@ -280,7 +281,7 @@ type Job struct {
 	// remote server is in a job, ever. Additive in v3.
 	MCP []string `json:"mcp,omitempty"`
 	// Credential is the model login of the person who pays for the job, only for a runner whose
-	// capabilities say PayerLogins. The runner puts it in
+	// capabilities list the job's backend in PayerLogins. The runner puts it in
 	// the agent's environment and nowhere else, and then none of its own logins reach the agent.
 	// Nil: the job runs on the runner's own login, as every job did before.
 	Credential *Credential `json:"credential,omitempty"`

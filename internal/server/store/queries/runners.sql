@@ -175,7 +175,7 @@ WHERE id IN (
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             -- The runner's own login matters only to a job that does not bring its payer's.
             AND (COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
-                 OR ((r.capabilities->>'payer_logins')::boolean IS TRUE AND j.payer_id IS NOT NULL
+                 OR (r.capabilities->'payer_logins' @> to_jsonb(j.backend) AND j.payer_id IS NOT NULL
                      AND (r.owner_id IS NULL OR r.owner_id = j.payer_id) AND EXISTS (
                      SELECT 1 FROM user_credentials c
                      WHERE c.user_id = j.payer_id AND c.backend = j.backend AND c.status <> 'error')))
@@ -244,3 +244,9 @@ SELECT * FROM jobs WHERE status = 'queued' AND placement = 'cloud'
   -- A job waiting for its payer's login gets no machine: it would sit there with nothing to run.
   AND waiting_reason = ''
 ORDER BY created_at LIMIT sqlc.arg(max);
+
+-- name: ActiveTrustDomains :many
+-- Whose logins the runner's active jobs hold: a payer's id for a job on their own login, '' for a
+-- job on the runner's. Jobs on one runner share a user, so they can read each other's logins.
+SELECT DISTINCT (CASE WHEN credential_kind IN ('', 'runner') OR payer_id IS NULL THEN '' ELSE payer_id::text END)::text AS domain
+FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled');

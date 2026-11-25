@@ -141,11 +141,83 @@ func TestRunnersOwnLoginIsUntouched(t *testing.T) {
 // A server cannot use a login to set what runs the runner or what a process loads.
 func TestLoginVariablesAreLoginsOnly(t *testing.T) {
 	for _, k := range []string{"PATH", "LD_PRELOAD", "GATOR_RUNNER_TOKEN", "HOME", "lower", "A=B", "NODE_OPTIONS"} {
-		if _, err := openLogin(&proto.Credential{Env: map[string]string{k: "x"}}); err == nil {
+		if _, err := openLogin(&proto.Credential{Env: map[string]string{k: "x"}}, t.TempDir()); err == nil {
 			t.Errorf("%s was accepted", k)
 		}
 	}
-	if _, err := openLogin(&proto.Credential{Home: &proto.CredentialHome{Env: "CODEX_HOME", Files: map[string][]byte{"../x": nil}}}); err == nil {
+	if _, err := openLogin(&proto.Credential{Home: &proto.CredentialHome{Env: "CODEX_HOME", Files: map[string][]byte{"../x": nil}}}, t.TempDir()); err == nil {
 		t.Error("a file outside the login's directory was accepted")
+	}
+}
+
+// isolating is a backend whose CLI keeps its configuration where a variable says.
+type isolating struct{ *scripted }
+
+func (isolating) ConfigEnv(dir string) []string { return []string{"FAKE_CONFIG_DIR=" + dir} }
+
+// A job on its payer's login keeps its CLI's settings and transcripts in a directory of its own,
+// under the runner's login directory, gone when the job ends; a job on the runner's login does not.
+func TestPayersJobGetsAConfigDirectoryOfItsOwn(t *testing.T) {
+	logins := t.TempDir()
+	var dir string
+	be := isolating{&scripted{run: func(_ context.Context, _ int, spec backend.Spec, _ backend.Emit) backend.Outcome {
+		for _, kv := range spec.Env {
+			if v, ok := strings.CutPrefix(kv, "FAKE_CONFIG_DIR="); ok {
+				dir = v
+			}
+		}
+		if dir != "" {
+			_ = os.WriteFile(filepath.Join(dir, "transcript.jsonl"), []byte("tool output"), 0o600)
+		}
+		return backend.Outcome{Status: proto.StatusDone, Summary: "ok", Usage: usage()}
+	}}}
+	e := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}, LoginDir: logins}
+	io, _ := recordingIO()
+	e.Run(context.Background(), proto.Job{JobID: "j5", Backend: "fake", Credential: &proto.Credential{ID: "c5",
+		Env: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": payerToken}}}, io)
+	if dir == "" || !strings.HasPrefix(dir, logins+string(os.PathSeparator)) {
+		t.Fatalf("config dir %q, not under %s", dir, logins)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the job's configuration outlived it: %v", err)
+	}
+	dir = ""
+	e.Run(context.Background(), proto.Job{JobID: "j6", Backend: "fake"}, io)
+	if dir != "" {
+		t.Fatalf("a job on the runner's login got %s", dir)
+	}
+}
+
+// What a runner that crashed left of payers' logins is removed when the next one starts, and
+// nothing else in the directory is.
+func TestSweepLoginsRemovesWhatACrashLeft(t *testing.T) {
+	dir := t.TempDir()
+	left := filepath.Join(dir, "gator-login-123")
+	_ = os.MkdirAll(filepath.Join(left, "home"), 0o700)
+	_ = os.WriteFile(filepath.Join(left, "home", "auth.json"), []byte(codexAuthOld), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "keep"), nil, 0o600)
+	if n, err := SweepLogins(dir); err != nil || n != 1 {
+		t.Fatalf("swept %d: %v", n, err)
+	}
+	if _, err := os.Stat(left); !os.IsNotExist(err) {
+		t.Fatal("a login survived")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "keep")); err != nil {
+		t.Fatal("swept what was not a login")
+	}
+	if n, err := SweepLogins(filepath.Join(dir, "none")); err != nil || n != 0 {
+		t.Fatalf("a missing directory: %d %v", n, err)
+	}
+}
+
+// guarded is a backend whose configuration puts another login above the payer's.
+type guarded struct{ *scripted }
+
+func (guarded) PayerLoginBlocked() string { return "apiKeyHelper" }
+
+func TestABackendThatWouldOutrankThePayerIsNotOffered(t *testing.T) {
+	e := &Executor{Backends: map[string]backend.Backend{"a": &scripted{}, "b": guarded{&scripted{}}}}
+	if got := e.PayerLoginBackends(); !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("payer logins on %v", got)
 	}
 }

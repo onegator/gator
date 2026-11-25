@@ -3,7 +3,9 @@ package executor
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,15 +22,31 @@ import (
 type login struct {
 	cred *proto.Credential
 	env  []string
+	// root is the job's own directory under the runner's login directory: the CLI's home (home)
+	// and its configuration (configDir) are in it, and it goes with the job.
+	root string
 	home string
 }
 
-// openLogin prepares c for one job; nil for a job on the runner's own login.
-func openLogin(c *proto.Credential) (*login, error) {
+// loginPrefix names a job's login directory, for SweepLogins to find what a crash left.
+const loginPrefix = "gator-login-"
+
+// openLogin prepares c for one job in a directory of its own under dir (empty: the system's
+// temporary directory); nil for a job on the runner's own login.
+func openLogin(c *proto.Credential, dir string) (*login, error) {
 	if c == nil {
 		return nil, nil
 	}
-	l := &login{cred: c}
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	root, err := os.MkdirTemp(dir, loginPrefix) // 0700
+	if err != nil {
+		return nil, err
+	}
+	l := &login{cred: c, root: root}
 	names := make([]string, 0, len(c.Env))
 	for k := range c.Env {
 		names = append(names, k)
@@ -36,16 +54,19 @@ func openLogin(c *proto.Credential) (*login, error) {
 	slices.Sort(names)
 	for _, k := range names {
 		if !loginVariable(k) {
+			l.close()
 			return nil, fmt.Errorf("the job's login sets %q, which is not a login's variable", k)
 		}
 		l.env = append(l.env, k+"="+c.Env[k])
 	}
 	if h := c.Home; h != nil {
 		if !loginVariable(h.Env) {
+			l.close()
 			return nil, fmt.Errorf("the job's login names its directory in %q, which is not a login's variable", h.Env)
 		}
-		dir, err := os.MkdirTemp("", "gator-login-") // 0700
-		if err != nil {
+		dir := filepath.Join(root, "home")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			l.close()
 			return nil, err
 		}
 		l.home = dir
@@ -110,10 +131,44 @@ func (l *login) refreshed() *proto.CredentialRefresh {
 	return &proto.CredentialRefresh{ID: l.cred.ID, Files: files}
 }
 
-func (l *login) close() {
-	if l != nil && l.home != "" {
-		_ = os.RemoveAll(l.home)
+// configDir is a directory of the job's own for the CLI's settings, sessions and transcripts.
+func (l *login) configDir() (string, error) {
+	dir := filepath.Join(l.root, "config")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
 	}
+	return dir, nil
+}
+
+func (l *login) close() {
+	if l != nil && l.root != "" {
+		_ = os.RemoveAll(l.root)
+	}
+}
+
+// SweepLogins removes the login directories a runner that crashed left in dir: a payer's login,
+// a refreshed token, their CLI's transcripts. A runner calls it before it takes any job.
+func SweepLogins(dir string) (int, error) {
+	if dir == "" {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), loginPrefix) {
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
 }
 
 // mask replaces every value of the login in s.

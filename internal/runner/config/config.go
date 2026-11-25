@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -23,8 +24,11 @@ type Config struct {
 	Location  string // "vps" | "mac"
 	// Placement is which jobs this runner takes: "local" (jobs people run on their own
 	// machines) or "cloud". GATOR_RUNNER_PLACEMENT; empty derives it from Location.
-	Placement   string
-	WorkDir     string // where worktrees live
+	Placement string
+	WorkDir   string // where worktrees live
+	// LoginDir holds the payers' logins of running jobs, one directory each (GATOR_RUNNER_LOGIN_DIR;
+	// default "logins" beside WorkDir), emptied of what a crash left when the runner starts.
+	LoginDir    string
 	Backends    []string
 	Projects    []string
 	MaxParallel int
@@ -56,6 +60,7 @@ func Load() (Config, error) {
 		Once:        os.Getenv("GATOR_RUNNER_ONCE") == "1",
 		AgentEnv:    list(os.Getenv("GATOR_RUNNER_AGENT_ENV")),
 	}
+	c.LoginDir = env("GATOR_RUNNER_LOGIN_DIR", filepath.Join(filepath.Dir(filepath.Clean(c.WorkDir)), "logins"))
 	agents, err := acp.ParseAgents(os.Getenv("GATOR_ACP_AGENTS"))
 	if err != nil {
 		return c, err

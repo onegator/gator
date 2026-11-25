@@ -338,21 +338,38 @@ theirs at `GET /me/model-usage`, an admin everyone's at `GET /workspace/model-us
 
 **A runner sees the login of every job it runs.** It must: the agent needs it to work. The
 login travels in the lease, over the runner's authenticated WebSocket (TLS end to end when the
-server is behind HTTPS, as it should be), and the runner puts it in the agent's environment and,
-for Codex, in a directory made for the job (mode 0700, the file 0600) that it removes when the
-job ends. It is never written to the runner's own files, except that a finish waiting for the
-server's acknowledgement — which carries a refreshed `auth.json` — sits in the runner's journal
-(mode 0600) until it is acknowledged. The agent runs as the runner's user with every permission
-bypassed, so it can read its payer's login, print it and send it anywhere; and so can anyone who
-controls that runner. Run people's jobs only on runners you trust with their accounts:
+server is behind HTTPS, as it should be). The runner puts it in the agent's environment and, for
+Codex, in a directory made for the job under `GATOR_RUNNER_LOGIN_DIR` (default `logins` beside
+`GATOR_RUNNER_WORKDIR`; mode 0700, files 0600), which also holds the job's own `CLAUDE_CONFIG_DIR`
+— Claude Code's settings, sessions and transcripts, which carry tool output — and goes when the
+job ends. A runner removes what a crash left there when it starts. A finish waiting for the
+server's acknowledgement — which may carry a refreshed `auth.json` — sits in the runner's journal
+(`outbox.json`, mode 0600) until it is acknowledged. The agent runs as the runner's user with
+every permission bypassed, so it can read its payer's login, print it and send it anywhere; and so
+can anyone who controls that runner. Run people's jobs only on runners you trust with their
+accounts:
 
-- A **Mac runner** takes local jobs only from its owner (the person who minted its token) or
-  from nobody in particular — so a person's login reaches their own Mac and the shared runners,
-  never another person's Mac.
-- A **shared or cloud runner** sees the logins of everyone whose jobs it runs. Treat its host as
-  you treat the server.
-- A runner advertises that it can run jobs on their payers' logins (`capabilities.payer_logins`);
-  one that does not — an older runner — is handed only jobs on its own login.
+- A **Mac runner** a person minted (Gator.app mints one per Mac) takes a job on a payer's login
+  only when that person is the payer — whoever queued the job — so a person's login reaches their
+  own Mac and the shared runners, never another person's Mac.
+- A **shared or cloud runner** (a token minted on the host, or a machine started per job) sees the
+  logins of everyone whose jobs it runs. Treat its host as you treat the server.
+- **One trust domain per runner at a time.** No runner isolates its jobs from each other today:
+  they run as one user, and an agent can read another's environment (`/proc/<pid>/environ`) and
+  files. So a runner holds one person's login at a time — a job on Ann's login runs only beside
+  other jobs on Ann's login, never beside Bob's or a job on the runner's own login — and with
+  `GATOR_RUNNER_MAX_PARALLEL` above 1 the other slots wait. Isolation per job (a user or a
+  container per job) is what would lift this; a machine started per job already has it.
+- What remains of the same-user risk is **sequential**: what a job leaves behind outside its login
+  directory (its worktree, files it wrote elsewhere in the runner's home) is readable by the next
+  job, and on Linux the journal is too while a finish waits to be delivered. On a Mac the sandbox
+  keeps the agent out of the runner's token file and journal.
+- A runner names the backends it runs on their payers' logins (`capabilities.payer_logins`). A
+  runner without the field — an older one — is handed only jobs on its own login, and so is a
+  backend whose configuration would outrank the payer's: Claude Code with an administrator's
+  `apiKeyHelper`, or an API key or another provider in the managed settings' `env`. A repository
+  whose `.claude/settings.json` does that fails a job on its payer's login rather than bill it to
+  somebody else.
 
 The runner masks every value of a job's login in what it sends (events, summaries, digests,
 receipts), and the server masks them again before storing or publishing anything; logs never
@@ -360,7 +377,9 @@ carry them. A job on its payer's login gets **none of the runner's own login var
 (`ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_*`, `CODEX_*`, `AWS_*`, …). A login the
 runner's user keeps on disk (`~/.claude/.credentials.json`, the macOS keychain) is still readable
 by the agent, as everything of that user is, but Claude Code prefers the login in its environment
-and Codex reads only the `CODEX_HOME` it is given.
+and Codex reads only the `CODEX_HOME` it is given. And the model can always read its own
+environment: masking keeps the login out of what Gator keeps and shows, not out of what an agent
+determined to send it somewhere can reach.
 
 ## What an agent can reach
 

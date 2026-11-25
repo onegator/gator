@@ -98,7 +98,7 @@ func TestLeaseHandsThePayersLoginOnlyToRunnersThatRunIt(t *testing.T) {
 		t.Fatalf("a runner that would use its own login was leased %v (%v)", got, err)
 	}
 	s := f.session(t)
-	s.caps.PayerLogins = true
+	s.caps.PayerLogins = []string{f.backend}
 	s.auth = map[string]string{f.backend: "missing"} // its own login does not matter
 	got, err := s.lease(context.Background(), 2)
 	if err != nil || len(got) != 1 || got[0].job.ID != job.ID {
@@ -119,7 +119,7 @@ func TestAJobThatCannotBePaidForWaitsAndSaysWhy(t *testing.T) {
 	job, logins, _ := f.payersJob(t)
 	logins.wait = "Waiting for Payer to connect a Claude subscription"
 	s := f.session(t)
-	s.caps.PayerLogins = true
+	s.caps.PayerLogins = []string{f.backend}
 	for range 2 {
 		if got, err := s.lease(context.Background(), 2); err != nil || len(got) != 0 {
 			t.Fatalf("lease %v %v", got, err)
@@ -140,7 +140,7 @@ func TestReportsOfAJobOnItsPayersLogin(t *testing.T) {
 	f := newFixture(t)
 	job, logins, payer := f.payersJob(t)
 	s := f.session(t)
-	s.caps.PayerLogins = true
+	s.caps.PayerLogins = []string{f.backend}
 	got, err := s.lease(context.Background(), 1)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("lease %v %v", got, err)
@@ -216,7 +216,7 @@ func TestAPayersLoginGoesOnlyToTheirOwnOrASharedRunner(t *testing.T) {
 	f.m.cfg.Credentials = logins
 	runner := func(owner pgtype.UUID) *session {
 		s := f.session(t)
-		s.caps.PayerLogins, s.owner = true, owner
+		s.caps.PayerLogins, s.owner = []string{f.backend}, owner
 		return s
 	}
 	if got, err := runner(randomUUID()).lease(ctx, 2); err != nil || len(got) != 0 {
@@ -246,13 +246,52 @@ func TestTheSessionRefusesAnotherPersonsLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := f.session(t)
-	s.caps.PayerLogins, s.owner = true, randomUUID()
+	s.caps.PayerLogins, s.owner = []string{f.backend}, randomUUID()
 	if got, err := s.lease(ctx, 2); err != nil || len(got) != 0 {
 		t.Fatalf("leased %v %v", got, err)
 	}
 	shared := f.session(t)
-	shared.caps.PayerLogins = true
+	shared.caps.PayerLogins = []string{f.backend}
 	if got, err := shared.lease(ctx, 2); err != nil || len(got) != 1 {
 		t.Fatalf("a shared runner: %v %v", got, err)
+	}
+}
+
+// Jobs on one runner run as one user and can read each other's environment: a person's login runs
+// only beside jobs on that same person's login, never beside another person's or the runner's own.
+func TestOneRunnerHoldsOnePayersLoginAtATime(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	bobs, logins, _ := f.payersJob(t)
+	carols, _, _ := f.payersJob(t) // another payer; same fake login row, another person
+	f.m.cfg.Credentials = logins
+	s := f.session(t)
+	s.caps.PayerLogins, s.caps.MaxParallel = []string{f.backend}, 4
+	got, err := s.lease(ctx, 4)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("leased %d (%v), want one payer's job", len(got), err)
+	}
+	other := carols
+	if got[0].job.ID == carols.ID {
+		other = bobs
+	}
+	if again, _ := s.lease(ctx, 4); len(again) != 0 {
+		t.Fatalf("%v ran beside another payer's job", again)
+	}
+	// A job on the runner's own login waits too while a payer's is there.
+	runners := f.queuedJob(t)
+	if again, _ := s.lease(ctx, 4); len(again) != 0 {
+		t.Fatalf("the runner's own job ran beside a payer's: %v", again)
+	}
+	if err := s.finish(proto.Finish{JobID: uuidString(got[0].job.ID), Status: proto.StatusFailed}); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := s.lease(ctx, 4)
+	ids := map[pgtype.UUID]bool{}
+	for _, l := range next {
+		ids[l.job.ID] = true
+	}
+	if len(next) != 1 || !(ids[other.ID] || ids[runners.ID]) {
+		t.Fatalf("after the first ended: %v", next)
 	}
 }
