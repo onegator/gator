@@ -123,6 +123,8 @@ type BrainCuration struct {
 	PendingUpto    *int64             `json:"pending_upto"`
 	ClaimedAt      pgtype.Timestamptz `json:"claimed_at"`
 	CuratedAt      pgtype.Timestamptz `json:"curated_at"`
+	Attempts       int32              `json:"attempts"`
+	NextAt         pgtype.Timestamptz `json:"next_at"`
 }
 
 type BrainEntry struct {

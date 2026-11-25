@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/brain/curator"
 )
 
 // The vertical slice of the Brain: a decision agreed in a task's thread comes back, once the thread
@@ -71,10 +72,14 @@ func TestADecisionAgreedInAThreadReachesTheNextTaskOfItsComponent(t *testing.T) 
 	h.claudeRunner(project, "synthetic-curator-decision.ndjson")
 	t.Setenv("FAKE_CLAUDE_SUBST", fmt.Sprintf("s/__SEQ__/%d/g", agreed))
 	h.curator.Quiet = 0
-	if n, err := h.curator.Sweep(ctx); err != nil || n != 1 {
-		t.Fatalf("the quiet thread is curated once: %d %v", n, err)
+	t.Cleanup(func() { h.curator.Quiet = curator.DefaultQuiet })
+	curations := func() int {
+		return h.count(`SELECT count(*) FROM jobs WHERE task_id = $1 AND role = 'curator'`, first.Id.String())
 	}
-	if n, _ := h.curator.Sweep(ctx); n != 0 {
+	if _, err := h.curator.Sweep(ctx); err != nil || curations() != 1 {
+		t.Fatalf("the quiet thread is curated once: %d %v", curations(), err)
+	}
+	if h.curator.Sweep(ctx); curations() != 1 {
 		t.Fatal("and not again while its curation is written")
 	}
 	var proposal gen.BrainEntry
@@ -112,7 +117,7 @@ func TestADecisionAgreedInAThreadReachesTheNextTaskOfItsComponent(t *testing.T) 
 	if m, _ := card(); !strings.Contains(m.Body, "1 proposal") {
 		t.Fatalf("the card: %+v", m.Body)
 	}
-	if n, _ := h.curator.Sweep(ctx); n != 0 {
+	if h.curator.Sweep(ctx); curations() != 1 {
 		t.Fatal("a thread with nothing new said is not read again")
 	}
 

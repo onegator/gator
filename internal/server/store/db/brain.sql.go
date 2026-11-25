@@ -81,7 +81,7 @@ const claimCuration = `-- name: ClaimCuration :one
 INSERT INTO brain_curations (conversation_id, pending_upto, claimed_at) VALUES ($1, $2::bigint, now())
 ON CONFLICT (conversation_id) DO UPDATE SET pending_upto = EXCLUDED.pending_upto, claimed_at = now(), job_id = NULL
 WHERE brain_curations.job_id IS NULL OR brain_curations.claimed_at < now() - interval '1 hour'
-RETURNING conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at
+RETURNING conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at, attempts, next_at
 `
 
 type ClaimCurationParams struct {
@@ -100,6 +100,8 @@ func (q *Queries) ClaimCuration(ctx context.Context, arg ClaimCurationParams) (B
 		&i.PendingUpto,
 		&i.ClaimedAt,
 		&i.CuratedAt,
+		&i.Attempts,
+		&i.NextAt,
 	)
 	return i, err
 }
@@ -111,6 +113,7 @@ WHERE c.task_id IS NOT NULL AND c.archived_at IS NULL
   AND c.last_message_at < $1::timestamptz
   AND c.last_seq > coalesce(b.upto_seq, 0)
   AND (b.job_id IS NULL OR b.claimed_at < now() - interval '1 hour')
+  AND (b.next_at IS NULL OR b.next_at < now())
   AND (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id AND m.seq > coalesce(b.upto_seq, 0)
        AND m.kind = 'text' AND m.author_kind IN ('user', 'agent') AND m.deleted_at IS NULL) >= $2::bigint
 ORDER BY c.last_message_at
@@ -202,9 +205,10 @@ func (q *Queries) CountOpenProposalsFrom(ctx context.Context, sourceConversation
 }
 
 const curationByJob = `-- name: CurationByJob :one
-SELECT conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at FROM brain_curations WHERE job_id = $1
+SELECT conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at, attempts, next_at FROM brain_curations WHERE job_id = $1 FOR UPDATE
 `
 
+// The curation a job writes, held while what it found is stored: a redelivered event finds it done.
 func (q *Queries) CurationByJob(ctx context.Context, jobID pgtype.UUID) (BrainCuration, error) {
 	row := q.db.QueryRow(ctx, curationByJob, jobID)
 	var i BrainCuration
@@ -215,6 +219,8 @@ func (q *Queries) CurationByJob(ctx context.Context, jobID pgtype.UUID) (BrainCu
 		&i.PendingUpto,
 		&i.ClaimedAt,
 		&i.CuratedAt,
+		&i.Attempts,
+		&i.NextAt,
 	)
 	return i, err
 }
@@ -317,9 +323,21 @@ func (q *Queries) DeleteUserBrain(ctx context.Context, userID pgtype.UUID) (int6
 	return result.RowsAffected(), nil
 }
 
+const failCuration = `-- name: FailCuration :exec
+UPDATE brain_curations SET job_id = NULL, pending_upto = NULL, attempts = attempts + 1,
+    next_at = now() + least(interval '10 minutes' * power(2, attempts), interval '24 hours')
+WHERE conversation_id = $1
+`
+
+// A curation job that did not finish: tried again after ten minutes, then twenty, forty, … at most a day.
+func (q *Queries) FailCuration(ctx context.Context, conversationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, failCuration, conversationID)
+	return err
+}
+
 const finishCuration = `-- name: FinishCuration :exec
 UPDATE brain_curations SET upto_seq = greatest(upto_seq, coalesce(pending_upto, upto_seq)), pending_upto = NULL,
-    job_id = NULL, curated_at = now()
+    job_id = NULL, curated_at = now(), attempts = 0, next_at = NULL
 WHERE conversation_id = $1
 `
 
@@ -372,7 +390,7 @@ func (q *Queries) GetBrainEntry(ctx context.Context, id pgtype.UUID) (BrainEntry
 }
 
 const getCuration = `-- name: GetCuration :one
-SELECT conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at FROM brain_curations WHERE conversation_id = $1
+SELECT conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at, attempts, next_at FROM brain_curations WHERE conversation_id = $1
 `
 
 func (q *Queries) GetCuration(ctx context.Context, conversationID pgtype.UUID) (BrainCuration, error) {
@@ -385,6 +403,8 @@ func (q *Queries) GetCuration(ctx context.Context, conversationID pgtype.UUID) (
 		&i.PendingUpto,
 		&i.ClaimedAt,
 		&i.CuratedAt,
+		&i.Attempts,
+		&i.NextAt,
 	)
 	return i, err
 }

@@ -9,7 +9,10 @@ CREATE TABLE brain_curations (
     job_id          uuid REFERENCES jobs(id) ON DELETE SET NULL,
     pending_upto    bigint,
     claimed_at      timestamptz,
-    curated_at      timestamptz
+    curated_at      timestamptz,
+    -- A curation that failed is tried again later, later each time.
+    attempts        integer NOT NULL DEFAULT 0,
+    next_at         timestamptz
 );
 CREATE INDEX brain_curations_job_idx ON brain_curations (job_id) WHERE job_id IS NOT NULL;
 

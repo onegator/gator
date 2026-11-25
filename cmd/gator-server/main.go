@@ -239,11 +239,11 @@ func serve(ctx context.Context) error {
 	go notifier.WithChat(chat.Access).Run(ctx)
 
 	// What a thread settled is proposed to the Brain once it goes quiet or its task closes.
-	curate := curator.New(dbq.New(db.Pool), team.Curations, chat.Packer, chat.Access, knows.Service, log)
+	curate := curator.New(dbq.New(db.Pool), curator.PoolTx(db.Pool), team.Curations, chat.Packer, chat.Access, knows.Service, log)
 	curations := conversations.NewCursorConsumer("brain_curator", db.Pool, hub, log, 0)
 	curations.On(curate, curate.Events()...)
 	go curations.Run(ctx)
-	go curate.Run(ctx, time.Minute)
+	go curate.Run(ctx, curator.DefaultEvery)
 	// A person's focus is worked out from their work, and theirs alone.
 	go knows.Focus.Run(ctx, time.Hour)
 

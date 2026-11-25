@@ -219,6 +219,7 @@ WHERE c.task_id IS NOT NULL AND c.archived_at IS NULL
   AND c.last_message_at < sqlc.arg(quiet_before)::timestamptz
   AND c.last_seq > coalesce(b.upto_seq, 0)
   AND (b.job_id IS NULL OR b.claimed_at < now() - interval '1 hour')
+  AND (b.next_at IS NULL OR b.next_at < now())
   AND (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id AND m.seq > coalesce(b.upto_seq, 0)
        AND m.kind = 'text' AND m.author_kind IN ('user', 'agent') AND m.deleted_at IS NULL) >= sqlc.arg(min_messages)::bigint
 ORDER BY c.last_message_at
@@ -238,11 +239,18 @@ RETURNING *;
 UPDATE brain_curations SET job_id = $2 WHERE conversation_id = $1;
 
 -- name: CurationByJob :one
-SELECT * FROM brain_curations WHERE job_id = $1;
+-- The curation a job writes, held while what it found is stored: a redelivered event finds it done.
+SELECT * FROM brain_curations WHERE job_id = $1 FOR UPDATE;
 
 -- name: FinishCuration :exec
 UPDATE brain_curations SET upto_seq = greatest(upto_seq, coalesce(pending_upto, upto_seq)), pending_upto = NULL,
-    job_id = NULL, curated_at = now()
+    job_id = NULL, curated_at = now(), attempts = 0, next_at = NULL
+WHERE conversation_id = $1;
+
+-- name: FailCuration :exec
+-- A curation job that did not finish: tried again after ten minutes, then twenty, forty, … at most a day.
+UPDATE brain_curations SET job_id = NULL, pending_upto = NULL, attempts = attempts + 1,
+    next_at = now() + least(interval '10 minutes' * power(2, attempts), interval '24 hours')
 WHERE conversation_id = $1;
 
 -- name: ReleaseCuration :exec

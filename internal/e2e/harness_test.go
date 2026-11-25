@@ -121,7 +121,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	// The curator follows the outbox on its own; sweeping for quiet threads is a test's to ask.
-	curate := curator.New(db.New(pool), team.Curations, chat.Packer, chat.Access, knows.Service, slog.Default())
+	curate := curator.New(db.New(pool), curator.PoolTx(pool), team.Curations, chat.Packer, chat.Access, knows.Service, slog.Default())
 	curations := conversations.NewCursorConsumer("brain_curator", pool, hub, slog.Default(), 50*time.Millisecond)
 	curations.On(curate, curate.Events()...)
 	go curations.Run(consumers)
