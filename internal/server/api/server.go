@@ -75,6 +75,8 @@ type Server struct {
 	Agents *agents.Module
 	// Brain is what the team and its agents know; nil: its endpoints answer 503.
 	Brain *brain.Module
+	// MCP serves the gator-brain MCP server at /mcp, for jobs' and people's tokens; nil: no /mcp.
+	MCP http.Handler
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -115,6 +117,11 @@ func (s *Server) Router() http.Handler {
 		r.Post("/logout", auth.Logout(s.Tokens))
 	})
 	r.Get("/invite/{token}", invitePageHandler)
+	if s.MCP != nil {
+		// Streamable HTTP: POST carries the calls; the server is stateless, so GET and DELETE
+		// answer 405 from the SDK itself.
+		r.With(auth.RequireAuth).Handle(auth.MCPPath, s.MCP)
+	}
 	r.Route("/api/v1", func(r chi.Router) {
 		r.With(auth.RequireAuth).Get("/ws", s.websocket)
 		if s.Runners != nil {

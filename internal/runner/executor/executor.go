@@ -46,6 +46,20 @@ func (e *Executor) agentEnv(job proto.Job) []string {
 	return env
 }
 
+// MCPServerName is Gator's MCP server in an agent's session: its tools are mcp__gator__….
+const MCPServerName = "gator"
+
+// mcpServers are the MCP servers the agent reaches: Gator's, at /mcp, with the job's own identity
+// — the Brain and the agent surface, held by the server to what the job's kind may call. None
+// without an identity, so a summary (and a job of an older server) has none.
+func (e *Executor) mcpServers(job proto.Job) []backend.MCPServer {
+	if job.AgentToken == "" || e.ServerURL == "" {
+		return nil
+	}
+	return []backend.MCPServer{{Name: MCPServerName, URL: strings.TrimRight(e.ServerURL, "/") + "/mcp",
+		Headers: map[string]string{"Authorization": "Bearer " + job.AgentToken}}}
+}
+
 var _ client.Executor = (*Executor)(nil)
 
 // errSteered interrupts a run so it can resume with the person's correction.
@@ -95,9 +109,10 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
 	}
 	env = append(env, signing...)
+	servers := e.mcpServers(job)
 	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
 		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
-			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access}
+			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers}
 	}
 
 	var usage proto.Usage
@@ -231,7 +246,9 @@ const AgentTools = `You can talk back to Gator while you work, with gator-cli (J
 - ` + "`gator-cli artifact put --type report --file -`" + ` — record a document now, so it survives a failed job.
 - ` + "`gator-cli product propose --kind lesson --title \"...\" --file -`" + ` — propose what this work taught the product; a person approves it.
 - ` + "`gator-cli catalogue show`" + ` and ` + "`gator-cli knowledge search --query \"...\"`" + ` — look things up that your prompt did not carry.
-- ` + "`gator-cli say --file -`" + ` — say something in the task's thread; mention @agent to ask another agent.`
+- ` + "`gator-cli say --file -`" + ` — say something in the task's thread; mention @agent to ask another agent.
+
+Where your session has Gator's MCP tools (mcp__gator__brain_search, brain_get, brain_propose, catalogue_show, thread_read, conversation_post, …), they do the same.`
 
 func Prompt(job proto.Job, hasRepo bool) string {
 	var b strings.Builder

@@ -31,12 +31,14 @@ import (
 	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/mcp"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
+	"github.com/onegator/gator/internal/server/store/db"
 )
 
 type harness struct {
@@ -116,7 +118,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	// What the team and its agents know, read under the same rules as conversations.
 	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Automations: autos, Hub: hub, Log: slog.Default(),
-		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows}
+		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows,
+		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc})}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())

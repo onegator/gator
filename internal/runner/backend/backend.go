@@ -25,6 +25,16 @@ type Spec struct {
 	// Access is what the agent may do with its tools. The zero value is everything, as a phase
 	// job always could.
 	Access Access
+	// MCP are the MCP servers the session reaches besides the runner's own configuration: Gator's
+	// (the Brain and the agent surface), with the job's own identity.
+	MCP []MCPServer
+}
+
+// MCPServer is one remote MCP server, over Streamable HTTP.
+type MCPServer struct {
+	Name    string
+	URL     string
+	Headers map[string]string
 }
 
 // Access is what an agent may do with its tools, in words every backend can translate into its

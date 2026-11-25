@@ -83,7 +83,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Briefer:    NewBriefer(q, chat.Packer, summaries, deps.Log),
 		Summaries:  summaries,
 		Tracker:    NewTurnTracker(q, voice),
-		Talk:       NewTalk(q, chat.Threads, voice, chat.Packer, chat.Proposals),
+		Talk:       NewTalk(q, chat.Threads, voice, chat.Packer, chat.Proposals, chat.Access),
 		pool:       pool,
 	}
 }

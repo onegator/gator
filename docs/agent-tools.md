@@ -77,3 +77,32 @@ read what was said.
 
 If the runner cannot find `gator-cli` beside itself, or the server mints no job identity, the
 agent gets no tools and the prompt says nothing about them. Jobs run exactly as they did before.
+
+## The same, over MCP
+
+gator-server also serves the Brain and the agent surface as an MCP server, `gator`, at `POST /mcp`
+(Streamable HTTP, stateless). The runner adds it to every session that has an identity, beside
+the runner's own `--mcp-config`, in a file only the runner's user reads (the token is never on the
+command line); a read-only `chat` session may call its tools (`mcp__gator`).
+
+| Tool | Like | A reply may |
+|---|---|---|
+| `brain_search(query, scope?, kind?, limit?)` | `knowledge search` | yes |
+| `brain_get(id)` | `knowledge search` | yes |
+| `brain_propose(kind, title, content, scope?, component?, links?)` | `product propose` | yes |
+| `brain_cite(ids)` | — | yes |
+| `catalogue_show(component?)` | `catalogue show` | yes |
+| `thread_read(conversation_id?, limit?)` | `thread show` | yes |
+| `conversation_post(body)` | `say` | yes |
+| `task_show()`, `task_blocked(reason)`, `ask(question)` | the same | no |
+
+A token reaches the same tools over MCP as over `/agent` (both ask `internal/server/jobscope`); a
+summary job has none. Every call is in `agent_calls`, as `mcp <tool>`. An entry the agent relies on
+is cited as `[brain:<id>]`: the package of every job carries those tags, and what a job's final
+message cites of what it was handed or looked up is recorded in `brain_citations`.
+
+A person connects their own client with their token and reads what they read in the app:
+`claude mcp add --transport http gator https://<server>/mcp --header "Authorization: Bearer gtr_user_…"`.
+They get `brain_search`, `brain_get`, `brain_propose` (always a proposal), `brain_cite` and
+`catalogue_show(component?, project)`, and the resources `brain://me` and
+`brain://project/<slug>/principles`.

@@ -128,12 +128,13 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	if strings.HasPrefix(prompt, "-") { // would be parsed as a flag
 		prompt = "Task: " + prompt
 	}
-	mcp := b.MCPConfig
-	if mcp == "" {
-		mcp = noMCP
+	mcp, cleanup, err := mcpConfig(b.MCPConfig, spec.MCP)
+	if err != nil {
+		return failed("mcp config: " + err.Error())
 	}
+	defer cleanup()
 	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
-	args = append(args, permissionArgs(spec.Access)...)
+	args = append(args, permissionArgs(spec.Access, mcpNames(spec.MCP))...)
 	args = append(args, "--strict-mcp-config", "--mcp-config", mcp)
 	if spec.SessionID != "" {
 		args = append(args, "--resume", spec.SessionID)

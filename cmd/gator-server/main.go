@@ -27,6 +27,7 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/knowledge"
+	"github.com/onegator/gator/internal/server/mcp"
 	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -245,6 +246,9 @@ func serve(ctx context.Context) error {
 		// The agents who answer in them.
 		Agents: team,
 		Brain:  knows,
+		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
+		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
+			Talk: team.Talk, Tasks: svc, Log: log}),
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:

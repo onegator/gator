@@ -32,6 +32,12 @@ type proposer interface {
 	Propose(ctx context.Context, conv db.Conversation, in conversations.Proposal) (db.Message, error)
 }
 
+// openness answers whether a conversation is open to its whole project. conversations.Access is
+// one.
+type openness interface {
+	OpenToProject(ctx context.Context, conv db.Conversation) (bool, error)
+}
+
 // Talk is what an agent says from inside its job (gator-cli say, thread show, task create): in
 // the conversation its turn answers in, or for a phase job, its task's thread. What it says is
 // its own message, in its turn, so a mention of another agent is a delegation in its chain.
@@ -41,11 +47,35 @@ type Talk struct {
 	voice     speaker
 	packer    packer
 	proposals proposer
+	open      openness
 }
 
 // NewTalk builds it.
-func NewTalk(store talkStore, threads taskThreads, voice speaker, packer packer, proposals proposer) *Talk {
-	return &Talk{store: store, threads: threads, voice: voice, packer: packer, proposals: proposals}
+func NewTalk(store talkStore, threads taskThreads, voice speaker, packer packer, proposals proposer, open openness) *Talk {
+	return &Talk{store: store, threads: threads, voice: voice, packer: packer, proposals: proposals, open: open}
+}
+
+// Origin is where what a job proposes comes from: the conversation it speaks in, and whether that
+// conversation is private (a DM, a private channel) — whose words stay with its readers.
+type Origin struct {
+	Conversation pgtype.UUID
+	Private      bool
+}
+
+// OriginOf is job's origin. A job with no conversation (a phase with no agent) has none.
+func (t *Talk) OriginOf(ctx context.Context, job db.Job) (Origin, error) {
+	conv, _, err := t.Where(ctx, job)
+	if errors.Is(err, ErrForbidden) || errors.Is(err, pgx.ErrNoRows) {
+		return Origin{}, nil
+	}
+	if err != nil {
+		return Origin{}, err
+	}
+	open, err := t.open.OpenToProject(ctx, conv)
+	if err != nil {
+		return Origin{}, err
+	}
+	return Origin{Conversation: conv.ID, Private: !open}, nil
 }
 
 // mentionPattern finds @handles in what an agent writes. An agent's handle is unique where it is

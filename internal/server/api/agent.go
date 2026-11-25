@@ -13,6 +13,7 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/jobscope"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -37,9 +38,7 @@ func (s *Server) agentJob(w http.ResponseWriter, r *http.Request, cmd agentComma
 		s.fail(w, err)
 		return db.Job{}, false
 	}
-	switch job.Status {
-	case "queued", "leased", "running", "stalled":
-	default:
+	if !jobscope.Active(job.Status) {
 		// The token is revoked when a job ends, so this is a race, not a hole. Say so plainly.
 		writeError(w, http.StatusForbidden, "this job has finished", "forbidden")
 		return db.Job{}, false
@@ -206,8 +205,16 @@ func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	entry, err := s.Brain.Service.Write(r.Context(), reader, brain.Draft{Scope: brain.ScopeProject, Project: job.ProjectID,
-		Kind: string(in.Kind), Title: title, Content: content, Task: job.TaskID})
+	d := brain.Draft{Scope: brain.ScopeProject, Project: job.ProjectID, Kind: string(in.Kind), Title: title, Content: content, Task: job.TaskID}
+	if s.Agents != nil {
+		origin, err := s.Agents.Talk.OriginOf(r.Context(), job)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		d.Conversation, d.Private = origin.Conversation, origin.Private
+	}
+	entry, err := s.Brain.Service.Write(r.Context(), reader, d)
 	if err != nil {
 		s.failBrain(w, err)
 		return
