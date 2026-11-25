@@ -481,6 +481,7 @@ type McpServer struct {
 	Auth           string             `json:"auth"`
 	Secrets        string             `json:"secrets"`
 	AllowedTools   []string           `json:"allowed_tools"`
+	ReadOnlyTools  []string           `json:"read_only_tools"`
 	Enabled        bool               `json:"enabled"`
 	Oauth          []byte             `json:"oauth"`
 	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`

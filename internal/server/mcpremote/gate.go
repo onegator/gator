@@ -23,8 +23,8 @@ type Grant struct {
 	// Tools narrow the server's allowlist to what the agent was given (its server/tool entries);
 	// empty: everything the allowlist holds.
 	Tools []string
-	// ReadOnly holds a chat job to the tools the server marks read-only: chat has no tools that
-	// write, and a remote tool is no exception.
+	// ReadOnly holds a chat job, or any job of a chat agent, to the tools marked read-only: chat
+	// has no tools that write, and a remote tool is no exception.
 	ReadOnly bool
 }
 
@@ -71,7 +71,8 @@ func (g JobGate) Authorize(ctx context.Context, p auth.Principal, server string)
 	if err != nil {
 		return Grant{}, err
 	}
-	gr := Grant{Job: job, Agent: agent, Server: srv, ReadOnly: job.Tier == "chat"}
+	// The lower of the two tiers: a chat agent's phase job is still a chat agent's.
+	gr := Grant{Job: job, Agent: agent, Server: srv, ReadOnly: job.Tier == "chat" || agent.Tier == "chat"}
 	if !whole {
 		gr.Tools = tools
 	}

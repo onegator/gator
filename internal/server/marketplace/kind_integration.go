@@ -43,6 +43,9 @@ type IntegrationManifest struct {
 	Auth              string            `yaml:"auth,omitempty" json:"auth,omitempty"`
 	OAuth             *IntegrationOAuth `yaml:"oauth,omitempty" json:"oauth,omitempty"`
 	ToolsDefaultAllow []string          `yaml:"tools_default_allow,omitempty" json:"tools_default_allow,omitempty"`
+	// ToolsReadOnly are the allowed tools that only read, the ones chat agents get. Said here, by
+	// the package a person accepts, not by the server live.
+	ToolsReadOnly []string `yaml:"tools_read_only,omitempty" json:"tools_read_only,omitempty"`
 	// Binaries are a native plugin's builds, by GOOS/GOARCH: where to download each and what it
 	// hashes to. Nothing is made executable before it matches.
 	Binaries map[string]Binary `yaml:"binaries,omitempty" json:"binaries,omitempty"`
@@ -120,6 +123,9 @@ func (Integration) Describe(_ Item, files Files) (Manifest, error) {
 		if len(im.ToolsDefaultAllow) > 0 {
 			m.Permissions = append(m.Permissions, "agents given it may call: "+strings.Join(im.ToolsDefaultAllow, ", "))
 		}
+		if len(im.ToolsReadOnly) > 0 {
+			m.Permissions = append(m.Permissions, "chat agents given it may call (read-only): "+strings.Join(im.ToolsReadOnly, ", "))
+		}
 	case IntegrationNative:
 		platforms := make([]string, 0, len(im.Binaries))
 		for p := range im.Binaries {
@@ -180,6 +186,11 @@ func checkMCP(im IntegrationManifest) error {
 	for _, t := range im.ToolsDefaultAllow {
 		if !mcpremote.ValidToolName(t) {
 			return invalid("%q is not a tool name", t)
+		}
+	}
+	for _, t := range im.ToolsReadOnly {
+		if !slices.Contains(im.ToolsDefaultAllow, t) {
+			return invalid("tools_read_only names %q, which tools_default_allow does not", t)
 		}
 	}
 	return nil

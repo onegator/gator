@@ -163,7 +163,7 @@ RETURNING *;
 -- signing in, takes its credentials away: they were given for the old one.
 UPDATE mcp_servers
 SET display_name = sqlc.arg(display_name), url = sqlc.arg(url), auth = sqlc.arg(auth), oauth = sqlc.arg(oauth),
-    allowed_tools = sqlc.arg(allowed_tools), source = sqlc.arg(source),
+    allowed_tools = sqlc.arg(allowed_tools), read_only_tools = sqlc.arg(read_only_tools), source = sqlc.arg(source),
     secrets = CASE WHEN url = sqlc.arg(url) AND auth = sqlc.arg(auth) AND sqlc.arg(keep_credentials)::boolean THEN secrets ELSE '' END,
     token_expires_at = CASE WHEN url = sqlc.arg(url) AND auth = sqlc.arg(auth) AND sqlc.arg(keep_credentials)::boolean THEN token_expires_at END,
     updated_at = now()

@@ -28,7 +28,8 @@ func TestAnAllowlistIsTheServersNarrowedByTheAgentAndTheTier(t *testing.T) {
 	}{
 		{"the server's", Allowlist{Server: []string{"get", "set"}}, map[string]bool{"get": true, "set": true, "drop": false}},
 		{"narrowed by the agent", Allowlist{Server: []string{"get", "set"}, Agent: []string{"set"}}, map[string]bool{"get": false, "set": true}},
-		{"chat reads only", Allowlist{Server: []string{"get", "set", "drop"}, ReadOnly: true}, map[string]bool{"get": true, "set": false, "drop": true}},
+		{"chat reads only what was marked read-only when allowed", Allowlist{Server: []string{"get", "set", "drop"}, ReadOnly: true, Reading: []string{"get", "set"}},
+			map[string]bool{"get": true, "set": false, "drop": false}},
 		{"nothing switched on", Allowlist{}, map[string]bool{"get": false}},
 	}
 	for _, c := range cases {

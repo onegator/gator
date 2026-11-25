@@ -68,7 +68,10 @@ type Settings struct {
 	URL          *string
 	Auth         *string
 	AllowedTools *[]string
-	Enabled      *bool
+	// ReadOnlyTools are the allowed tools chat agents may call. Left out while AllowedTools
+	// changes, they are what the server marks read-only at that moment, as its admin saw them.
+	ReadOnlyTools *[]string
+	Enabled       *bool
 	// Secrets set the server's credentials; a key with an empty value removes it. Keys left out
 	// keep their value. A new address drops every credential the old one had.
 	Secrets map[string]string
@@ -119,6 +122,13 @@ func (s *Servers) Put(ctx context.Context, p auth.Principal, project pgtype.UUID
 	if err != nil {
 		return View{}, err
 	}
+	reading, err := allowedTools(in.ReadOnlyTools)
+	if err != nil {
+		return View{}, err
+	}
+	if reading == nil && tools != nil {
+		reading = s.liveReadOnly(ctx, project, name)
+	}
 	if in.URL != nil {
 		if err := CheckURL(*in.URL, s.net); err != nil {
 			return View{}, err
@@ -143,6 +153,11 @@ func (s *Servers) Put(ctx context.Context, p auth.Principal, project pgtype.UUID
 		if tools != nil {
 			next.AllowedTools = tools
 		}
+		next.ReadOnlyTools = cur.ReadOnlyTools
+		if reading != nil {
+			next.ReadOnlyTools = reading
+		}
+		next.ReadOnlyTools = slices.DeleteFunc(slices.Clone(next.ReadOnlyTools), func(t string) bool { return !slices.Contains(next.AllowedTools, t) })
 		if in.Enabled != nil {
 			next.Enabled = *in.Enabled
 		}
@@ -166,6 +181,31 @@ func (s *Servers) Put(ctx context.Context, p auth.Principal, project pgtype.UUID
 	s.cache.Forget(srv.ID)
 	s.breakers.Reset(srv.ID)
 	return s.view(srv), nil
+}
+
+// liveReadOnly is what a server marks read-only now, for its admin's snapshot; nil when it cannot
+// be asked (not connected yet), which keeps what was snapshot before.
+func (s *Servers) liveReadOnly(ctx context.Context, project pgtype.UUID, name string) []string {
+	srv, err := s.own(ctx, project, name)
+	if err != nil {
+		return nil
+	}
+	up, closeUp, err := s.dial.Dial(ctx, srv)
+	if err != nil {
+		return nil
+	}
+	defer closeUp()
+	tools, err := guarded{Upstream: up, breaker: s.breakers.For(srv.ID)}.ListTools(ctx)
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, t := range tools {
+		if t.Annotations != nil && t.Annotations.ReadOnlyHint {
+			out = append(out, t.Name)
+		}
+	}
+	return out
 }
 
 // allowedTools checks a new allowlist; nil leaves it as it is.
@@ -202,7 +242,7 @@ func (s *Servers) create(ctx context.Context, q *db.Queries, project pgtype.UUID
 		display = strings.TrimSpace(*in.DisplayName)
 	}
 	srv, err := q.CreateMCPServer(ctx, db.CreateMCPServerParams{ProjectID: project, Name: name, DisplayName: display, Url: *in.URL,
-		Auth: *in.Auth, AllowedTools: []string{}, Oauth: []byte("{}"), Source: []byte(`{"kind":"custom"}`)})
+		Auth: *in.Auth, AllowedTools: []string{}, ReadOnlyTools: []string{}, Oauth: []byte("{}"), Source: []byte(`{"kind":"custom"}`)})
 	if pe, ok := errors.AsType[*pgconn.PgError](err); ok && pe.Code == "23505" {
 		return srv, fmt.Errorf("%w: there is a server named %s", ErrInvalid, name)
 	}
@@ -237,6 +277,8 @@ func (s *Servers) setSecrets(ctx context.Context, q *db.Queries, srv db.McpServe
 type ToolView struct {
 	Name, Description string
 	ReadOnly, Allowed bool
+	// Chat says chat agents may call it: allowed, and marked read-only when it was.
+	Chat bool
 }
 
 // Tools asks the server what tools it has, for its admin to choose from.
@@ -260,7 +302,7 @@ func (s *Servers) Tools(ctx context.Context, p auth.Principal, project pgtype.UU
 	out := make([]ToolView, 0, len(tools))
 	for _, t := range tools {
 		out = append(out, ToolView{Name: t.Name, Description: t.Description, ReadOnly: t.Annotations != nil && t.Annotations.ReadOnlyHint,
-			Allowed: slices.Contains(srv.AllowedTools, t.Name)})
+			Allowed: slices.Contains(srv.AllowedTools, t.Name), Chat: slices.Contains(srv.AllowedTools, t.Name) && slices.Contains(srv.ReadOnlyTools, t.Name)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil

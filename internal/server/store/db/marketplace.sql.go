@@ -943,12 +943,12 @@ func (q *Queries) UpdateInstalledAgent(ctx context.Context, arg UpdateInstalledA
 const updateInstalledMCPServer = `-- name: UpdateInstalledMCPServer :one
 UPDATE mcp_servers
 SET display_name = $1, url = $2, auth = $3, oauth = $4,
-    allowed_tools = $5, source = $6,
-    secrets = CASE WHEN url = $2 AND auth = $3 AND $7::boolean THEN secrets ELSE '' END,
-    token_expires_at = CASE WHEN url = $2 AND auth = $3 AND $7::boolean THEN token_expires_at END,
+    allowed_tools = $5, read_only_tools = $6, source = $7,
+    secrets = CASE WHEN url = $2 AND auth = $3 AND $8::boolean THEN secrets ELSE '' END,
+    token_expires_at = CASE WHEN url = $2 AND auth = $3 AND $8::boolean THEN token_expires_at END,
     updated_at = now()
-WHERE id = $8
-RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
+WHERE id = $9
+RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
 `
 
 type UpdateInstalledMCPServerParams struct {
@@ -957,6 +957,7 @@ type UpdateInstalledMCPServerParams struct {
 	Auth            string      `json:"auth"`
 	Oauth           []byte      `json:"oauth"`
 	AllowedTools    []string    `json:"allowed_tools"`
+	ReadOnlyTools   []string    `json:"read_only_tools"`
 	Source          []byte      `json:"source"`
 	KeepCredentials bool        `json:"keep_credentials"`
 	ID              pgtype.UUID `json:"id"`
@@ -971,6 +972,7 @@ func (q *Queries) UpdateInstalledMCPServer(ctx context.Context, arg UpdateInstal
 		arg.Auth,
 		arg.Oauth,
 		arg.AllowedTools,
+		arg.ReadOnlyTools,
 		arg.Source,
 		arg.KeepCredentials,
 		arg.ID,
@@ -985,6 +987,7 @@ func (q *Queries) UpdateInstalledMCPServer(ctx context.Context, arg UpdateInstal
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,

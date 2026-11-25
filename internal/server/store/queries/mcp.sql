@@ -1,7 +1,7 @@
 -- name: CreateMCPServer :one
-INSERT INTO mcp_servers (project_id, name, display_name, url, auth, allowed_tools, oauth, source)
+INSERT INTO mcp_servers (project_id, name, display_name, url, auth, allowed_tools, read_only_tools, oauth, source)
 VALUES (sqlc.narg(project_id), sqlc.arg(name), sqlc.arg(display_name), sqlc.arg(url), sqlc.arg(auth), sqlc.arg(allowed_tools),
-        sqlc.arg(oauth), sqlc.arg(source))
+        sqlc.arg(read_only_tools), sqlc.arg(oauth), sqlc.arg(source))
 RETURNING *;
 
 -- name: GetMCPServer :one
@@ -26,7 +26,7 @@ ORDER BY name, project_id IS NULL;
 -- A new address drops, in the same statement, every credential the old one had (and what OAuth
 -- discovery found for it): no moment in which the old token could go to the new host.
 UPDATE mcp_servers
-SET url = sqlc.arg(url), allowed_tools = sqlc.arg(allowed_tools), enabled = sqlc.arg(enabled),
+SET url = sqlc.arg(url), allowed_tools = sqlc.arg(allowed_tools), read_only_tools = sqlc.arg(read_only_tools), enabled = sqlc.arg(enabled),
     secrets = CASE WHEN url = sqlc.arg(url) THEN secrets ELSE '' END,
     token_expires_at = CASE WHEN url = sqlc.arg(url) THEN token_expires_at END,
     oauth = CASE WHEN url = sqlc.arg(url) THEN oauth ELSE oauth - 'discovered' - 'client' END,

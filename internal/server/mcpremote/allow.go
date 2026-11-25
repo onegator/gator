@@ -15,11 +15,14 @@ type Allowlist struct {
 	Server   []string // mcp_servers.allowed_tools
 	Agent    []string // empty: no narrowing
 	ReadOnly bool
+	// Reading are the tools marked read-only when they were allowed (mcp_servers.read_only_tools):
+	// a chat grant gets only those, and only while the server still says so too.
+	Reading []string
 }
 
 // AllowlistOf is a grant's.
 func AllowlistOf(g Grant) Allowlist {
-	return Allowlist{Server: g.Server.AllowedTools, Agent: g.Tools, ReadOnly: g.ReadOnly}
+	return Allowlist{Server: g.Server.AllowedTools, Agent: g.Tools, ReadOnly: g.ReadOnly, Reading: g.Server.ReadOnlyTools}
 }
 
 // Allows says whether t may be called.
@@ -30,7 +33,7 @@ func (a Allowlist) Allows(t *sdk.Tool) bool {
 	if len(a.Agent) > 0 && !slices.Contains(a.Agent, t.Name) {
 		return false
 	}
-	return !a.ReadOnly || (t.Annotations != nil && t.Annotations.ReadOnlyHint)
+	return !a.ReadOnly || (slices.Contains(a.Reading, t.Name) && t.Annotations != nil && t.Annotations.ReadOnlyHint)
 }
 
 // allowlisted is an Upstream that offers only what the allowlist holds and refuses the rest,

@@ -3638,7 +3638,7 @@ components:
     McpServer:
       type: object
       description: "A remote MCP server agents reach through Gator's proxy (/mcp/proxy/<name>, with a job's own token); its credentials never leave the server."
-      required: [id, name, displayName, url, auth, allowedTools, enabled, connected, secretsSet, breaker, workspace, source, createdAt, updatedAt]
+      required: [id, name, displayName, url, auth, allowedTools, readOnlyTools, enabled, connected, secretsSet, breaker, workspace, source, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         projectId: { type: string, format: uuid, description: "absent: the workspace's" }
@@ -3647,6 +3647,7 @@ components:
         url: { type: string }
         auth: { type: string, enum: [oauth, bearer, none] }
         allowedTools: { type: array, items: { type: string }, description: "the tools agents may call; the rest are off until an admin switches them on" }
+        readOnlyTools: { type: array, items: { type: string }, description: "of those, the ones chat agents (and any job of a chat agent) may call: read-only as the admin or the package said when allowing them, not as the server says live" }
         enabled: { type: boolean }
         connected: { type: boolean, description: "it has what it needs to be called: a token, or nothing at all" }
         secretsSet: { type: array, items: { type: string }, description: "which credentials are set, never their values" }
@@ -3663,16 +3664,18 @@ components:
         url: { type: string, description: "https, or http to localhost" }
         auth: { type: string, enum: [bearer, none], description: "only when making a server" }
         allowedTools: { type: array, items: { type: string } }
+        readOnlyTools: { type: array, items: { type: string }, description: "the allowed tools chat agents may call; left out while allowedTools changes, what the server marks read-only at that moment" }
         enabled: { type: boolean }
         secrets: { type: object, additionalProperties: { type: string }, description: "credentials, e.g. {token: …}; an empty value removes one" }
     McpTool:
       type: object
-      required: [name, description, readOnly, allowed]
+      required: [name, description, readOnly, allowed, chat]
       properties:
         name: { type: string }
         description: { type: string }
-        readOnly: { type: boolean, description: "the server marks it read-only; only these reach chat agents" }
+        readOnly: { type: boolean, description: "the server marks it read-only, now" }
         allowed: { type: boolean }
+        chat: { type: boolean, description: "chat agents may call it: allowed, and in readOnlyTools" }
     McpCall:
       type: object
       required: [id, method, tool, outcome, resultBytes, durationMs, createdAt]

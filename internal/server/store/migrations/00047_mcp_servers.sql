@@ -13,6 +13,9 @@ CREATE TABLE mcp_servers (
     secrets          text NOT NULL DEFAULT '',          -- encrypted with the server's keyring
     -- The tools agents may call; the rest stay off until an admin switches them on.
     allowed_tools    text[] NOT NULL DEFAULT '{}',
+    -- Of those, the ones chat agents may call: read-only, as the admin (or the package a person
+    -- accepted) said when allowing them. What a server says of its tools live is not trusted.
+    read_only_tools  text[] NOT NULL DEFAULT '{}',
     enabled          boolean NOT NULL DEFAULT true,
     -- How a person connects it with OAuth: {provider, authorize_url, token_url, scopes}.
     oauth            jsonb NOT NULL DEFAULT '{}',

@@ -141,7 +141,7 @@ func (MCPTrack) Install(ctx context.Context, tx *db.Queries, in Input, im Integr
 	}
 	source, _ := json.Marshal(map[string]string{"kind": "marketplace", "registry": uuidString(in.Registry), "package": im.Name, "version": im.Version})
 	srv, err := tx.CreateMCPServer(ctx, db.CreateMCPServerParams{ProjectID: in.Project, Name: im.Name, DisplayName: im.DisplayName,
-		Url: im.URL, Auth: im.Auth, AllowedTools: orNone(im.ToolsDefaultAllow), Oauth: oauth, Source: source})
+		Url: im.URL, Auth: im.Auth, AllowedTools: orNone(im.ToolsDefaultAllow), ReadOnlyTools: orNone(im.ToolsReadOnly), Oauth: oauth, Source: source})
 	if isUnique(err) {
 		return Installed{}, fmt.Errorf("%w: there is an MCP server named %s here already", ErrConflict, im.Name)
 	}
@@ -169,12 +169,8 @@ func (MCPTrack) Update(ctx context.Context, tx *db.Queries, inst db.Installation
 	if err != nil {
 		return Installed{}, err
 	}
-	allowed := slices.Clone(srv.AllowedTools)
-	for _, t := range im.ToolsDefaultAllow {
-		if !slices.Contains(old.ToolsDefaultAllow, t) && !slices.Contains(allowed, t) {
-			allowed = append(allowed, t)
-		}
-	}
+	allowed, readOnly := added(srv.AllowedTools, old.ToolsDefaultAllow, im.ToolsDefaultAllow), added(srv.ReadOnlyTools, old.ToolsReadOnly, im.ToolsReadOnly)
+	readOnly = slices.DeleteFunc(readOnly, func(t string) bool { return !slices.Contains(allowed, t) })
 	oauth := []byte("{}")
 	a, b := OAuthOf(im), OAuthOf(old)
 	same := im.Auth == old.Auth && a.AuthorizationServer == b.AuthorizationServer && a.Provider == b.Provider
@@ -192,8 +188,20 @@ func (MCPTrack) Update(ctx context.Context, tx *db.Queries, inst db.Installation
 		}
 	}
 	if _, err := tx.UpdateInstalledMCPServer(ctx, db.UpdateInstalledMCPServerParams{ID: srv.ID, DisplayName: im.DisplayName, Url: im.URL,
-		Auth: im.Auth, Oauth: oauth, AllowedTools: orNone(allowed), Source: source, KeepCredentials: same}); err != nil {
+		Auth: im.Auth, Oauth: oauth, AllowedTools: orNone(allowed), ReadOnlyTools: orNone(readOnly), Source: source, KeepCredentials: same}); err != nil {
 		return Installed{}, err
 	}
 	return Installed{Target: srv.ID}, nil
+}
+
+// added is cur with what the new version lists and the old did not: an admin's choices stay, and
+// what a person just accepted with the update joins them.
+func added(cur, old, next []string) []string {
+	out := slices.Clone(cur)
+	for _, t := range next {
+		if !slices.Contains(old, t) && !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }

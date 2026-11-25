@@ -90,7 +90,7 @@ func (s *Server) putRemote(w http.ResponseWriter, r *http.Request, project pgtyp
 	if !decode(w, r, &in) {
 		return
 	}
-	set := mcpremote.Settings{DisplayName: in.DisplayName, URL: in.Url, AllowedTools: in.AllowedTools, Enabled: in.Enabled}
+	set := mcpremote.Settings{DisplayName: in.DisplayName, URL: in.Url, AllowedTools: in.AllowedTools, ReadOnlyTools: in.ReadOnlyTools, Enabled: in.Enabled}
 	if in.Auth != nil {
 		set.Auth = new(string(*in.Auth))
 	}
@@ -121,7 +121,7 @@ func (s *Server) ListProjectMcpServerTools(w http.ResponseWriter, r *http.Reques
 	}
 	out := make([]gen.McpTool, 0, len(tools))
 	for _, t := range tools {
-		out = append(out, gen.McpTool{Name: t.Name, Description: t.Description, ReadOnly: t.ReadOnly, Allowed: t.Allowed})
+		out = append(out, gen.McpTool{Name: t.Name, Description: t.Description, ReadOnly: t.ReadOnly, Allowed: t.Allowed, Chat: t.Chat})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -146,7 +146,7 @@ func (s *Server) ListProjectMcpServerCalls(w http.ResponseWriter, r *http.Reques
 func toMcpServer(v mcpremote.View) gen.McpServer {
 	srv := v.Server
 	out := gen.McpServer{Id: toUUID(srv.ID), ProjectId: toUUIDPtr(srv.ProjectID), Name: srv.Name, DisplayName: srv.DisplayName, Url: srv.Url,
-		Auth: gen.McpServerAuth(srv.Auth), AllowedTools: orEmpty(srv.AllowedTools), Enabled: srv.Enabled, Connected: v.Connected,
+		Auth: gen.McpServerAuth(srv.Auth), AllowedTools: orEmpty(srv.AllowedTools), ReadOnlyTools: orEmpty(srv.ReadOnlyTools), Enabled: srv.Enabled, Connected: v.Connected,
 		SecretsSet: orEmpty(v.SecretsSet), Breaker: gen.McpServerBreaker(v.Breaker), Workspace: !srv.ProjectID.Valid, Source: map[string]any{},
 		CreatedAt: srv.CreatedAt.Time, UpdatedAt: srv.UpdatedAt.Time}
 	_ = json.Unmarshal(srv.Source, &out.Source)

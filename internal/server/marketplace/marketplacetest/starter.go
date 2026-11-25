@@ -80,6 +80,7 @@ auth: bearer
 capabilities: [monitoring]
 phases: [monitoring]
 tools_default_allow: [search_issues, get_issue_details]
+tools_read_only: [search_issues, get_issue_details]
 `}
 }
 

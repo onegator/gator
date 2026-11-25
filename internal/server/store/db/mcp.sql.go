@@ -12,21 +12,22 @@ import (
 )
 
 const createMCPServer = `-- name: CreateMCPServer :one
-INSERT INTO mcp_servers (project_id, name, display_name, url, auth, allowed_tools, oauth, source)
+INSERT INTO mcp_servers (project_id, name, display_name, url, auth, allowed_tools, read_only_tools, oauth, source)
 VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8)
-RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
+        $7, $8, $9)
+RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
 `
 
 type CreateMCPServerParams struct {
-	ProjectID    pgtype.UUID `json:"project_id"`
-	Name         string      `json:"name"`
-	DisplayName  string      `json:"display_name"`
-	Url          string      `json:"url"`
-	Auth         string      `json:"auth"`
-	AllowedTools []string    `json:"allowed_tools"`
-	Oauth        []byte      `json:"oauth"`
-	Source       []byte      `json:"source"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+	Name          string      `json:"name"`
+	DisplayName   string      `json:"display_name"`
+	Url           string      `json:"url"`
+	Auth          string      `json:"auth"`
+	AllowedTools  []string    `json:"allowed_tools"`
+	ReadOnlyTools []string    `json:"read_only_tools"`
+	Oauth         []byte      `json:"oauth"`
+	Source        []byte      `json:"source"`
 }
 
 func (q *Queries) CreateMCPServer(ctx context.Context, arg CreateMCPServerParams) (McpServer, error) {
@@ -37,6 +38,7 @@ func (q *Queries) CreateMCPServer(ctx context.Context, arg CreateMCPServerParams
 		arg.Url,
 		arg.Auth,
 		arg.AllowedTools,
+		arg.ReadOnlyTools,
 		arg.Oauth,
 		arg.Source,
 	)
@@ -50,6 +52,7 @@ func (q *Queries) CreateMCPServer(ctx context.Context, arg CreateMCPServerParams
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,
@@ -88,7 +91,7 @@ func (q *Queries) DeleteMCPServer(ctx context.Context, id pgtype.UUID) (int64, e
 }
 
 const getMCPServer = `-- name: GetMCPServer :one
-SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE id = $1
+SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE id = $1
 `
 
 func (q *Queries) GetMCPServer(ctx context.Context, id pgtype.UUID) (McpServer, error) {
@@ -103,6 +106,7 @@ func (q *Queries) GetMCPServer(ctx context.Context, id pgtype.UUID) (McpServer, 
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,
@@ -114,7 +118,7 @@ func (q *Queries) GetMCPServer(ctx context.Context, id pgtype.UUID) (McpServer, 
 }
 
 const getMCPServerForUpdate = `-- name: GetMCPServerForUpdate :one
-SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE project_id IS NOT DISTINCT FROM $1::uuid AND name = $2 FOR UPDATE
+SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE project_id IS NOT DISTINCT FROM $1::uuid AND name = $2 FOR UPDATE
 `
 
 type GetMCPServerForUpdateParams struct {
@@ -134,6 +138,7 @@ func (q *Queries) GetMCPServerForUpdate(ctx context.Context, arg GetMCPServerFor
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,
@@ -145,7 +150,7 @@ func (q *Queries) GetMCPServerForUpdate(ctx context.Context, arg GetMCPServerFor
 }
 
 const getMCPServerIn = `-- name: GetMCPServerIn :one
-SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE project_id IS NOT DISTINCT FROM $1::uuid AND name = $2
+SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE project_id IS NOT DISTINCT FROM $1::uuid AND name = $2
 `
 
 type GetMCPServerInParams struct {
@@ -166,6 +171,7 @@ func (q *Queries) GetMCPServerIn(ctx context.Context, arg GetMCPServerInParams) 
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,
@@ -284,7 +290,7 @@ func (q *Queries) ListMCPServerNamesVisibleIn(ctx context.Context, projectID pgt
 }
 
 const listMCPServersVisibleIn = `-- name: ListMCPServersVisibleIn :many
-SELECT DISTINCT ON (name) id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers
+SELECT DISTINCT ON (name) id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers
 WHERE project_id = $1 OR project_id IS NULL
 ORDER BY name, project_id IS NULL
 `
@@ -308,6 +314,7 @@ func (q *Queries) ListMCPServersVisibleIn(ctx context.Context, projectID pgtype.
 			&i.Auth,
 			&i.Secrets,
 			&i.AllowedTools,
+			&i.ReadOnlyTools,
 			&i.Enabled,
 			&i.Oauth,
 			&i.TokenExpiresAt,
@@ -326,7 +333,7 @@ func (q *Queries) ListMCPServersVisibleIn(ctx context.Context, projectID pgtype.
 }
 
 const listWorkspaceMCPServers = `-- name: ListWorkspaceMCPServers :many
-SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE project_id IS NULL ORDER BY name
+SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE project_id IS NULL ORDER BY name
 `
 
 func (q *Queries) ListWorkspaceMCPServers(ctx context.Context) ([]McpServer, error) {
@@ -347,6 +354,7 @@ func (q *Queries) ListWorkspaceMCPServers(ctx context.Context) ([]McpServer, err
 			&i.Auth,
 			&i.Secrets,
 			&i.AllowedTools,
+			&i.ReadOnlyTools,
 			&i.Enabled,
 			&i.Oauth,
 			&i.TokenExpiresAt,
@@ -365,7 +373,7 @@ func (q *Queries) ListWorkspaceMCPServers(ctx context.Context) ([]McpServer, err
 }
 
 const mCPServerFor = `-- name: MCPServerFor :one
-SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE name = $1 AND (project_id = $2 OR project_id IS NULL)
+SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE name = $1 AND (project_id = $2 OR project_id IS NULL)
 ORDER BY project_id IS NULL LIMIT 1
 `
 
@@ -387,6 +395,7 @@ func (q *Queries) MCPServerFor(ctx context.Context, arg MCPServerForParams) (Mcp
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,
@@ -398,7 +407,7 @@ func (q *Queries) MCPServerFor(ctx context.Context, arg MCPServerForParams) (Mcp
 }
 
 const setMCPServerOAuth = `-- name: SetMCPServerOAuth :one
-UPDATE mcp_servers SET oauth = $1, updated_at = now() WHERE id = $2 RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
+UPDATE mcp_servers SET oauth = $1, updated_at = now() WHERE id = $2 RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
 `
 
 type SetMCPServerOAuthParams struct {
@@ -418,6 +427,7 @@ func (q *Queries) SetMCPServerOAuth(ctx context.Context, arg SetMCPServerOAuthPa
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,
@@ -431,7 +441,7 @@ func (q *Queries) SetMCPServerOAuth(ctx context.Context, arg SetMCPServerOAuthPa
 const setMCPServerSecrets = `-- name: SetMCPServerSecrets :one
 UPDATE mcp_servers SET secrets = $1, token_expires_at = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
+RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
 `
 
 type SetMCPServerSecretsParams struct {
@@ -452,6 +462,7 @@ func (q *Queries) SetMCPServerSecrets(ctx context.Context, arg SetMCPServerSecre
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,
@@ -464,20 +475,21 @@ func (q *Queries) SetMCPServerSecrets(ctx context.Context, arg SetMCPServerSecre
 
 const updateMCPServer = `-- name: UpdateMCPServer :one
 UPDATE mcp_servers
-SET url = $1, allowed_tools = $2, enabled = $3,
+SET url = $1, allowed_tools = $2, read_only_tools = $3, enabled = $4,
     secrets = CASE WHEN url = $1 THEN secrets ELSE '' END,
     token_expires_at = CASE WHEN url = $1 THEN token_expires_at END,
     oauth = CASE WHEN url = $1 THEN oauth ELSE oauth - 'discovered' - 'client' END,
     updated_at = now()
-WHERE id = $4
-RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
+WHERE id = $5
+RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, read_only_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
 `
 
 type UpdateMCPServerParams struct {
-	Url          string      `json:"url"`
-	AllowedTools []string    `json:"allowed_tools"`
-	Enabled      bool        `json:"enabled"`
-	ID           pgtype.UUID `json:"id"`
+	Url           string      `json:"url"`
+	AllowedTools  []string    `json:"allowed_tools"`
+	ReadOnlyTools []string    `json:"read_only_tools"`
+	Enabled       bool        `json:"enabled"`
+	ID            pgtype.UUID `json:"id"`
 }
 
 // A new address drops, in the same statement, every credential the old one had (and what OAuth
@@ -486,6 +498,7 @@ func (q *Queries) UpdateMCPServer(ctx context.Context, arg UpdateMCPServerParams
 	row := q.db.QueryRow(ctx, updateMCPServer,
 		arg.Url,
 		arg.AllowedTools,
+		arg.ReadOnlyTools,
 		arg.Enabled,
 		arg.ID,
 	)
@@ -499,6 +512,7 @@ func (q *Queries) UpdateMCPServer(ctx context.Context, arg UpdateMCPServerParams
 		&i.Auth,
 		&i.Secrets,
 		&i.AllowedTools,
+		&i.ReadOnlyTools,
 		&i.Enabled,
 		&i.Oauth,
 		&i.TokenExpiresAt,

@@ -116,6 +116,7 @@ kind: mcp
 url: ` + mcpURL + `
 auth: oauth
 ` + oauthBlock + `tools_default_allow: [get_issue_details]
+tools_read_only: [get_issue_details]
 `})
 	r.Package("agents/oncall-triage", map[string]string{"agent.yaml": strings.Replace(oncall["agent.yaml"], "mcp: [issues-mcp]", "mcp: ["+name+"]", 1),
 		"instructions.md": oncall["instructions.md"]})
