@@ -42,6 +42,26 @@ type Input struct {
 	Package  Package
 	// Handle replaces an agent's suggested handle, when it is taken.
 	Handle string
+	// Undo is told what to do if the installation is not recorded after all, for what an
+	// installer had to do outside the transaction. Nil: nothing is.
+	Undo func(func())
+}
+
+func (in Input) undo(f func()) {
+	if in.Undo != nil {
+		in.Undo(f)
+	}
+}
+
+// undoer collects what to undo when a transaction fails.
+type undoer []func()
+
+func (u *undoer) add(f func()) { *u = append(*u, f) }
+
+func (u undoer) run() {
+	for i := len(u) - 1; i >= 0; i-- {
+		u[i]()
+	}
 }
 
 // Installed is what an installer made.
@@ -153,8 +173,14 @@ func (s *Installations) Install(ctx context.Context, p auth.Principal, req Reque
 	}
 	accepted, _ := json.Marshal(normalPermissions(req.Accepted))
 	var inst db.Installation
+	var undo undoer
+	defer func() {
+		if err != nil {
+			undo.run()
+		}
+	}()
 	err = s.tx(ctx, func(q *db.Queries) error {
-		made, err := installer.Install(ctx, q, Input{Project: req.Project, By: p, Registry: v.RegistryID, Package: pkg, Handle: req.Handle})
+		made, err := installer.Install(ctx, q, Input{Project: req.Project, By: p, Registry: v.RegistryID, Package: pkg, Handle: req.Handle, Undo: undo.add})
 		if err != nil {
 			return err
 		}

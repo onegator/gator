@@ -170,8 +170,14 @@ func (s *Installations) Update(ctx context.Context, p auth.Principal, id pgtype.
 	}
 	acceptedJSON, _ := json.Marshal(orNone(accepted))
 	var out db.Installation
+	var undo undoer
+	defer func() {
+		if err != nil {
+			undo.run()
+		}
+	}()
 	err = s.tx(ctx, func(q *db.Queries) error {
-		made, err := up.Update(ctx, q, inst, Input{Project: inst.ProjectID, By: p, Registry: inst.RegistryID, Package: pkg}, keep)
+		made, err := up.Update(ctx, q, inst, Input{Project: inst.ProjectID, By: p, Registry: inst.RegistryID, Package: pkg, Undo: undo.add}, keep)
 		if err != nil {
 			return err
 		}

@@ -129,3 +129,57 @@ func TestANativePluginIsCheckedBeforeItRuns(t *testing.T) {
 		t.Fatal("its build stays")
 	}
 }
+
+// A native package cannot take the name of a plugin the server ships or one somebody installed:
+// it would take over that plugin's command, and with it every project's secrets for it. A build
+// that does not start as a plugin leaves nothing behind, and removing an installation never
+// removes a plugin it did not put in place.
+func TestANativePackageTakesNoOtherPluginsName(t *testing.T) {
+	h := newHarness(t)
+	if code := h.do("PUT", "/plugins/echo", gen.InstallPlugin{Command: []string{echoPlugin(t)}}, nil); code != 200 {
+		t.Fatalf("install echo: %d", code)
+	}
+	r := marketplacetest.New(t)
+	for _, name := range []string{"echo", h.bundled} {
+		mine, files, _ := nativePackage(t, "")
+		r.Package("integrations/"+name, map[string]string{"integration.yaml": strings.ReplaceAll(files["integration.yaml"], mine, name)})
+	}
+	// A build that is not a plugin at all.
+	junk := []byte("#!/bin/sh\nexit 3\n")
+	sum := sha256.Sum256(junk)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(junk) }))
+	defer srv.Close()
+	broken := fmt.Sprintf("echo-j%d", time.Now().UnixNano())
+	r.Package("integrations/"+broken, map[string]string{"integration.yaml": "name: " + broken + "\nversion: 1.0.0\ndisplay_name: Junk\ndescription: Not a plugin.\nkind: native\nbinaries:\n  " +
+		runtime.GOOS + "/" + runtime.GOARCH + `: {url: "` + srv.URL + `/junk", sha256: "` + hex.EncodeToString(sum[:]) + `"}` + "\n"})
+	r.Publish()
+	reg, _ := h.registry(r)
+
+	var before []gen.InstalledPlugin
+	h.do("GET", "/plugins", nil, &before)
+	for _, name := range []string{"echo", h.bundled} {
+		in := gen.NewInstallation{Kind: "integration", Name: name, RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", name, reg.Id.String())}
+		var refusal gen.InstallRefusal
+		if code := h.do("POST", "/workspace/installations", in, &refusal); code != 409 {
+			t.Fatalf("a package named %s: %d %+v", name, code, refusal)
+		}
+	}
+	var after []gen.InstalledPlugin
+	h.do("GET", "/plugins", nil, &after)
+	for _, p := range after {
+		if p.Name == "echo" && p.Command[0] != echoPlugin(t) {
+			t.Fatalf("echo's command was replaced: %v", p.Command)
+		}
+	}
+
+	in := gen.NewInstallation{Kind: "integration", Name: broken, RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", broken, reg.Id.String())}
+	if code := h.do("POST", "/workspace/installations", in, nil); code != 400 {
+		t.Fatalf("a build that is not a plugin: %d", code)
+	}
+	if n := h.count(`SELECT count(*) FROM plugins WHERE name = $1`, broken); n != 0 {
+		t.Fatal("the broken plugin's row stayed")
+	}
+	if n := h.count(`SELECT count(*) FROM installations WHERE name = $1`, broken); n != 0 {
+		t.Fatal("an installation of nothing")
+	}
+}

@@ -74,7 +74,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	if deps.Download == nil {
 		deps.Download = HTTPDownloader{Net: deps.Net, AllowFile: deps.AllowFileDownloads}
 	}
-	native := NativeTrack{Dir: deps.PluginDir, Platform: deps.Platform, Download: deps.Download, Host: deps.Plugins}
+	native := NativeTrack{Dir: deps.PluginDir, Platform: deps.Platform, Download: deps.Download, Host: deps.Plugins, Plugins: db.New(pool)}
 	tx := func(ctx context.Context, fn func(q *db.Queries) error) error { return store.InTx(ctx, pool, fn) }
 	return &Module{
 		Catalog: catalog,

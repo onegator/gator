@@ -138,3 +138,6 @@ SELECT count(*)::int FROM project_plugins WHERE plugin_id = $1;
 -- name: DeletePlugin :execrows
 -- A plugin no project has set up; one a project has keeps its row (and its calls, which are a record).
 DELETE FROM plugins p WHERE p.id = $1 AND NOT EXISTS (SELECT 1 FROM project_plugins pp WHERE pp.plugin_id = p.id);
+
+-- name: GetPluginByID :one
+SELECT * FROM plugins WHERE id = $1;

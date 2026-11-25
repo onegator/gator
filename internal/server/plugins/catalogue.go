@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/version"
@@ -194,4 +195,18 @@ func (h *Host) CatalogueEntries(ctx context.Context) ([]CatalogueEntry, error) {
 		out = append(out, CatalogueEntry{Bundled: b, Installed: have[b.Name], Connect: h.connectView(b.Name, b.Manifest, nil)})
 	}
 	return out, nil
+}
+
+// Ships says whether the server ships a plugin of that name: one nothing else may take the name of.
+func (h *Host) Ships(ctx context.Context, name string) bool {
+	_, ok := h.bundled(ctx, name)
+	return ok
+}
+
+// Uninstall removes a plugin no project has set up, and stops whatever of it runs.
+func (h *Host) Uninstall(ctx context.Context, id pgtype.UUID) error {
+	if _, err := db.New(h.pool).DeletePlugin(ctx, id); err != nil {
+		return err
+	}
+	return h.Sync(ctx)
 }

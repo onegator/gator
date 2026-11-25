@@ -142,6 +142,26 @@ func (q *Queries) GetEventCursor(ctx context.Context, name string) (int64, error
 	return last_event_id, err
 }
 
+const getPluginByID = `-- name: GetPluginByID :one
+SELECT id, name, command, version, manifest, enabled, created_at, updated_at FROM plugins WHERE id = $1
+`
+
+func (q *Queries) GetPluginByID(ctx context.Context, id pgtype.UUID) (Plugin, error) {
+	row := q.db.QueryRow(ctx, getPluginByID, id)
+	var i Plugin
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Command,
+		&i.Version,
+		&i.Manifest,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPluginByName = `-- name: GetPluginByName :one
 SELECT id, name, command, version, manifest, enabled, created_at, updated_at FROM plugins WHERE name = $1
 `
