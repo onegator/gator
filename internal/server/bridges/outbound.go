@@ -266,7 +266,7 @@ func (s *Service) authorName(ctx context.Context, msg db.Message) (string, bool,
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "an agent", false, nil
 		}
-		return "@" + a.Handle, false, err
+		return "@" + a.Handle, a.Kind == conversations.AgentRemote, err
 	case conversations.AuthorExternal:
 		id, err := s.q.GetExternalIdentity(ctx, msg.AuthorID)
 		if errors.Is(err, pgx.ErrNoRows) {

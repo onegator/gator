@@ -193,6 +193,10 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 	if err := validate(next.Handle, next.DisplayName, next.Description, next.Tier, next.Status); err != nil {
 		return db.Agent{}, err
 	}
+	// An agent outside Gator answers in chat and plays no role: what it says is another system's.
+	if a.Kind == KindRemote && (next.Tier != TierChat || next.RoleKey != nil) {
+		return db.Agent{}, fmt.Errorf("%w: an agent outside Gator chats and plays no role", ErrInvalid)
+	}
 	out, err := d.store.UpdateAgent(ctx, next)
 	if isUniqueViolation(err) {
 		return db.Agent{}, fmt.Errorf("%w: @%s is taken where people would mention it", ErrConflict, next.Handle)

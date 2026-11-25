@@ -18,6 +18,9 @@ const (
 	// KindJob is one running job's own identity: an agent talking back about the work it was
 	// given, and about nothing else.
 	KindJob Kind = "job"
+	// KindA2A is an outside agent a project's admin let in (A2A): it calls the agents the
+	// project exposes at /a2a, and nothing else.
+	KindA2A Kind = "a2a"
 )
 
 // Principal is the authenticated subject of a request.

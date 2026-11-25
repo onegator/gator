@@ -52,6 +52,10 @@ const (
 	AuthorExternal = "external"
 )
 
+// AgentRemote is the kind of an agent outside Gator (A2A): a member whose words are another
+// system's, carried to other agents as untrusted.
+const AgentRemote = "remote"
+
 // Notification levels of a member.
 const (
 	NotifyAll      = "all"

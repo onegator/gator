@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/server/a2a"
 	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
@@ -89,6 +90,8 @@ type Server struct {
 	// Bridges are the messaging plugins' side of the core (account links); nil: their endpoints
 	// answer 503.
 	Bridges *bridges.Service
+	// A2A is agents outside Gator, both ways; nil: their endpoints answer 503.
+	A2A *a2a.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)

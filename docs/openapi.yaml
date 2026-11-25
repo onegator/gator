@@ -1839,6 +1839,111 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SkillInfo" } } } } }
         "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/remote-agents:
+    post:
+      operationId: createRemoteAgent
+      description: >
+        Add an agent outside Gator to the project, through A2A: its Agent Card is fetched (https, no private
+        address unless the server allows them) and checked, and the credential its endpoint takes (HTTP bearer) is
+        kept encrypted and never shown again. The agent is a member like any other — mention it and the turn is an A2A
+        task sent to the card's endpoint — but it chats and plays no role, answers only in conversations open to the
+        whole project, and its answers reach other agents as untrusted. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewRemoteAgent" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/a2a-clients:
+    get:
+      operationId: listA2AClients
+      description: "The outside agents let in to call the project's exposed agents, with what each spent today. For the project's admins."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/A2AClient" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createA2AClient
+      description: >
+        Let an outside agent in: a token (gtr_a2a_…, shown once) that reaches only /a2a/<project>/<agent> of the agents
+        this project exposes, a daily budget (default $5; the cost of the turns it asked for, jobs still running at
+        their cap) and a rate (default 30 requests a minute). What it asks is a message in #a2a-<name>, as an outside
+        identity: agents answer it in chat. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewA2AClient" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/A2AClientCreated" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /a2a-clients/{clientId}:
+    delete:
+      operationId: revokeA2AClient
+      description: "Take a client's token away; what it asked stays in its channel. For the project's admins."
+      parameters: [ { name: clientId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/A2AClient" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /agents/{agentId}/a2a:
+    put:
+      operationId: setAgentA2A
+      description: >
+        Show a project's own agent to its A2A clients, or stop (nobody is shown by default). An exposed agent has an
+        Agent Card at cardUrl that anyone may read, and answers the project's clients at url. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentA2A" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentA2AState" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /a2a/{projectSlug}/{handle}/.well-known/agent-card.json:
+    servers: [ { url: / } ]
+    get:
+      operationId: getA2AAgentCard
+      security: []
+      description: "The Agent Card (A2A 0.3) of an agent the project exposes: name, description, one skill, the JSON-RPC url and HTTP bearer authentication. 404 for any other."
+      parameters:
+        - { name: projectSlug, in: path, required: true, schema: { type: string } }
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/A2AAgentCard" } } } }
+        "404": { description: no such exposed agent }
+  /a2a/{projectSlug}/{handle}:
+    servers: [ { url: / } ]
+    post:
+      operationId: callA2AAgent
+      description: >
+        A2A JSON-RPC 2.0 for the project's clients (Authorization: Bearer gtr_a2a_…; any other token is 401 here, and
+        an A2A token is 403 anywhere else). message/send posts the text parts as the client's message in
+        #a2a-<client>, asking the agent, and answers the task (submitted, working, completed with the answer as status
+        message and artifact, failed, rejected, canceled); with configuration.blocking it waits up to 25 s.
+        messageId makes it idempotent. tasks/get reads a task the client was given; metadata carries turnId and
+        costUsd. tasks/cancel is -32002 (a person stops a turn in Gator); message/stream and tasks/resubscribe are
+        -32004. A spent daily budget is -32010, the rate -32011, an agent that is not exposed or not the client's
+        project's -32602. Errors are JSON-RPC errors with HTTP 200.
+      parameters:
+        - { name: projectSlug, in: path, required: true, schema: { type: string } }
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/JsonRpcRequest" } } }
+      responses:
+        "200": { description: a JSON-RPC response, content: { application/json: { schema: { $ref: "#/components/schemas/JsonRpcResponse" } } } }
+        "401": { description: no A2A client token }
   /projects/{projectId}/external-links:
     post:
       operationId: createExternalLinkCode
@@ -2009,6 +2114,108 @@ components:
         X-Has-More: { schema: { type: boolean } }
       content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } }
   schemas:
+    NewRemoteAgent:
+      type: object
+      required: [handle, cardUrl]
+      properties:
+        handle: { type: string, description: "what people type after @; not taken in the project or the workspace" }
+        cardUrl: { type: string, description: "the Agent Card, or the agent's base address (/.well-known/agent-card.json is added)" }
+        token: { type: string, writeOnly: true, description: "the bearer token its endpoint takes; kept encrypted, never shown" }
+        displayName: { type: string, description: "default: the card's name" }
+    RemoteAgentInfo:
+      type: object
+      description: "What Gator keeps of a remote agent's card. Never its credential, only whether there is one."
+      required: [cardUrl, url, name, hasCredential]
+      properties:
+        cardUrl: { type: string }
+        url: { type: string, description: "its JSON-RPC endpoint" }
+        name: { type: string }
+        description: { type: string }
+        version: { type: string }
+        skills: { type: array, items: { $ref: "#/components/schemas/A2ASkill" } }
+        hasCredential: { type: boolean }
+        fetchedAt: { type: string, format: date-time }
+    A2ASkill:
+      type: object
+      required: [id, name, description]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        tags: { type: array, items: { type: string } }
+    NewA2AClient:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: "1–40 lowercase letters, digits and dashes; its channel is #a2a-<name>" }
+        dailyBudgetUsd: { type: number, format: double, minimum: 0 }
+        perMinute: { type: integer, minimum: 1, maximum: 600 }
+    A2AClient:
+      type: object
+      required: [id, projectId, name, dailyBudgetUsd, perMinute, spentTodayUsd, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        name: { type: string }
+        dailyBudgetUsd: { type: number, format: double }
+        perMinute: { type: integer }
+        spentTodayUsd: { type: number, format: double, description: "the cost of the turns it asked for since 00:00 UTC, jobs still running at their cap" }
+        identityId: { type: string, format: uuid, description: "who it is in its channel (an outside identity, provider a2a)" }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+    A2AClientCreated:
+      type: object
+      required: [client, token]
+      properties:
+        client: { $ref: "#/components/schemas/A2AClient" }
+        token: { type: string, description: "gtr_a2a_…; shown once" }
+    AgentA2A:
+      type: object
+      required: [exposed]
+      properties:
+        exposed: { type: boolean }
+    AgentA2AState:
+      type: object
+      required: [agent, exposed]
+      properties:
+        agent: { $ref: "#/components/schemas/Agent" }
+        exposed: { type: boolean }
+        url: { type: string, description: "where clients call it (when exposed)" }
+        cardUrl: { type: string, description: "its Agent Card (when exposed)" }
+    A2AAgentCard:
+      type: object
+      description: "An A2A 0.3 Agent Card."
+      required: [protocolVersion, name, description, url, version, capabilities, defaultInputModes, defaultOutputModes, skills]
+      properties:
+        protocolVersion: { type: string }
+        name: { type: string }
+        description: { type: string }
+        url: { type: string }
+        preferredTransport: { type: string }
+        version: { type: string }
+        capabilities: { type: object, additionalProperties: true }
+        defaultInputModes: { type: array, items: { type: string } }
+        defaultOutputModes: { type: array, items: { type: string } }
+        skills: { type: array, items: { $ref: "#/components/schemas/A2ASkill" } }
+        securitySchemes: { type: object, additionalProperties: true }
+        security: { type: array, items: { type: object, additionalProperties: true } }
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, id, method]
+      properties:
+        jsonrpc: { type: string, enum: ["2.0"] }
+        id: { description: "a string or a number" }
+        method: { type: string, description: "message/send, tasks/get" }
+        params: { type: object, additionalProperties: true }
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc: { type: string }
+        id: { description: "the request's" }
+        result: { type: object, additionalProperties: true, description: "an A2A Task: {kind: task, id, contextId, status: {state, message?}, artifacts?, metadata?}" }
+        error: { type: object, properties: { code: { type: integer }, message: { type: string } } }
     NewExternalLink:
       type: object
       required: [provider]
@@ -3377,6 +3584,9 @@ components:
         status: { type: string, enum: [active, paused], description: "a paused agent refuses turns and says so" }
         source: { type: object, additionalProperties: true, description: "{kind: builtin | custom | marketplace, …}" }
         builtin: { type: boolean, description: "one of every project's defaults: paused, never deleted" }
+        kind: { type: string, description: "local (runs on a runner) or remote (an agent outside Gator, asked over A2A)" }
+        remote: { $ref: "#/components/schemas/RemoteAgentInfo" }
+        a2aExposed: { type: boolean, description: "shown to the project's A2A clients" }
         createdBy: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

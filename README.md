@@ -82,6 +82,34 @@ never the same agent twice in a row, the project's daily budget, and a paused ag
 person's reply while an agent answers steers it; Stop is `POST /turns/{id}/stop`. The rules live in
 `internal/server/agents`, the conversation an agent is told in `internal/server/conversations/context.go`.
 
+## Outside Gator: bridges and A2A
+
+**Bridges** are plugins with the `messaging` capability: the bundled `slack` (channels, threads,
+`/gator ask`, Approve on a decision card) and `github` (`@gator reviewer …` in a comment, the answer
+as a comment). The core keeps their rules in `internal/server/bridges`: a bridge acts in its own
+project, only on conversations it connected, never on a private one; what came through a bridge is
+never mirrored back to it; an outside account is an identity of that project and bridge
+(`external_identities`), heard by agents in chat and fenced as untrusted, approving nothing, until
+its person links it with a code made in Gator (`POST /projects/{id}/external-links`, ten minutes,
+once — never by email address); a linked member's Approve is `process.Approve` in their name. An
+agent's answer streams out at most every 2 s.
+
+**A2A**: a project's admin adds an agent outside Gator from its Agent Card (`POST
+/projects/{id}/remote-agents`, card fetched through `netguard`, its bearer token encrypted with the
+keyring). Mentioning it is a turn like any other, under the same hop, fan-out and budget guards; the
+turn is an A2A task (`message/send`, then `tasks/get` until it ends) made by a worker in the server,
+its answer written into the agent's message and carried to other agents as untrusted. It answers
+only in conversations open to the whole project. Inbound, the admin exposes agents (`PUT
+/agents/{id}/a2a`) and lets clients in (`POST /projects/{id}/a2a-clients`: a `gtr_a2a_…` token that
+reaches only `/a2a/<project>/<agent>`, a daily budget, a rate). A client's ask is its message in
+`#a2a-<client>`, answered in chat; it reads the answer from `tasks/get`. Cards are at
+`/a2a/<project>/<agent>/.well-known/agent-card.json`.
+
+**To check live before relying on it:** the A2A version and card path of the peers a team uses
+(0.3, `/.well-known/agent-card.json`; older peers serve `agent.json`), whether they answer
+`message/send` with a task or a message, and how they report cost (nothing reads it yet: a remote
+turn costs $0 in Gator's records). Every test here talks to a fake peer.
+
 ## Brain
 
 What the team and its agents know lives in one store, `brain_entries` (`internal/server/brain`):

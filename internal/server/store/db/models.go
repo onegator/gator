@@ -8,25 +8,65 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type Agent struct {
-	ID           pgtype.UUID        `json:"id"`
+type A2aCall struct {
+	TurnID       pgtype.UUID        `json:"turn_id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
 	ProjectID    pgtype.UUID        `json:"project_id"`
-	Handle       string             `json:"handle"`
-	DisplayName  string             `json:"display_name"`
-	Description  string             `json:"description"`
-	Avatar       string             `json:"avatar"`
-	RoleKey      *string            `json:"role_key"`
-	Instructions string             `json:"instructions"`
-	Tier         string             `json:"tier"`
-	Policy       []byte             `json:"policy"`
-	Tools        []byte             `json:"tools"`
-	Skills       []byte             `json:"skills"`
 	Status       string             `json:"status"`
-	Source       []byte             `json:"source"`
-	CreatedBy    pgtype.UUID        `json:"created_by"`
+	RemoteTaskID string             `json:"remote_task_id"`
+	Attempts     int32              `json:"attempts"`
+	Error        string             `json:"error"`
+	ClaimedAt    pgtype.Timestamptz `json:"claimed_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
+	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+}
+
+type A2aClient struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Name           string             `json:"name"`
+	TokenID        pgtype.UUID        `json:"token_id"`
+	IdentityID     pgtype.UUID        `json:"identity_id"`
+	DailyBudgetUsd float64            `json:"daily_budget_usd"`
+	PerMinute      int32              `json:"per_minute"`
+	CreatedBy      pgtype.UUID        `json:"created_by"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type A2aTask struct {
+	ID        pgtype.UUID        `json:"id"`
+	ClientID  pgtype.UUID        `json:"client_id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	MessageID pgtype.UUID        `json:"message_id"`
+	ContextID string             `json:"context_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type Agent struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Handle        string             `json:"handle"`
+	DisplayName   string             `json:"display_name"`
+	Description   string             `json:"description"`
+	Avatar        string             `json:"avatar"`
+	RoleKey       *string            `json:"role_key"`
+	Instructions  string             `json:"instructions"`
+	Tier          string             `json:"tier"`
+	Policy        []byte             `json:"policy"`
+	Tools         []byte             `json:"tools"`
+	Skills        []byte             `json:"skills"`
+	Status        string             `json:"status"`
+	Source        []byte             `json:"source"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
+	Kind          string             `json:"kind"`
+	Remote        []byte             `json:"remote"`
+	RemoteSecrets string             `json:"remote_secrets"`
+	A2aExposed    bool               `json:"a2a_exposed"`
 }
 
 type AgentCall struct {

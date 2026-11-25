@@ -126,13 +126,18 @@ func (c ConnectSpec) ProviderName(plugin string) string {
 
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
+// Reserved are names no plugin may take: the core speaks for them. "a2a" is the provider of A2A
+// clients' identities and conversations, which a plugin of that name would otherwise share.
+var Reserved = []string{"a2a"}
+
 // ValidName reports whether s can name a plugin.
-func ValidName(s string) bool { return nameRe.MatchString(s) }
+func ValidName(s string) bool { return nameRe.MatchString(s) && !slices.Contains(Reserved, s) }
 
 // Validate checks a manifest before the core accepts it.
 func (m Manifest) Validate() error {
-	if !nameRe.MatchString(m.Name) {
-		return fmt.Errorf("manifest: name %q must be lowercase letters, digits and dashes", m.Name)
+	if !ValidName(m.Name) {
+		return fmt.Errorf("manifest: name %q must be lowercase letters, digits and dashes, and not one the core keeps (%s)",
+			m.Name, strings.Join(Reserved, ", "))
 	}
 	if m.Version == "" {
 		return fmt.Errorf("manifest: version is required")

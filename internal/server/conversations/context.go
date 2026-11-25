@@ -249,9 +249,14 @@ func where(root, conv db.Conversation) string {
 type namer struct {
 	store packStore
 	seen  map[string]string
+	// outside are the authors whose words came from outside the workspace though they are
+	// members: remote agents, whose answers are another system's.
+	outside map[string]bool
 }
 
-func newNamer(store packStore) *namer { return &namer{store: store, seen: map[string]string{}} }
+func newNamer(store packStore) *namer {
+	return &namer{store: store, seen: map[string]string{}, outside: map[string]bool{}}
+}
 
 func (n *namer) said(ctx context.Context, m db.Message, max int) (Said, error) {
 	who, err := n.who(ctx, m)
@@ -265,7 +270,8 @@ func (n *namer) said(ctx context.Context, m db.Message, max int) (Said, error) {
 	if len(body) > max {
 		body = truncateUTF8(body, max) + "\n… [cut]"
 	}
-	return Said{Seq: m.Seq, Who: who, Body: body, Untrusted: m.AuthorKind == AuthorPlugin || m.AuthorKind == AuthorExternal}, nil
+	untrusted := m.AuthorKind == AuthorPlugin || m.AuthorKind == AuthorExternal || n.outside[m.AuthorKind+":"+uuidString(m.AuthorID)]
+	return Said{Seq: m.Seq, Who: who, Body: body, Untrusted: untrusted}, nil
 }
 
 func (n *namer) who(ctx context.Context, m db.Message) (string, error) {
@@ -294,6 +300,10 @@ func (n *namer) who(ctx context.Context, m db.Message) (string, error) {
 		s = "an agent"
 		if err == nil {
 			s = "@" + a.Handle
+			if a.Kind == AgentRemote {
+				s += " (an agent outside Gator)"
+				n.outside[key] = true
+			}
 		}
 	case AuthorPlugin:
 		s = "a plugin"

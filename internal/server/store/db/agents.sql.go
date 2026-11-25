@@ -32,7 +32,7 @@ func (q *Queries) AgentCostSince(ctx context.Context, arg AgentCostSinceParams) 
 }
 
 const agentForRole = `-- name: AgentForRole :one
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed FROM agents
 WHERE role_key = $1 AND (project_id = $2 OR project_id IS NULL) AND deleted_at IS NULL
 ORDER BY project_id IS NULL, (source->>'kind' = 'builtin'), created_at DESC
 LIMIT 1
@@ -68,6 +68,10 @@ func (q *Queries) AgentForRole(ctx context.Context, arg AgentForRoleParams) (Age
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Kind,
+		&i.Remote,
+		&i.RemoteSecrets,
+		&i.A2aExposed,
 	)
 	return i, err
 }
@@ -220,7 +224,7 @@ const createAgent = `-- name: CreateAgent :one
 INSERT INTO agents (project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, status, source, created_by)
 VALUES ($1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, '{"kind":"custom"}', $11)
-RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed
 `
 
 type CreateAgentParams struct {
@@ -271,6 +275,10 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Kind,
+		&i.Remote,
+		&i.RemoteSecrets,
+		&i.A2aExposed,
 	)
 	return i, err
 }
@@ -333,7 +341,7 @@ func (q *Queries) EndClaimedTurn(ctx context.Context, arg EndClaimedTurnParams) 
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE id = $1
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -358,12 +366,16 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Kind,
+		&i.Remote,
+		&i.RemoteSecrets,
+		&i.A2aExposed,
 	)
 	return i, err
 }
 
 const getAgentByHandle = `-- name: GetAgentByHandle :one
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed FROM agents
 WHERE handle = $1 AND (project_id = $2 OR project_id IS NULL) AND deleted_at IS NULL
 LIMIT 1
 `
@@ -396,6 +408,10 @@ func (q *Queries) GetAgentByHandle(ctx context.Context, arg GetAgentByHandlePara
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Kind,
+		&i.Remote,
+		&i.RemoteSecrets,
+		&i.A2aExposed,
 	)
 	return i, err
 }
@@ -795,7 +811,7 @@ func (q *Queries) ListAgentTurns(ctx context.Context, arg ListAgentTurnsParams) 
 }
 
 const listAgentsVisibleIn = `-- name: ListAgentsVisibleIn :many
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE (project_id = $1 OR project_id IS NULL) AND deleted_at IS NULL
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed FROM agents WHERE (project_id = $1 OR project_id IS NULL) AND deleted_at IS NULL
 ORDER BY handle
 `
 
@@ -828,6 +844,10 @@ func (q *Queries) ListAgentsVisibleIn(ctx context.Context, projectID pgtype.UUID
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.Kind,
+			&i.Remote,
+			&i.RemoteSecrets,
+			&i.A2aExposed,
 		); err != nil {
 			return nil, err
 		}
@@ -1020,7 +1040,7 @@ func (q *Queries) ListWaitingTurns(ctx context.Context, before pgtype.Timestampt
 }
 
 const listWorkspaceAgents = `-- name: ListWorkspaceAgents :many
-SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at FROM agents WHERE project_id IS NULL AND deleted_at IS NULL ORDER BY handle
+SELECT id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed FROM agents WHERE project_id IS NULL AND deleted_at IS NULL ORDER BY handle
 `
 
 func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
@@ -1051,6 +1071,10 @@ func (q *Queries) ListWorkspaceAgents(ctx context.Context) ([]Agent, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.Kind,
+			&i.Remote,
+			&i.RemoteSecrets,
+			&i.A2aExposed,
 		); err != nil {
 			return nil, err
 		}
@@ -1200,7 +1224,7 @@ SET handle = $1, display_name = $2, description = $3,
     avatar = $4, role_key = $5, instructions = $6, tier = $7,
     policy = $8, status = $9, tools = $10, skills = $11, updated_at = now()
 WHERE id = $12
-RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed
 `
 
 type UpdateAgentParams struct {
@@ -1253,6 +1277,10 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Kind,
+		&i.Remote,
+		&i.RemoteSecrets,
+		&i.A2aExposed,
 	)
 	return i, err
 }
