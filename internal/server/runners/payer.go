@@ -39,13 +39,19 @@ func (f PayerRuleFunc) Payer(ctx context.Context, q *db.Queries, j PayerQuestion
 	return f(ctx, q, j)
 }
 
-// Payers asks its rules in order; the first to name a person decides.
+// ErrNobodyPays is a rule's answer that nobody pays, and that no later rule may say otherwise.
+var ErrNobodyPays = errors.New("nobody pays")
+
+// Payers asks its rules in order; the first to name a person, or to say nobody pays, decides.
 type Payers []PayerRule
 
 // Payer implements PayerResolver.
 func (p Payers) Payer(ctx context.Context, q *db.Queries, j PayerQuestion) (pgtype.UUID, error) {
 	for _, r := range p {
 		who, err := r.Payer(ctx, q, j)
+		if errors.Is(err, ErrNobodyPays) {
+			return pgtype.UUID{}, nil
+		}
 		if err != nil || who.Valid {
 			return who, err
 		}
@@ -57,7 +63,9 @@ func (p Payers) Payer(ctx context.Context, q *db.Queries, j PayerQuestion) (pgty
 //
 //  1. the payer the caller named (the person whose turn a summary serves);
 //  2. the person who asked for the job: ran a task, asked an agent, answered a card;
-//  3. for a turn an agent asked for, the person the chain of turns acts for;
+//  3. for a turn an agent asked for, the person the chain of turns acts for; a turn with nobody
+//     behind it — asked from Slack, GitHub or A2A, by somebody who is not a member — has no payer
+//     at all: an outsider never spends a member's login;
 //  4. for a task an automation created, the person who switched the automation on;
 //  5. the person who created the task: its process phases, its summaries, its curation;
 //  6. the person who allowed agents on the task (a task raised from outside has no creator).
@@ -94,7 +102,7 @@ func turnPrincipal(ctx context.Context, q *db.Queries, j PayerQuestion) (pgtype.
 	if turn.RequestedByKind == string(process.ActorUser) {
 		return turn.RequestedBy, nil
 	}
-	return pgtype.UUID{}, nil
+	return pgtype.UUID{}, ErrNobodyPays
 }
 
 func automationEnabler(ctx context.Context, q *db.Queries, j PayerQuestion) (pgtype.UUID, error) {

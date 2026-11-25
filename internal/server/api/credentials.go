@@ -1,13 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
+	"github.com/onegator/gator/internal/redact"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/credentials"
@@ -252,4 +255,44 @@ func toCredentials(views []credentials.View) []gen.ModelCredential {
 func toCredential(v credentials.View) gen.ModelCredential {
 	return gen.ModelCredential{Kind: v.Kind, Backend: v.Backend, Label: v.Label, Hint: v.Hint, Status: gen.ModelCredentialStatus(v.Status),
 		LastError: v.LastError, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, CheckedAt: v.CheckedAt, LastUsedAt: v.LastUsedAt}
+}
+
+// maxMaskedBody is the largest request a job on its payer's login may send: its body is read whole
+// to be masked.
+const maxMaskedBody = 16 << 20
+
+// maskJobLogins masks, in everything a job's agent sends with its own token — gator-cli and the
+// MCP tools writing messages, Brain entries, artifacts; calls through the remote MCP proxy — the
+// values of the login the job runs on. An agent can print its login; what it writes into Gator
+// should not keep it, nor carry it on to a remote server.
+func (s *Server) maskJobLogins(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := auth.FromContext(r.Context())
+		if !ok || p.Kind != auth.KindJob || !p.JobID.Valid || s.Credentials == nil || r.Body == nil || r.Body == http.NoBody {
+			next.ServeHTTP(w, r)
+			return
+		}
+		job, err := db.New(s.Pool).GetJob(r.Context(), p.JobID)
+		if err != nil || !job.CredentialID.Valid {
+			next.ServeHTTP(w, r)
+			return
+		}
+		values := s.Credentials.Sensitive(r.Context(), job)
+		if len(values) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		b, err := io.ReadAll(io.LimitReader(r.Body, maxMaskedBody+1))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "the request body could not be read", "invalid")
+			return
+		}
+		if len(b) > maxMaskedBody {
+			writeError(w, http.StatusRequestEntityTooLarge, "a job on its payer's login sends at most 16 MiB at a time", "too_large")
+			return
+		}
+		masked := []byte(redact.Values(string(b), values))
+		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(masked)), int64(len(masked))
+		next.ServeHTTP(w, r)
+	})
 }

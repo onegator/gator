@@ -429,3 +429,27 @@ func TestASubscriptionsCheckCannotRefuseIt(t *testing.T) {
 		t.Fatalf("%+v %v", v, err)
 	}
 }
+
+// A turn nobody in the workspace asked for — from Slack, GitHub, A2A — has no payer, whoever
+// created its task: an outsider never spends a member's login.
+func TestAnOutsidersTurnHasNoPayer(t *testing.T) {
+	f := newFixture(t)
+	ann := f.user("Ann")
+	task, err := f.proc.Create(f.ctx, process.CreateParams{ProjectID: f.project, Kind: "bug", Title: "Thread"}, process.Actor{Kind: process.ActorUser, ID: ann})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var turn pgtype.UUID
+	if err := f.pool.QueryRow(f.ctx, `WITH a AS (INSERT INTO agents (project_id, handle, display_name) VALUES ($1, 'helper-'||substr(md5(random()::text), 1, 6), 'H') RETURNING id),
+		c AS (INSERT INTO conversations (project_id, kind, name, visibility, created_by_kind) VALUES ($1, 'channel', 'out-'||substr(md5(random()::text), 1, 6), 'project', 'system') RETURNING id),
+		m AS (INSERT INTO messages (conversation_id, seq, author_kind, kind, body, origin, status) SELECT id, 1, 'system', 'text', 'hi', '{}', 'final' FROM c RETURNING id, conversation_id)
+		INSERT INTO agent_turns (agent_id, project_id, conversation_id, trigger_message_id, requested_by_kind, tier, status, chain_id)
+		SELECT a.id, $1, m.conversation_id, m.id, 'external', 'chat', 'queued', gen_random_uuid() FROM a, m RETURNING id`, f.project).Scan(&turn); err != nil {
+		t.Fatal(err)
+	}
+	who, err := runners.DefaultPayers().Payer(f.ctx, f.q, runners.PayerQuestion{Task: task, Kind: runners.KindReply,
+		CreatedBy: process.Actor{Kind: process.ActorSystem}, Turn: turn})
+	if err != nil || who.Valid {
+		t.Fatalf("an outsider's turn is paid by %v (%v)", who, err)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/redact"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -70,6 +71,7 @@ func (s *session) turnEnding(te proto.TurnEnding) {
 		return
 	}
 
+	te = s.maskTurnEnding(ctx, job, te)
 	limit := s.m.cfg.MaxObjections
 	objections := s.objections(ctx, job, te)
 	if len(objections) == 0 {
@@ -121,4 +123,26 @@ func (s *session) coreObjection(ctx context.Context, job db.Job, te proto.TurnEn
 	return &proto.Objection{Source: "gator", Reason: "This task was planned and this turn committed nothing. " +
 		"Either carry out the plan from the planning phase and commit the work, or, if the plan cannot be " +
 		"carried out, stop and say why with `gator-cli task blocked --reason \"...\"` instead of finishing."}
+}
+
+// maskTurnEnding is te as the plugins judging the turn read it: what the agent said, and nothing
+// of the login it runs on.
+func (s *session) maskTurnEnding(ctx context.Context, job db.Job, te proto.TurnEnding) proto.TurnEnding {
+	masks := s.masksOf(ctx, job)
+	if len(masks) == 0 {
+		return te
+	}
+	te.Summary = redact.Values(te.Summary, masks)
+	if d := te.Digest; d != nil {
+		masked := *d
+		for _, l := range []*[]string{&masked.Changes, &masked.Decisions, &masked.Rejected, &masked.Left} {
+			out := make([]string, len(*l))
+			for i, v := range *l {
+				out[i] = redact.Values(v, masks)
+			}
+			*l = out
+		}
+		te.Digest = &masked
+	}
+	return te
 }

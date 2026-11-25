@@ -305,3 +305,20 @@ func TestOneRunnerHoldsOnePayersLoginAtATime(t *testing.T) {
 		t.Fatalf("after the first ended: %v", next)
 	}
 }
+
+// The plugins judging whether a turn may end read what the agent said, masked of its login.
+func TestTheJudgeReadsNothingOfTheLogin(t *testing.T) {
+	f := newFixture(t)
+	job, _, _ := f.payersJob(t)
+	s := f.session(t)
+	s.caps.PayerLogins = []string{f.backend}
+	if _, err := s.lease(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	job = f.job(t, job.ID)
+	te := s.maskTurnEnding(context.Background(), job, proto.TurnEnding{JobID: uuidString(job.ID), Summary: "used " + payerSecret,
+		Digest: &proto.Digest{Left: []string{"rotate " + payerSecret}}})
+	if strings.Contains(te.Summary+strings.Join(te.Digest.Left, ""), payerSecret) {
+		t.Fatalf("the judge would read %+v", te)
+	}
+}

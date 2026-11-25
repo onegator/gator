@@ -124,6 +124,7 @@ func (s *Server) Router() http.Handler {
 	}
 	r.Use(auth.Authenticate(s.Tokens, s.DevAuth, s.Log))
 	r.Use(auth.AuditWith(db.New(s.Pool), s.Log))
+	r.Use(s.maskJobLogins)
 	r.Route("/auth", func(r chi.Router) {
 		r.Get("/config", s.authConfig)
 		if s.OIDC != nil {

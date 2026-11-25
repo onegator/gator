@@ -294,7 +294,10 @@ app (Settings → Model logins), with `gator credentials set KIND`, or with
 | `openai_api_key` | a platform API key (`sk-…`), billed per token | `OPENAI_API_KEY`, `CODEX_API_KEY` and a fresh `CODEX_HOME` |
 
 **Who pays.** The person who asked for the job: ran a task, asked an agent, answered a card.
-For a turn one agent asked another for, the person the chain acts for. For the work of an
+For a turn one agent asked another for, the person the chain acts for. A turn nobody in the
+workspace asked for — from Slack, GitHub or A2A, by somebody who is not a member — has **no
+payer**: it runs on the runners' own login when the workspace lends it, and waits otherwise. An
+outsider never spends a member's login. For the work of an
 automation, the person who switched it on. For a task's process phases, its summaries and its
 Brain curation, the task's creator (for curation, the conversation's creator first; for a summary,
 the person whose turn found it stale). Failing all of those, the person who allowed agents on the
@@ -372,8 +375,10 @@ accounts:
   somebody else.
 
 The runner masks every value of a job's login in what it sends (events, summaries, digests,
-receipts), and the server masks them again before storing or publishing anything; logs never
-carry them. A job on its payer's login gets **none of the runner's own login variables**
+receipts, a rotated token from the moment it is written), and the server masks them again before
+storing or publishing anything — including everything the job's agent sends with its own token
+(gator-cli, the MCP tools, calls through the remote MCP proxy) and what plugins judging a turn
+read; logs never carry them. A job on its payer's login gets **none of the runner's own login variables**
 (`ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_*`, `CODEX_*`, `AWS_*`, …). A login the
 runner's user keeps on disk (`~/.claude/.credentials.json`, the macOS keychain) is still readable
 by the agent, as everything of that user is, but Claude Code prefers the login in its environment
