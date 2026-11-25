@@ -148,3 +148,120 @@ func TestAPackageChangedAfterPublishingIsTurnedAway(t *testing.T) {
 		t.Fatalf("a registry nothing came from is removed: %d", code)
 	}
 }
+
+// accept is every permission a package asks for, as a person ticking every box sends them.
+func (h *harness) accept(kind, name, registry string) []string {
+	h.t.Helper()
+	var d gen.MarketplaceDetail
+	q := ""
+	if registry != "" {
+		q = "?registryId=" + registry
+	}
+	if code := h.do("GET", "/marketplace/"+kind+"/"+name+q, nil, &d); code != 200 {
+		h.t.Fatalf("details of %s/%s: %d", kind, name, code)
+	}
+	return d.Manifest.Permissions
+}
+
+func (h *harness) install(projectID string, in gen.NewInstallation) gen.Installation {
+	h.t.Helper()
+	var inst gen.Installation
+	if code := h.do("POST", "/projects/"+projectID+"/installations", in, &inst); code != 201 {
+		h.t.Fatalf("install %s/%s: %d", in.Kind, in.Name, code)
+	}
+	return inst
+}
+
+// A project's admin installs QA Engineer from Gator's registry, accepting what it asks: @qa is
+// among the project's agents at once, the way @autocomplete reads them. Until every permission is
+// accepted nothing is installed; a handle that is taken is chosen again.
+func TestInstallingQAEngineerPutsQAInTheProjectAtOnce(t *testing.T) {
+	h := newHarness(t)
+	p := h.oneProject("qa")
+	project := p.Id.String()
+
+	var before gen.MarketplaceDetail
+	h.do("GET", "/marketplace/agent/qa-engineer?projectId="+project, nil, &before)
+	if before.Installed != nil || before.Missing == nil || !slices.Contains(*before.Missing, "capability ci") || !slices.Contains(*before.Missing, "skill go-testing") {
+		t.Fatalf("what the project lacks: installed %+v, missing %v", before.Installed, before.Missing)
+	}
+	asked := before.Manifest.Permissions
+
+	var refused gen.InstallRefusal
+	if code := h.do("POST", "/projects/"+project+"/installations", gen.NewInstallation{Kind: "agent", Name: "qa-engineer",
+		AcceptedPermissions: asked[:2]}, &refused); code != 409 || refused.Code != "permissions_not_accepted" || refused.Permissions == nil ||
+		len(*refused.Permissions) != len(asked)-2 {
+		t.Fatalf("half accepted: %d %+v", code, refused)
+	}
+	member := h.member(project, "member")
+	if code := h.asJob(member, "POST", "/projects/"+project+"/installations", gen.NewInstallation{Kind: "agent", Name: "qa-engineer",
+		AcceptedPermissions: asked}, nil); code != 403 {
+		t.Fatalf("a member installs: %d", code)
+	}
+	var agents []gen.Agent
+	h.do("GET", "/projects/"+project+"/agents", nil, &agents)
+	if _, ok := handles(agents)["qa"]; ok {
+		t.Fatal("nothing is installed before everything is accepted")
+	}
+
+	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "qa-engineer", AcceptedPermissions: asked})
+	if inst.Agent == nil || inst.Agent.Handle != "qa" || inst.Version != "1.2.0" || len(inst.AcceptedPermissions) != len(asked) {
+		t.Fatalf("installation: %+v", inst)
+	}
+	h.asJob(member, "GET", "/projects/"+project+"/agents", nil, &agents)
+	qa, ok := handles(agents)["qa"]
+	if !ok {
+		t.Fatal("@qa is not among the project's agents")
+	}
+	if qa.Source["kind"] != "marketplace" || qa.Source["package"] != "qa-engineer" || qa.Tier != "work" || qa.DisplayName != "QA Engineer" ||
+		!slices.Equal(qa.Skills, []string{"e2e-playwright", "go-testing"}) || !strings.Contains(qa.Instructions, "acceptance criteria") ||
+		qa.Policy.MaxCostUsd == nil || *qa.Policy.MaxCostUsd != 3 {
+		t.Fatalf("@qa: %+v", qa)
+	}
+	var listed []gen.MarketplaceItem
+	h.do("GET", "/marketplace?kind=agent&projectId="+project, nil, &listed)
+	if len(listed) == 0 || listed[0].Installed == nil || listed[0].Installed.Version != "1.2.0" || listed[0].Installed.UpdateAvailable {
+		t.Fatalf("the catalogue says it is installed: %+v", listed)
+	}
+	var refusal gen.InstallRefusal
+	if code := h.do("POST", "/projects/"+project+"/installations", gen.NewInstallation{Kind: "agent", Name: "qa-engineer",
+		AcceptedPermissions: asked}, &refusal); code != 409 || refusal.Code != "conflict" {
+		t.Fatalf("installed twice: %d %+v", code, refusal)
+	}
+
+	// Another agent suggesting the same handle: the admin chooses another.
+	r := marketplacetest.New(t)
+	bot := map[string]string{}
+	for k, v := range marketplacetest.QAEngineer {
+		bot[k] = strings.Replace(strings.Replace(v, "name: qa-engineer", "name: qa-bot", 1), "display_name: QA Engineer", "display_name: QA Bot", 1)
+	}
+	r.Package("agents/qa-bot", bot)
+	r.Publish()
+	reg, _ := h.registry(r)
+	botAsked := h.accept("agent", "qa-bot", reg.Id.String())
+	if code := h.do("POST", "/projects/"+project+"/installations", gen.NewInstallation{Kind: "agent", Name: "qa-bot", RegistryId: &reg.Id,
+		AcceptedPermissions: botAsked}, &refusal); code != 409 || !strings.Contains(refusal.Error, "@qa is taken") {
+		t.Fatalf("a taken handle: %d %+v", code, refusal)
+	}
+	other := "qa2"
+	if b := h.install(project, gen.NewInstallation{Kind: "agent", Name: "qa-bot", RegistryId: &reg.Id, AcceptedPermissions: botAsked, Handle: &other}); b.Agent.Handle != "qa2" {
+		t.Fatalf("another handle: %+v", b.Agent)
+	}
+
+	// An installed agent is removed with its installation, not by hand.
+	if code := h.do("DELETE", "/agents/"+qa.Id.String(), nil, nil); code != 409 {
+		t.Fatalf("deleting an installed agent by hand: %d", code)
+	}
+	if code := h.do("DELETE", "/installations/"+inst.Id.String(), nil, nil); code != 204 {
+		t.Fatalf("uninstall: %d", code)
+	}
+	h.do("GET", "/projects/"+project+"/agents", nil, &agents)
+	if _, ok := handles(agents)["qa"]; ok {
+		t.Fatal("@qa stays after its installation is removed")
+	}
+	var installs []gen.Installation
+	h.do("GET", "/projects/"+project+"/installations", nil, &installs)
+	if len(installs) != 1 || installs[0].Name != "qa-bot" {
+		t.Fatalf("installations: %+v", installs)
+	}
+}

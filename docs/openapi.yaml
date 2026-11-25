@@ -1740,8 +1740,69 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MarketplaceDetail" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/installations:
+    get:
+      operationId: listProjectInstallations
+      description: "What the project installed from the marketplace, with the version, the permissions accepted and whether an update waits."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Installation" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: installIntoProject
+      description: >
+        Install a package into the project, for its admins. acceptedPermissions must hold every permission the
+        package's version asks for (its manifest's permissions, line for line); otherwise nothing is installed and 409
+        names what is still to accept. An agent's handle is the package's suggestion unless handle says another; one
+        taken where people would see it is 409 too. An installed agent is in the project's agents (and @autocomplete)
+        at once.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInstallation" } } }
+      responses:
+        "201": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, or already installed, or the handle is taken", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+  /workspace/installations:
+    get:
+      operationId: listWorkspaceInstallations
+      description: "What the workspace installed for every project: workspace agents, skills, native plugins."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Installation" } } } } }
+    post:
+      operationId: installIntoWorkspace
+      description: "Install a package for the whole workspace (an agent every project sees, a skill, a native plugin, a process for every project). Workspace admins only; the same acceptance as a project's."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInstallation" } } }
+      responses:
+        "201": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, or already installed", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+  /installations/{installationId}:
+    get:
+      operationId: getInstallation
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeInstallation
+      description: "Uninstall: an agent is put away (its turns stay), a skill, an MCP server or a process goes. For the project's admins, or workspace admins."
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
   parameters:
+    installationId: { name: installationId, in: path, required: true, schema: { type: string, format: uuid } }
     registryId: { name: registryId, in: path, required: true, schema: { type: string, format: uuid } }
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -3391,3 +3452,39 @@ components:
         checksum: { type: string }
         listed: { type: boolean, description: "false: the registry no longer offers it; it stays where it is installed" }
         permissions: { type: array, items: { type: string } }
+    NewInstallation:
+      type: object
+      required: [kind, name, acceptedPermissions]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string, description: "default: the newest offered" }
+        registryId: { type: string, format: uuid, description: "default: whichever registry offers it, Gator's first" }
+        acceptedPermissions: { type: array, items: { type: string }, description: "the permissions the person ticked, as the package words them" }
+        handle: { type: string, description: "an agent's handle, when the suggested one is taken" }
+    Installation:
+      type: object
+      required: [id, registryId, kind, name, version, checksum, acceptedPermissions, installedBy, installedAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: installed for the workspace" }
+        registryId: { type: string, format: uuid }
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        checksum: { type: string }
+        targetId: { type: string, format: uuid, description: "what it made: the agent, skill, MCP server, plugin or knowledge pack" }
+        acceptedPermissions: { type: array, items: { type: string } }
+        installedBy: { type: string, format: uuid }
+        installedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        updateAvailable: { type: string, description: "the newest version offered, when it is newer than this one" }
+        missing: { type: array, items: { type: string }, description: "what the project lacks to run it" }
+        agent: { $ref: "#/components/schemas/Agent" }
+    InstallRefusal:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, description: "permissions_not_accepted | conflict" }
+        permissions: { type: array, items: { type: string }, description: "with permissions_not_accepted: what is still to accept" }

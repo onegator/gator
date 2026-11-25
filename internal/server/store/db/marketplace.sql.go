@@ -22,6 +22,72 @@ func (q *Queries) CountRegistryInstallations(ctx context.Context, registryID pgt
 	return column_1, err
 }
 
+const createInstalledAgent = `-- name: CreateInstalledAgent :one
+INSERT INTO agents (project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills,
+                    status, source, created_by)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, 'active', $12,
+        $13)
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
+`
+
+type CreateInstalledAgentParams struct {
+	ProjectID    pgtype.UUID `json:"project_id"`
+	Handle       string      `json:"handle"`
+	DisplayName  string      `json:"display_name"`
+	Description  string      `json:"description"`
+	Avatar       string      `json:"avatar"`
+	RoleKey      *string     `json:"role_key"`
+	Instructions string      `json:"instructions"`
+	Tier         string      `json:"tier"`
+	Policy       []byte      `json:"policy"`
+	Tools        []byte      `json:"tools"`
+	Skills       []byte      `json:"skills"`
+	Source       []byte      `json:"source"`
+	CreatedBy    pgtype.UUID `json:"created_by"`
+}
+
+// An agent from the marketplace: its tools and skills come with it, and its source says where from.
+func (q *Queries) CreateInstalledAgent(ctx context.Context, arg CreateInstalledAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, createInstalledAgent,
+		arg.ProjectID,
+		arg.Handle,
+		arg.DisplayName,
+		arg.Description,
+		arg.Avatar,
+		arg.RoleKey,
+		arg.Instructions,
+		arg.Tier,
+		arg.Policy,
+		arg.Tools,
+		arg.Skills,
+		arg.Source,
+		arg.CreatedBy,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Handle,
+		&i.DisplayName,
+		&i.Description,
+		&i.Avatar,
+		&i.RoleKey,
+		&i.Instructions,
+		&i.Tier,
+		&i.Policy,
+		&i.Tools,
+		&i.Skills,
+		&i.Status,
+		&i.Source,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const createRegistry = `-- name: CreateRegistry :one
 INSERT INTO marketplace_registries (name, url, public_key, created_by)
 VALUES ($1, $2, $3, $4)
@@ -55,6 +121,18 @@ func (q *Queries) CreateRegistry(ctx context.Context, arg CreateRegistryParams) 
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const deleteInstallation = `-- name: DeleteInstallation :execrows
+DELETE FROM installations WHERE id = $1
+`
+
+func (q *Queries) DeleteInstallation(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteInstallation, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteRegistry = `-- name: DeleteRegistry :execrows
@@ -97,6 +175,117 @@ func (q *Queries) EnsureBuiltinRegistry(ctx context.Context, arg EnsureBuiltinRe
 		&i.FetchError,
 		&i.CreatedBy,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const findInstallation = `-- name: FindInstallation :one
+SELECT id, project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by, installed_at, updated_at FROM installations
+WHERE kind = $1 AND name = $2
+  AND (project_id = $3 OR project_id IS NULL)
+ORDER BY project_id IS NULL
+LIMIT 1
+`
+
+type FindInstallationParams struct {
+	Kind      string      `json:"kind"`
+	Name      string      `json:"name"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+// What a project has of a package, its own before the workspace's.
+func (q *Queries) FindInstallation(ctx context.Context, arg FindInstallationParams) (Installation, error) {
+	row := q.db.QueryRow(ctx, findInstallation, arg.Kind, arg.Name, arg.ProjectID)
+	var i Installation
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RegistryID,
+		&i.Kind,
+		&i.Name,
+		&i.Version,
+		&i.Checksum,
+		&i.TargetID,
+		&i.AcceptedPermissions,
+		&i.Installed,
+		&i.InstalledBy,
+		&i.InstalledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getInstallation = `-- name: GetInstallation :one
+SELECT id, project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by, installed_at, updated_at FROM installations WHERE id = $1
+`
+
+func (q *Queries) GetInstallation(ctx context.Context, id pgtype.UUID) (Installation, error) {
+	row := q.db.QueryRow(ctx, getInstallation, id)
+	var i Installation
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RegistryID,
+		&i.Kind,
+		&i.Name,
+		&i.Version,
+		&i.Checksum,
+		&i.TargetID,
+		&i.AcceptedPermissions,
+		&i.Installed,
+		&i.InstalledBy,
+		&i.InstalledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getInstallationByTarget = `-- name: GetInstallationByTarget :one
+SELECT id, project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by, installed_at, updated_at FROM installations WHERE target_id = $1 LIMIT 1
+`
+
+func (q *Queries) GetInstallationByTarget(ctx context.Context, targetID pgtype.UUID) (Installation, error) {
+	row := q.db.QueryRow(ctx, getInstallationByTarget, targetID)
+	var i Installation
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RegistryID,
+		&i.Kind,
+		&i.Name,
+		&i.Version,
+		&i.Checksum,
+		&i.TargetID,
+		&i.AcceptedPermissions,
+		&i.Installed,
+		&i.InstalledBy,
+		&i.InstalledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getInstallationForUpdate = `-- name: GetInstallationForUpdate :one
+SELECT id, project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by, installed_at, updated_at FROM installations WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetInstallationForUpdate(ctx context.Context, id pgtype.UUID) (Installation, error) {
+	row := q.db.QueryRow(ctx, getInstallationForUpdate, id)
+	var i Installation
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RegistryID,
+		&i.Kind,
+		&i.Name,
+		&i.Version,
+		&i.Checksum,
+		&i.TargetID,
+		&i.AcceptedPermissions,
+		&i.Installed,
+		&i.InstalledBy,
+		&i.InstalledAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -178,6 +367,99 @@ func (q *Queries) GetRegistry(ctx context.Context, id pgtype.UUID) (MarketplaceR
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const insertInstallation = `-- name: InsertInstallation :one
+INSERT INTO installations (project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10)
+RETURNING id, project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by, installed_at, updated_at
+`
+
+type InsertInstallationParams struct {
+	ProjectID           pgtype.UUID `json:"project_id"`
+	RegistryID          pgtype.UUID `json:"registry_id"`
+	Kind                string      `json:"kind"`
+	Name                string      `json:"name"`
+	Version             string      `json:"version"`
+	Checksum            string      `json:"checksum"`
+	TargetID            pgtype.UUID `json:"target_id"`
+	AcceptedPermissions []byte      `json:"accepted_permissions"`
+	Installed           []byte      `json:"installed"`
+	InstalledBy         pgtype.UUID `json:"installed_by"`
+}
+
+func (q *Queries) InsertInstallation(ctx context.Context, arg InsertInstallationParams) (Installation, error) {
+	row := q.db.QueryRow(ctx, insertInstallation,
+		arg.ProjectID,
+		arg.RegistryID,
+		arg.Kind,
+		arg.Name,
+		arg.Version,
+		arg.Checksum,
+		arg.TargetID,
+		arg.AcceptedPermissions,
+		arg.Installed,
+		arg.InstalledBy,
+	)
+	var i Installation
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RegistryID,
+		&i.Kind,
+		&i.Name,
+		&i.Version,
+		&i.Checksum,
+		&i.TargetID,
+		&i.AcceptedPermissions,
+		&i.Installed,
+		&i.InstalledBy,
+		&i.InstalledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listInstallations = `-- name: ListInstallations :many
+SELECT id, project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by, installed_at, updated_at FROM installations
+WHERE project_id IS NOT DISTINCT FROM $1::uuid
+ORDER BY kind, name
+`
+
+// A project's installations (project set) or the workspace's (project NULL).
+func (q *Queries) ListInstallations(ctx context.Context, projectID pgtype.UUID) ([]Installation, error) {
+	rows, err := q.db.Query(ctx, listInstallations, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Installation
+	for rows.Next() {
+		var i Installation
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.RegistryID,
+			&i.Kind,
+			&i.Name,
+			&i.Version,
+			&i.Checksum,
+			&i.TargetID,
+			&i.AcceptedPermissions,
+			&i.Installed,
+			&i.InstalledBy,
+			&i.InstalledAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listItemVersions = `-- name: ListItemVersions :many
@@ -312,6 +594,30 @@ func (q *Queries) ListRegistries(ctx context.Context) ([]MarketplaceRegistry, er
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSkillNamesVisibleIn = `-- name: ListSkillNamesVisibleIn :many
+SELECT name FROM skills WHERE project_id = $1 OR project_id IS NULL
+`
+
+func (q *Queries) ListSkillNamesVisibleIn(ctx context.Context, projectID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSkillNamesVisibleIn, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

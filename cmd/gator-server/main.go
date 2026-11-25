@@ -256,7 +256,7 @@ func serve(ctx context.Context) error {
 
 	// Agents, skills, integrations and processes come from registries: Gator's own, fetched now so
 	// a fresh server has a catalogue, and the company's. Nothing installed updates by itself.
-	market := marketplace.New(db.Pool, marketplace.Deps{})
+	market := marketplace.New(db.Pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: db.Pool}})
 	go func() {
 		if err := market.Start(ctx, marketplace.BuiltinFromEnv(os.Getenv)); err != nil && ctx.Err() == nil {
 			log.Warn("marketplace: Gator's registry could not be fetched; the catalogue waits for a fetch", "err", err)

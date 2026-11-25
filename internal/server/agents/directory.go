@@ -195,8 +195,11 @@ func (d *Directory) Delete(ctx context.Context, p auth.Principal, id pgtype.UUID
 	if err := d.canManage(ctx, p, a.ProjectID); err != nil {
 		return err
 	}
-	if sourceOf(a) == SourceBuiltin {
+	switch sourceOf(a) {
+	case SourceBuiltin:
 		return fmt.Errorf("%w: a built-in agent is not deleted; pause it", ErrConflict)
+	case SourceMarketplace:
+		return fmt.Errorf("%w: @%s came from the marketplace; remove its installation instead", ErrConflict, a.Handle)
 	}
 	active, err := d.store.CountActiveTurnsOfAgent(ctx, a.ID)
 	if err != nil {
@@ -304,6 +307,12 @@ func (d *Directory) require(ctx context.Context, p auth.Principal, project pgtyp
 		return ErrForbidden
 	}
 	return nil
+}
+
+// Check holds an agent made another way — installed from the marketplace — to the rules Create
+// holds people's to.
+func Check(handle, name, description, tier string) error {
+	return validate(handle, name, description, tier, StatusActive)
 }
 
 func validate(handle, name, description, tier, status string) error {

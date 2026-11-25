@@ -136,7 +136,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	// would fetch it from GATOR_MARKETPLACE_URL at start.
 	starter := marketplacetest.New(t)
 	starter.Starter()
-	market := marketplace.New(pool, marketplace.Deps{})
+	market := marketplace.New(pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: pool}})
 	if err := market.Start(ctx, marketplace.Builtin{URL: starter.URL, PublicKey: starter.PublicKey}); err != nil {
 		t.Fatal(err)
 	}

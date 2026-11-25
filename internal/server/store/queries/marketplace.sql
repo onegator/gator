@@ -64,3 +64,47 @@ ORDER BY r.builtin DESC, r.name;
 -- name: GetItem :one
 SELECT * FROM marketplace_items
 WHERE registry_id = sqlc.arg(registry_id) AND kind = sqlc.arg(kind) AND name = sqlc.arg(name) AND version = sqlc.arg(version);
+
+-- name: InsertInstallation :one
+INSERT INTO installations (project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by)
+VALUES (sqlc.narg(project_id), sqlc.arg(registry_id), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(version), sqlc.arg(checksum),
+        sqlc.narg(target_id), sqlc.arg(accepted_permissions), sqlc.arg(installed), sqlc.arg(installed_by))
+RETURNING *;
+
+-- name: GetInstallation :one
+SELECT * FROM installations WHERE id = $1;
+
+-- name: GetInstallationForUpdate :one
+SELECT * FROM installations WHERE id = $1 FOR UPDATE;
+
+-- name: ListInstallations :many
+-- A project's installations (project set) or the workspace's (project NULL).
+SELECT * FROM installations
+WHERE project_id IS NOT DISTINCT FROM sqlc.narg(project_id)::uuid
+ORDER BY kind, name;
+
+-- name: FindInstallation :one
+-- What a project has of a package, its own before the workspace's.
+SELECT * FROM installations
+WHERE kind = sqlc.arg(kind) AND name = sqlc.arg(name)
+  AND (project_id = sqlc.arg(project_id) OR project_id IS NULL)
+ORDER BY project_id IS NULL
+LIMIT 1;
+
+-- name: DeleteInstallation :execrows
+DELETE FROM installations WHERE id = $1;
+
+-- name: GetInstallationByTarget :one
+SELECT * FROM installations WHERE target_id = $1 LIMIT 1;
+
+-- name: CreateInstalledAgent :one
+-- An agent from the marketplace: its tools and skills come with it, and its source says where from.
+INSERT INTO agents (project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills,
+                    status, source, created_by)
+VALUES (sqlc.narg(project_id), sqlc.arg(handle), sqlc.arg(display_name), sqlc.arg(description), sqlc.arg(avatar), sqlc.narg(role_key),
+        sqlc.arg(instructions), sqlc.arg(tier), sqlc.arg(policy), sqlc.arg(tools), sqlc.arg(skills), 'active', sqlc.arg(source),
+        sqlc.narg(created_by))
+RETURNING *;
+
+-- name: ListSkillNamesVisibleIn :many
+SELECT name FROM skills WHERE project_id = sqlc.arg(project_id) OR project_id IS NULL;

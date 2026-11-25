@@ -127,6 +127,7 @@ func (s *Server) ListMarketplace(w http.ResponseWriter, r *http.Request, params 
 	for _, l := range list {
 		item := gen.MarketplaceItem{RegistryId: toUUID(l.RegistryID), RegistryName: l.RegistryName,
 			Manifest: toManifest(l.Manifest, false), Checksum: l.Checksum, Versions: l.Versions}
+		s.withProjectState(r, p, project, l.Manifest, &item.Installed, &item.Missing)
 		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -184,6 +185,7 @@ func (s *Server) GetMarketplacePackage(w http.ResponseWriter, r *http.Request, k
 		out.Versions = append(out.Versions, gen.PackageVersion{Version: v.Manifest.Version, Checksum: v.Checksum, Listed: v.Listed,
 			Permissions: orEmpty(v.Manifest.Permissions)})
 	}
+	s.withProjectState(r, p, project, pkg.Manifest, &out.Installed, &out.Missing)
 	writeJSON(w, http.StatusOK, out)
 }
 

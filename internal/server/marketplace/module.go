@@ -5,6 +5,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -17,7 +19,8 @@ const (
 
 // Module is the marketplace as the server wires it.
 type Module struct {
-	Catalog *Catalog
+	Catalog       *Catalog
+	Installations *Installations
 }
 
 // Deps are what the module is built from; zero values take the defaults.
@@ -25,6 +28,11 @@ type Deps struct {
 	Fetcher Fetcher // default: DefaultFetcher
 	Limits  Limits  // default: DefaultLimits
 	Kinds   Kinds   // default: every kind this server knows
+	// Roles answers people's roles in projects; default auth.Authorizer over the pool.
+	Roles roles
+	// Capabilities says what a project's plugins can do, for what a package needs; nil: nothing
+	// is reported missing for want of a capability.
+	Capabilities capabilities
 }
 
 // DefaultKinds are the kinds a registry may offer.
@@ -43,8 +51,17 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	if deps.Kinds == nil {
 		deps.Kinds = DefaultKinds()
 	}
+	if deps.Roles == nil {
+		deps.Roles = auth.Authorizer{Pool: pool}
+	}
 	q := db.New(pool)
-	return &Module{Catalog: NewCatalog(q, deps.Fetcher, deps.Kinds, deps.Limits)}
+	catalog := NewCatalog(q, deps.Fetcher, deps.Kinds, deps.Limits)
+	tx := func(ctx context.Context, fn func(q *db.Queries) error) error { return store.InTx(ctx, pool, fn) }
+	return &Module{
+		Catalog: catalog,
+		Installations: NewInstallations(q, catalog, deps.Roles, deps.Capabilities, tx,
+			AgentInstaller{}),
+	}
 }
 
 // Start puts Gator's own registry in place and fetches it, so a fresh server has a catalogue.
