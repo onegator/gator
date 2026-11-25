@@ -23,10 +23,12 @@ import (
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/client"
+	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -94,14 +96,23 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
+		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
 	for _, c := range configure {
 		c(&rcfg)
 	}
 	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
+	// Conversations and the agents who answer in them, each following the outbox on its own.
+	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc})
+	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default()})
+	mgr.UseBriefer(team.Briefer)
+	consumers, stopConsumers := context.WithCancel(context.Background())
+	t.Cleanup(stopConsumers)
+	go chat.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
+	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
+	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Automations: autos, Hub: hub, Log: slog.Default(),
-		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
+		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())

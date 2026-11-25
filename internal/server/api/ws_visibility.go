@@ -58,6 +58,13 @@ func (f *eventFilter) allow(ctx context.Context, e events.Event) bool {
 	if e.Aggregate == conversations.Aggregate {
 		return f.conv.of(ctx, e.AggregateID).Read
 	}
+	if e.Aggregate == "job" {
+		if conv, ok := f.replyOf(ctx, e.AggregateID); !ok {
+			return false
+		} else if conv != "" {
+			return f.conv.of(ctx, conv).Read // a reply is its conversation's
+		}
+	}
 	if f.p.IsWorkspaceAdmin() {
 		return true
 	}
@@ -95,6 +102,36 @@ func (f *eventFilter) owner(ctx context.Context, aggregate, id string) (string, 
 	}
 	f.owners[key] = project
 	return project, true
+}
+
+// replyOf is the conversation a reply job answers in, "" for any other job; false when it cannot
+// be known now. A job's kind and turn never change, so the answer is kept.
+func (f *eventFilter) replyOf(ctx context.Context, id string) (string, bool) {
+	key := "reply:" + id
+	if c, ok := f.owners[key]; ok {
+		return c, true
+	}
+	var jid pgtype.UUID
+	if err := jid.Scan(id); err != nil {
+		return "", false
+	}
+	job, err := f.q.GetJob(ctx, jid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", true
+	}
+	if err != nil {
+		return "", false
+	}
+	conv, ok, err := replyConversation(ctx, f.q, job)
+	if err != nil {
+		return "", false
+	}
+	out := ""
+	if ok {
+		out = uuidString(conv)
+	}
+	f.owners[key] = out
+	return out, true
 }
 
 // mayRead answers whether the caller may read project, from a short-lived cache.

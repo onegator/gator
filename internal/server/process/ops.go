@@ -123,6 +123,11 @@ type CreateParams struct {
 	// InTx, when set, runs inside the transaction that creates the task, so that what the caller
 	// links to the new task (the conversation it came from) commits or rolls back with it.
 	InTx func(q *db.Queries, task db.Task) error
+	// Hidden says the caller is the part of Gator that opens a hidden kind (an ask); anyone else
+	// asking for one is refused.
+	Hidden bool
+	// ExternalRefs are written on the task as it is created ({"conversation": id}).
+	ExternalRefs map[string]string
 }
 
 // Automated says which automation creates a task. Switching on one that puts agents to work is
@@ -159,6 +164,12 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 	if err != nil {
 		return db.Task{}, err
 	}
+	if m.Hidden() != p.Hidden {
+		if m.Hidden() {
+			return db.Task{}, ErrHiddenKind
+		}
+		return db.Task{}, fmt.Errorf("%w: %q is not a hidden kind", ErrInvalidEdit, p.Kind)
+	}
 	first := m.First()
 	if p.Urgency == 0 {
 		p.Urgency = 3
@@ -176,6 +187,12 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 		}
 		if err := q.UpsertGate(ctx, db.UpsertGateParams{TaskID: task.ID, Phase: first.Name}); err != nil {
 			return err
+		}
+		if len(p.ExternalRefs) > 0 {
+			refs, _ := json.Marshal(p.ExternalRefs)
+			if task, err = q.MergeTaskExternalRefs(ctx, db.MergeTaskExternalRefsParams{ID: task.ID, Refs: refs}); err != nil {
+				return err
+			}
 		}
 		if err := s.record(ctx, q, task.ID, nil, first.Name, "create", actor, "", nil); err != nil {
 			return err

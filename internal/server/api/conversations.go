@@ -127,7 +127,13 @@ func (s *Server) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
 	if in.ProjectId != nil {
 		project = fromUUID(*in.ProjectId)
 	}
-	conv, created, err := s.Conversations.Directory.OpenDM(r.Context(), p, people, project)
+	var agents []pgtype.UUID
+	if in.Agents != nil {
+		for _, a := range *in.Agents {
+			agents = append(agents, fromUUID(a))
+		}
+	}
+	conv, created, err := s.Conversations.Directory.OpenDM(r.Context(), p, people, project, agents...)
 	if err != nil {
 		s.failConversation(w, err)
 		return

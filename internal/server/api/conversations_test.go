@@ -1217,6 +1217,13 @@ func TestOnlyWritersOpenThreads(t *testing.T) {
 		h.do("POST", "/projects/"+c.project.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "x"}, &task)
 	})
 	h.as(c.member, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, nil) })
+	// Whichever consumer follows the outbox (this server's, or another test binary's on the same
+	// database) has handled task.created once the card is there; only then is the thread gone for good.
+	eventually(t, "the task's card", func() bool {
+		var n int
+		_ = h.pool.QueryRow(context.Background(), "SELECT count(*) FROM messages WHERE card_key = $1", "task:"+task.Id.String()).Scan(&n)
+		return n == 1
+	})
 	if _, err := h.pool.Exec(context.Background(), "DELETE FROM conversations WHERE task_id = $1", task.Id.String()); err != nil {
 		t.Fatal(err)
 	}

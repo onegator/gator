@@ -17,7 +17,25 @@ gator-cli artifact put --type TYPE --file -    record a document now, so it surv
 gator-cli product propose --kind decision|lesson --title TEXT --file -
 gator-cli catalogue show                the parts this project is made of
 gator-cli knowledge search --query TEXT what the project knows, beyond what this prompt carried
+gator-cli say --file -                  say something in the conversation; @agent asks another agent
+gator-cli thread show [--limit N]       more of the conversation than the prompt carried
+gator-cli task create --kind KIND --title TEXT --file -    propose a task; a person accepts it
 ```
+
+The last three are about the conversation the job speaks in: the one its turn answers in, or
+for a phase job, its task's thread. What `say` posts is the agent's own message in its turn, so
+an `@handle` of another agent there is a delegation in the same chain, under its limits (four
+turns, a budget of twice a turn of the asked agent, never the same agent twice in a row, a work
+agent only with a person's consent on the task). `task create` posts a proposal card; nothing
+is created until a person accepts it (`POST /proposals/{messageId}/accept`).
+
+What a job's identity may call is its kind's, checked by the server. A phase job may call all of
+the above. A reply (an agent answering in a conversation, chat or work) may `say`, `thread show`,
+`task create`, `knowledge search`, `catalogue show` and `product propose`; it never blocks a gate,
+asks a phase's question or writes a phase's documents. A summary job gets no identity at all.
+
+An agent answering in chat (`tier: chat`) has no tools that write and a read-only checkout; it
+may run `gator-cli` and nothing else. A summary has no tools and no checkout.
 
 Output is JSON on stdout, one object or one array. Problems are `{"error": "..."}` on stderr.
 The exit code says what kind of problem it was: `0` ok, `1` the request was wrong, `2` Gator
@@ -41,7 +59,7 @@ job is running.
 
 ## What an agent cannot do
 
-Approve anything. `product propose` records a proposal; a person decides what the product knows
+Approve anything. `product propose` records a proposal, `task create` a proposed task; a person decides what the product knows
 about itself, because every later prompt carries it. The same reasoning applies to the
 catalogue: an agent reads it, a person writes it.
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -122,6 +123,9 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 			}
 			machines[key] = m
 		}
+		if m.Hidden() {
+			continue // a conversation with an agent waits on nobody
+		}
 		p, err := m.Phase(r.Task.Phase)
 		if err != nil {
 			continue // phase deactivated by config change; surfaced elsewhere
@@ -163,6 +167,9 @@ func (s *Service) DecisionFor(ctx context.Context, taskID pgtype.UUID) (Decision
 	}
 	if d.Task.ClosedAt.Valid {
 		return Decision{}, false, nil
+	}
+	if hidden, err := s.HiddenKind(ctx, d.Task.ProjectID, d.Task.Kind); err != nil || hidden {
+		return Decision{}, false, err // a conversation with an agent waits on nobody
 	}
 	var status string
 	var jobID pgtype.UUID
@@ -267,9 +274,18 @@ func (s *Service) Transitions(ctx context.Context, taskID pgtype.UUID) ([]db.Pha
 	return db.New(s.pool).ListPhaseTransitions(ctx, taskID)
 }
 
-// Tasks lists open tasks of a project.
+// Tasks lists open tasks of a project, without the hidden kinds (conversations with agents
+// about no task): those are on no board.
 func (s *Service) Tasks(ctx context.Context, projectID pgtype.UUID) ([]db.Task, error) {
-	return db.New(s.pool).ListOpenTasksByProject(ctx, projectID)
+	tasks, err := db.New(s.pool).ListOpenTasksByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	cat, err := s.templates.Catalog(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(tasks, func(t db.Task) bool { return cat[t.Kind].Hidden }), nil
 }
 
 // DBTemplates resolves templates in the order a person would expect: the project's own

@@ -40,10 +40,20 @@ RETURNING *;
 SELECT * FROM runners WHERE id = $1;
 
 -- name: CreateJob :one
-INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement)
--- An empty placement is local, which is what every job was before it had one.
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF(sqlc.arg(placement)::text, ''), 'local'))
+INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement,
+                  agent_id, turn_id, tier, kind)
+-- An empty placement is local, which is what every job was before it had one; an empty tier is
+-- work and an empty kind a phase job, which is what every job was before agents had turns.
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF(sqlc.arg(placement)::text, ''), 'local'),
+        sqlc.narg(agent_id), sqlc.narg(turn_id), COALESCE(NULLIF(sqlc.arg(tier)::text, ''), 'work'),
+        COALESCE(NULLIF(sqlc.arg(kind)::text, ''), 'phase'))
 RETURNING *;
+
+-- name: TaskWorkBranch :one
+-- The branch a task's latest finished work was pushed to: what an agent reading the task reads.
+SELECT (receipt->>'branch')::text AS branch FROM jobs
+WHERE task_id = $1 AND status = 'done' AND COALESCE(receipt->>'branch', '') <> ''
+ORDER BY finished_at DESC NULLS LAST LIMIT 1;
 
 -- name: GetJob :one
 SELECT * FROM jobs WHERE id = $1;
@@ -74,6 +84,8 @@ WHERE id IN (
       AND (sqlc.narg(only_job)::uuid IS NULL OR j.id = sqlc.narg(only_job)::uuid)
       AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
            OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
+      -- A runner older than protocol v3 runs every job as a phase; it gets only those.
+      AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
     ORDER BY j.created_at
     LIMIT sqlc.arg(slots)
     FOR UPDATE SKIP LOCKED
@@ -140,6 +152,7 @@ WHERE id IN (
                                                   THEN r.capabilities->'projects' END), 0) = 0
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+            AND (j.kind = 'phase' OR r.protocol_version >= 3)
       )
     FOR UPDATE SKIP LOCKED
 )

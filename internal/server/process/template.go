@@ -96,9 +96,13 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Template is the ordered list of phases for one task kind.
 type Template struct {
-	Kind         string  `yaml:"kind" json:"kind"`
-	MaxRollbacks int     `yaml:"max_rollbacks" json:"max_rollbacks"`
-	Phases       []Phase `yaml:"phases" json:"phases"`
+	Kind         string `yaml:"kind" json:"kind"`
+	MaxRollbacks int    `yaml:"max_rollbacks" json:"max_rollbacks"`
+	// Hidden is a kind the system opens by itself (an agent asked outside any task): on no
+	// board and in no inbox, made by nobody directly. Its runner phases need no role, since the
+	// agents asked do its jobs.
+	Hidden bool    `yaml:"hidden,omitempty" json:"hidden,omitempty"`
+	Phases []Phase `yaml:"phases" json:"phases"`
 }
 
 // Validate checks structural rules every template must satisfy.
@@ -123,7 +127,7 @@ func (t Template) Validate() error {
 		default:
 			return fmt.Errorf("template %q phase %q has unknown owner %q", t.Kind, p.Name, p.Owner)
 		}
-		if p.Owner == OwnerRunner && p.Role == "" {
+		if p.Owner == OwnerRunner && p.Role == "" && !t.Hidden {
 			return fmt.Errorf("template %q phase %q is runner-owned but has no role", t.Kind, p.Name)
 		}
 		switch p.Gate {

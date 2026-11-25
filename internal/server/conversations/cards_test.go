@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +122,7 @@ func TestJobCardFollowsOneJob(t *testing.T) {
 		stop   bool
 	}{{"queued", true}, {"running", true}, {"stalled", true}, {"failed", false}, {"done", false}} {
 		job.Status = tc.status
-		c := JobCard(job)
+		c := JobCard(job, nil)
 		keys = append(keys, c.Key)
 		actions, _ := c.Data["actions"].([]string)
 		hasStop := len(actions) > 0 && actions[0] == "stop"
@@ -133,6 +134,20 @@ func TestJobCardFollowsOneJob(t *testing.T) {
 		if k != keys[0] {
 			t.Fatalf("keys %v", keys)
 		}
+	}
+}
+
+// A job card says whose work it is: the agent's handle, not just a role.
+func TestJobCardNamesItsAgent(t *testing.T) {
+	job := db.Job{ID: newID(6), TaskID: newID(1), Phase: "planning", Role: "planner", Backend: "claude", Status: "running"}
+	planner := db.Agent{ID: newID(7), Handle: "planner", DisplayName: "Planner"}
+	c := JobCard(job, &planner)
+	agent, _ := c.Data["agent"].(map[string]any)
+	if c.Data["title"] != "@planner" || agent["handle"] != "planner" || !strings.Contains(c.Body, "@planner") {
+		t.Fatalf("card: %s %+v", c.Body, c.Data)
+	}
+	if _, ok := JobCard(job, nil).Data["agent"]; ok {
+		t.Fatal("a job nobody signed names no agent")
 	}
 }
 
@@ -189,6 +204,14 @@ func (f fakeJobs) GetJob(_ context.Context, id pgtype.UUID) (db.Job, error) {
 	return j, nil
 }
 
+func (f fakeJobs) GetAgent(context.Context, pgtype.UUID) (db.Agent, error) {
+	return db.Agent{}, pgx.ErrNoRows
+}
+
+func (f fakeJobs) JobProgress(context.Context, pgtype.UUID) (db.JobProgressRow, error) {
+	return db.JobProgressRow{}, nil
+}
+
 func TestSourcesLeaveNoCardForWhatIsGone(t *testing.T) {
 	ctx := context.Background()
 	task := db.Task{ID: newID(1), Title: "T", Kind: "bug", Phase: "planning"}
@@ -228,7 +251,7 @@ func TestCardsHearTheSweep(t *testing.T) {
 		}
 	}
 	job := db.Job{ID: newID(5), Status: "queued", UnassignableSince: ts(time.Now())}
-	if c := JobCard(job); c.Data["state"] != "no_runner" {
+	if c := JobCard(job, nil); c.Data["state"] != "no_runner" {
 		t.Fatalf("a job no runner can take: %v", c.Data["state"])
 	}
 }

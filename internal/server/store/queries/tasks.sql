@@ -117,11 +117,12 @@ WHERE task_id = $1 AND kind = 'rollback' AND to_phase = $2
 ORDER BY id DESC LIMIT 1;
 
 -- name: ListCurrentPhaseJobs :many
--- The newest job of each open task's current phase entry, for the inbox.
+-- The newest job of each open task's current phase entry, for the inbox. A reply in the task's
+-- conversation is not the phase's work.
 SELECT DISTINCT ON (j.task_id) j.task_id, j.id AS job_id, j.status
 FROM jobs j
 JOIN tasks t ON t.id = j.task_id
-WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
+WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at AND j.kind = 'phase'
 ORDER BY j.task_id, j.created_at DESC;
 
 -- name: ListBudgetBlockedTasks :many
@@ -173,9 +174,10 @@ UPDATE tasks SET title = $2, description = $3, urgency = $4, kind = $5, phase = 
 WHERE id = $1 RETURNING *;
 
 -- name: TaskWorkedOn :one
--- Whether anything beyond creating (and admitting, and editing) the task has happened: a job,
--- an artifact, a move. The answer decides whether its kind may still change.
-SELECT (EXISTS (SELECT 1 FROM jobs j WHERE j.task_id = $1)
+-- Whether anything beyond creating (and admitting, and editing) the task has happened: a job of
+-- its process, an artifact, a move. An agent answering in its thread is not work on it. The
+-- answer decides whether its kind may still change.
+SELECT (EXISTS (SELECT 1 FROM jobs j WHERE j.task_id = $1 AND j.kind = 'phase')
     OR EXISTS (SELECT 1 FROM artifacts a WHERE a.task_id = $1)
     OR EXISTS (SELECT 1 FROM phase_transitions p WHERE p.task_id = $1 AND p.kind NOT IN ('create', 'edit')))::boolean AS worked_on;
 
@@ -194,6 +196,6 @@ SELECT * FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'runnin
 SELECT j.id AS job_id, j.status, (j.status = 'queued' AND j.unassignable_since IS NOT NULL)::bool AS unassignable
 FROM jobs j
 JOIN tasks t ON t.id = j.task_id
-WHERE j.task_id = $1 AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
+WHERE j.task_id = $1 AND j.phase = t.phase AND j.created_at >= t.phase_entered_at AND j.kind = 'phase'
 ORDER BY j.created_at DESC
 LIMIT 1;

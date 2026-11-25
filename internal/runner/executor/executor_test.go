@@ -21,13 +21,17 @@ import (
 
 // scripted is an in-process backend whose behaviour each test chooses.
 type scripted struct {
-	mu    sync.Mutex
-	specs []backend.Spec
-	run   func(ctx context.Context, n int, spec backend.Spec, emit backend.Emit) backend.Outcome
+	noLimits bool
+	mu       sync.Mutex
+	specs    []backend.Spec
+	run      func(ctx context.Context, n int, spec backend.Spec, emit backend.Emit) backend.Outcome
 }
 
 func (s *scripted) Name() string      { return "fake" }
 func (s *scripted) AuthState() string { return "ok" }
+
+// Supports implements backend.Limited unless a test says the backend keeps no limits.
+func (s *scripted) Supports(backend.Access) bool { return !s.noLimits }
 func (s *scripted) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) backend.Outcome {
 	s.mu.Lock()
 	s.specs = append(s.specs, spec)

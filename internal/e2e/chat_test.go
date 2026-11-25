@@ -1,0 +1,173 @@
+//go:build unix
+
+package e2e
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/onegator/gator/internal/runner/backend"
+	"github.com/onegator/gator/internal/runner/backend/claude"
+	"github.com/onegator/gator/internal/runner/client"
+	"github.com/onegator/gator/internal/runner/executor"
+	"github.com/onegator/gator/internal/runner/workspace"
+	"github.com/onegator/gator/internal/server/api/gen"
+)
+
+// repoProject is a project with a repository a runner can clone; it answers the project and the
+// bare origin, which a test can ask what was pushed.
+func (h *harness) repoProject() (gen.Project, string) {
+	h.t.Helper()
+	var p gen.Project
+	if code := h.do("POST", "/projects", gen.NewProject{Slug: "chat" + uniqueBackend()[5:], Name: "Chat"}, &p); code != 201 {
+		h.t.Fatalf("project: %d", code)
+	}
+	root := h.t.TempDir()
+	src := filepath.Join(root, "src")
+	gitCmd(h.t, root, "init", "-q", "-b", "main", src)
+	_ = os.WriteFile(filepath.Join(src, "README"), []byte("app\n"), 0o644)
+	gitCmd(h.t, src, "add", ".")
+	gitCmd(h.t, src, "commit", "-q", "-m", "init")
+	origin := filepath.Join(root, "origin.git")
+	gitCmd(h.t, root, "clone", "-q", "--bare", src, origin)
+	def, primary := "main", true
+	if code := h.do("PUT", "/projects/"+p.Id.String()+"/repos", gen.ProjectRepo{Name: "app", Url: origin, DefaultBranch: &def, Primary: &primary}, nil); code != 200 {
+		h.t.Fatalf("add repo: %d", code)
+	}
+	return p, origin
+}
+
+// claudeRunner is a runner for one project with the real executor and a recorded Claude Code.
+func (h *harness) claudeRunner(project, fixture string) string {
+	h.t.Helper()
+	wd, _ := os.Getwd()
+	td := filepath.Join(wd, "..", "runner", "backend", "claude", "testdata")
+	args := filepath.Join(h.t.TempDir(), "args")
+	h.t.Setenv("FAKE_CLAUDE_FIXTURE", filepath.Join(td, fixture))
+	h.t.Setenv("FAKE_CLAUDE_ARGS", args)
+	h.t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-token-for-tests")
+	h.t.Setenv("FAKE_CLAUDE_RESUME_FIXTURE", filepath.Join(td, "synthetic-digest-reply.ndjson"))
+	ex := &executor.Executor{
+		WS:       &workspace.Manager{Root: h.t.TempDir()},
+		Backends: map[string]backend.Backend{"claude": claude.Backend{Bin: filepath.Join(td, "fake-claude.sh"), AllowEnv: []string{"FAKE_CLAUDE_*"}}},
+		Push:     true,
+	}
+	c := client.New(client.Config{ServerURL: h.srv.URL, Token: h.runner, Name: "e2e-chat", Location: "other",
+		Backends: []string{"claude"}, Projects: []string{project}, MaxParallel: 1,
+		HeartbeatInterval: 100 * time.Millisecond, MinBackoff: 50 * time.Millisecond}, ex, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	h.t.Cleanup(cancel)
+	go func() { _ = c.Run(ctx) }()
+	return args
+}
+
+// "@reviewer look at PR #12" in #general: the reviewer answers in the thread, in chat, read-only,
+// with what it cost under the answer, and nothing reaches the repository — even an agent that
+// tries to write (this recording tries Write and a touch; the fake tries to commit).
+func TestAMentionInGeneralIsAnsweredInChat(t *testing.T) {
+	h := newHarness(t)
+	p, origin := h.repoProject()
+	project := p.Id.String()
+	args := h.claudeRunner(project, "claude-2.1.331-chat-readonly.ndjson")
+	t.Setenv("FAKE_CLAUDE_COMMIT", "1")
+
+	general := h.generalOf(project)
+	ask := h.say(project, general.Id.String(), "@reviewer look at PR #12", "reviewer")
+	turn := h.turnOf(ask, project, "reviewer")
+	if turn.Tier != "chat" || turn.Reply == nil {
+		t.Fatalf("turn: %+v", turn)
+	}
+	reply := h.settledMessage(*turn.Reply, func(m gen.Message) bool { return m.Status == "final" })
+	if !strings.Contains(reply.Body, "Write tool attempt") || strings.Contains(reply.Body, "gator-digest") ||
+		reply.AuthorKind != "agent" || reply.ConversationId.String() != turn.Conversation {
+		t.Fatalf("the answer: %+v", reply)
+	}
+	if reply.Turn == nil || reply.Turn.Status != "done" || reply.Turn.Tier != "chat" || reply.Turn.CostUsd < 0.018 || reply.Turn.DurationMs <= 0 {
+		t.Fatalf("what is said under the answer: %+v", reply.Turn)
+	}
+	var thread gen.ConversationDetail
+	h.do("GET", "/messages/"+ask.Id.String()+"/thread", nil, &thread)
+	if thread.Id.String() != turn.Conversation {
+		t.Fatal("the answer is in the thread under the mention")
+	}
+
+	job := h.waitJob(*turn.Job, "done")
+	if r := *job.Receipt; r["branch"] != nil || r["commits"] != nil {
+		t.Fatalf("a chat job leaves no branch: %+v", r)
+	}
+	if branches := gitCmd(t, origin, "branch", "--list"); strings.Contains(branches, "gator/") {
+		t.Fatalf("something reached the repository: %s", branches)
+	}
+	called, _ := os.ReadFile(args)
+	if !strings.Contains(string(called), "--permission-mode\ndontAsk\n") || strings.Contains(string(called), "bypassPermissions") {
+		t.Fatalf("the session ran without tools that write:\n%s", called)
+	}
+	// The job's card follows it in the thread, signed by the reviewer.
+	eventually(t, "the job's card says whose work it is", func() bool {
+		var page gen.MessagePage
+		h.do("GET", "/conversations/"+turn.Conversation+"/messages?afterSeq=0", nil, &page)
+		for _, m := range page.Messages {
+			if m.CardType != nil && *m.CardType == "job" && m.Card != nil && deref(m.Card.Title) == "@reviewer" && deref(m.Card.State) == "done" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// "@worker fix it" where nobody allowed agents gets an answer in chat and a card asking whether
+// @worker may work; allowing it from the card is the task's consent, and @worker's work turn
+// leaves a branch with its commit, signed by it.
+func TestTheConsentCardLeadsToABranch(t *testing.T) {
+	h := newHarness(t)
+	p, origin := h.repoProject()
+	project := p.Id.String()
+	h.claudeRunner(project, "claude-2.1.270-tool-success.ndjson")
+	t.Setenv("FAKE_CLAUDE_COMMIT", "1")
+
+	general := h.generalOf(project)
+	ask := h.say(project, general.Id.String(), "@worker fix the flaky checkout test", "worker")
+	chat := h.turnOf(ask, project, "worker")
+	if chat.Tier != "chat" {
+		t.Fatalf("without consent @worker answers in chat: %+v", chat)
+	}
+	h.waitJob(*chat.Job, "done")
+	card := h.lastSaid(chat.Conversation, func(m gen.Message) bool { return m.CardType != nil && *m.CardType == "consent" })
+	if card.Card == nil || deref(card.Card.Title) != "Let @worker work on this?" || deref(card.Card.State) != "pending" || card.Card.Ref.Id != chat.ID {
+		t.Fatalf("the consent card: %+v", card.Card)
+	}
+	if branches := gitCmd(t, origin, "branch", "--list"); strings.Contains(branches, "gator/") {
+		t.Fatalf("the chat answer pushed: %s", branches)
+	}
+
+	var work gen.AgentTurn
+	if code := h.do("POST", "/turns/"+chat.ID+"/allow", nil, &work); code != 201 || work.Tier != "work" || work.EscalatedFrom == nil {
+		t.Fatalf("allow: %d %+v", code, work)
+	}
+	job := h.waitJob(work.JobId.String(), "done", "failed")
+	if job.Status != "done" || job.Tier != "work" {
+		t.Fatalf("the work job: %s %s", job.Status, deref(job.StopReason))
+	}
+	branch, _ := (*job.Receipt)["branch"].(string)
+	commits, _ := (*job.Receipt)["commits"].([]any)
+	if !strings.HasPrefix(branch, "gator/") || len(commits) != 1 {
+		t.Fatalf("receipt: %+v", *job.Receipt)
+	}
+	if msg := gitCmd(t, origin, "log", "-1", "--format=%B", "refs/heads/"+branch); !strings.Contains(msg, "Co-Authored-By: @worker via Gator") {
+		t.Fatalf("the commit says whose it is:\n%s", msg)
+	}
+	var task gen.Task
+	h.do("GET", "/tasks/"+job.TaskId.String(), nil, &task)
+	if task.AgentsAllowedAt == nil {
+		t.Fatal("the consent is the task's")
+	}
+	allowed := h.message(card.Id.String())
+	if deref(allowed.Card.State) != "allowed" {
+		t.Fatalf("the card says it was allowed: %+v", allowed.Card)
+	}
+}

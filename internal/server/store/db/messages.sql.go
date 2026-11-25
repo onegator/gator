@@ -79,6 +79,45 @@ func (q *Queries) AttachToMessage(ctx context.Context, arg AttachToMessageParams
 	return result.RowsAffected(), nil
 }
 
+const claimSummaryRefresh = `-- name: ClaimSummaryRefresh :one
+INSERT INTO conversation_summaries (conversation_id, pending_upto_seq)
+VALUES ($1, $2)
+ON CONFLICT (conversation_id) DO UPDATE
+SET pending_upto_seq = EXCLUDED.pending_upto_seq, pending_job_id = NULL, updated_at = now()
+WHERE conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
+  AND (conversation_summaries.pending_upto_seq IS NULL
+       OR conversation_summaries.updated_at < now() - interval '1 hour'
+       OR (conversation_summaries.pending_job_id IS NULL AND conversation_summaries.updated_at < now() - interval '2 minutes')
+       OR (conversation_summaries.pending_job_id IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM jobs j WHERE j.id = conversation_summaries.pending_job_id
+                 AND j.status IN ('queued', 'leased', 'running', 'stalled'))))
+RETURNING conversation_id, upto_seq, summary, model, pending_job_id, pending_upto_seq, updated_at
+`
+
+type ClaimSummaryRefreshParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	UptoSeq        *int64      `json:"upto_seq"`
+}
+
+// Marks a newer summary as being written, unless one is already being written or the summary
+// there covers this much already. No row: nothing to do.
+// A refresh nobody is writing any more is reclaimed: its job ended or is gone, it never got a job
+// in two minutes, or it has been pending for an hour.
+func (q *Queries) ClaimSummaryRefresh(ctx context.Context, arg ClaimSummaryRefreshParams) (ConversationSummary, error) {
+	row := q.db.QueryRow(ctx, claimSummaryRefresh, arg.ConversationID, arg.UptoSeq)
+	var i ConversationSummary
+	err := row.Scan(
+		&i.ConversationID,
+		&i.UptoSeq,
+		&i.Summary,
+		&i.Model,
+		&i.PendingJobID,
+		&i.PendingUptoSeq,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createAttachment = `-- name: CreateAttachment :one
 INSERT INTO message_attachments (conversation_id, uploaded_by, name, content_type, size_bytes, storage_key)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -200,6 +239,28 @@ func (q *Queries) FindCard(ctx context.Context, arg FindCardParams) (Message, er
 	return i, err
 }
 
+const finishSummaryRefresh = `-- name: FinishSummaryRefresh :execrows
+UPDATE conversation_summaries
+SET summary = $1, model = $2, upto_seq = pending_upto_seq,
+    pending_upto_seq = NULL, pending_job_id = NULL, updated_at = now()
+WHERE pending_job_id = $3 AND pending_upto_seq > upto_seq
+`
+
+type FinishSummaryRefreshParams struct {
+	Summary string      `json:"summary"`
+	Model   string      `json:"model"`
+	JobID   pgtype.UUID `json:"job_id"`
+}
+
+// The summary a job wrote replaces the one there, if it covers more.
+func (q *Queries) FinishSummaryRefresh(ctx context.Context, arg FinishSummaryRefreshParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishSummaryRefresh, arg.Summary, arg.Model, arg.JobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getAttachment = `-- name: GetAttachment :one
 SELECT id, conversation_id, message_id, uploaded_by, name, content_type, size_bytes, storage_key, created_at FROM message_attachments WHERE id = $1
 `
@@ -256,6 +317,25 @@ func (q *Queries) GetCardForUpdate(ctx context.Context, arg GetCardForUpdatePara
 	return i, err
 }
 
+const getConversationSummary = `-- name: GetConversationSummary :one
+SELECT conversation_id, upto_seq, summary, model, pending_job_id, pending_upto_seq, updated_at FROM conversation_summaries WHERE conversation_id = $1
+`
+
+func (q *Queries) GetConversationSummary(ctx context.Context, conversationID pgtype.UUID) (ConversationSummary, error) {
+	row := q.db.QueryRow(ctx, getConversationSummary, conversationID)
+	var i ConversationSummary
+	err := row.Scan(
+		&i.ConversationID,
+		&i.UptoSeq,
+		&i.Summary,
+		&i.Model,
+		&i.PendingJobID,
+		&i.PendingUptoSeq,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getMessage = `-- name: GetMessage :one
 SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE id = $1
 `
@@ -305,6 +385,35 @@ func (q *Queries) GetMessageByClientID(ctx context.Context, arg GetMessageByClie
 		arg.AuthorID,
 		arg.ClientID,
 	)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getMessageForUpdate = `-- name: GetMessageForUpdate :one
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetMessageForUpdate(ctx context.Context, id pgtype.UUID) (Message, error) {
+	row := q.db.QueryRow(ctx, getMessageForUpdate, id)
 	var i Message
 	err := row.Scan(
 		&i.ID,
@@ -779,6 +888,27 @@ func (q *Queries) PendingUploadBytes(ctx context.Context, uploadedBy pgtype.UUID
 	return column_1, err
 }
 
+const releaseSummaryJob = `-- name: ReleaseSummaryJob :exec
+UPDATE conversation_summaries SET pending_upto_seq = NULL, pending_job_id = NULL, updated_at = now()
+WHERE pending_job_id = $1
+`
+
+func (q *Queries) ReleaseSummaryJob(ctx context.Context, jobID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, releaseSummaryJob, jobID)
+	return err
+}
+
+const releaseSummaryRefresh = `-- name: ReleaseSummaryRefresh :exec
+UPDATE conversation_summaries SET pending_upto_seq = NULL, pending_job_id = NULL, updated_at = now()
+WHERE conversation_id = $1
+`
+
+// A refresh that could not start, or whose job failed: the next pack may ask again.
+func (q *Queries) ReleaseSummaryRefresh(ctx context.Context, conversationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, releaseSummaryRefresh, conversationID)
+	return err
+}
+
 const removeReaction = `-- name: RemoveReaction :execrows
 DELETE FROM message_reactions WHERE message_id = $1 AND member_kind = $2 AND member_id = $3 AND emoji = $4
 `
@@ -801,6 +931,59 @@ func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const rewriteMessage = `-- name: RewriteMessage :one
+UPDATE messages SET body = $1, status = $2
+WHERE id = $3 AND deleted_at IS NULL
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at
+`
+
+type RewriteMessageParams struct {
+	Body   string      `json:"body"`
+	Status string      `json:"status"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+// An agent's answer as it is written: not a person's edit, so edited_at stays as it was.
+func (q *Queries) RewriteMessage(ctx context.Context, arg RewriteMessageParams) (Message, error) {
+	row := q.db.QueryRow(ctx, rewriteMessage, arg.Body, arg.Status, arg.ID)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const setSummaryJob = `-- name: SetSummaryJob :exec
+UPDATE conversation_summaries SET pending_job_id = $1, updated_at = now()
+WHERE conversation_id = $2
+`
+
+type SetSummaryJobParams struct {
+	JobID          pgtype.UUID `json:"job_id"`
+	ConversationID pgtype.UUID `json:"conversation_id"`
+}
+
+func (q *Queries) SetSummaryJob(ctx context.Context, arg SetSummaryJobParams) error {
+	_, err := q.db.Exec(ctx, setSummaryJob, arg.JobID, arg.ConversationID)
+	return err
 }
 
 const softDeleteMessage = `-- name: SoftDeleteMessage :one

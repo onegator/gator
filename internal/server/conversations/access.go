@@ -157,6 +157,20 @@ func (a *Access) UserCanRead(ctx context.Context, conv db.Conversation, user pgt
 	return a.CanRead(ctx, conv, principalOf(u))
 }
 
+// UserCanWrite answers whether a person, who is not the caller, may write in conv: whether what
+// they asked of an agent there still stands.
+func (a *Access) UserCanWrite(ctx context.Context, conv db.Conversation, user pgtype.UUID) (bool, error) {
+	u, err := a.store.GetUser(ctx, user)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	r, err := a.Rights(ctx, conv, principalOf(u))
+	return r.Write, err
+}
+
 // principalOf is the identity a person would sign in as.
 func principalOf(u db.User) auth.Principal {
 	return auth.Principal{Kind: auth.KindUser, UserID: u.ID, WorkspaceRole: u.WorkspaceRole, Name: u.Name}

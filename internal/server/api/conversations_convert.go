@@ -93,6 +93,11 @@ func toMessage(v conversations.View) gen.Message {
 	for _, a := range v.Attachments {
 		out.Attachments = append(out.Attachments, toAttachment(a))
 	}
+	if t := v.Turn; t != nil {
+		out.Turn = &gen.MessageTurn{Id: toUUID(t.ID), AgentId: toUUID(t.AgentID), Status: gen.MessageTurnStatus(t.Status),
+			Tier: gen.MessageTurnTier(t.Tier), JobId: toUUIDPtr(t.JobID), Refusal: t.Refusal, CostUsd: t.CostUsd,
+			DurationMs: t.DurationMs, CostEstimated: t.CostEstimated}
+	}
 	return out
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
@@ -68,6 +69,9 @@ type Server struct {
 	Mailer invites.Mailer
 	// Conversations are channels, DMs and threads; nil: those endpoints answer 503.
 	Conversations *conversations.Module
+	// Agents are the project's members that answer in conversations; nil: their endpoints
+	// answer 503.
+	Agents *agents.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -652,7 +656,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		errors.Is(err, process.ErrRollbackCeiling), errors.Is(err, process.ErrUnknownPhase),
 		errors.Is(err, process.ErrTerminalPhase), errors.Is(err, process.ErrKindLocked):
 		writeError(w, http.StatusConflict, err.Error(), "conflict")
-	case errors.Is(err, process.ErrInvalidUsage), errors.Is(err, process.ErrInvalidEdit):
+	case errors.Is(err, process.ErrInvalidUsage), errors.Is(err, process.ErrInvalidEdit),
+		errors.Is(err, process.ErrHiddenKind), errors.Is(err, process.ErrNotAnAsk):
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 	default:
 		s.Log.Error("request failed", "err", err)

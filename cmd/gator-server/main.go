@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/onegator/gator/internal/server/admin"
+	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
@@ -191,17 +192,14 @@ func serve(ctx context.Context) error {
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
 		Preparer:       pluginHost,
 		Judge:          pluginHost,
+		// An automation's work is its agent's: error triage has @triage on the incident.
+		Authors: automations.Authors{},
 		// Every job gets an identity of its own to talk back with, revoked when it ends.
 		AgentTokens: auth.Tokens{Pool: db.Pool},
 		// A cloud job no connected runner can take gets a machine of its own, when configured.
 		Provisioner: cloud.Provisioner, RunnerTokens: auth.Tokens{Pool: db.Pool},
 		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
-	go runnerMgr.Run(ctx)
-	if os.Getenv("GATOR_AUTOPILOT") != "0" {
-		go runnerMgr.RunAutopilot(ctx)
-		log.Info("autopilot on: entering a runner phase queues a job")
-	}
 
 	// People talk in a project's channels; the consumer keeps them in step with the project.
 	// Files people send are kept in a bucket or a directory, or not at all.
@@ -214,6 +212,18 @@ func serve(ctx context.Context) error {
 	}
 	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs})
 	go chat.Consumer(hub, log, 0).Run(ctx)
+	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
+	// within the limits of a chain of delegations and the project's budget.
+	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Roles: auth.Authorizer{Pool: db.Pool}, Log: log})
+	runnerMgr.UseBriefer(team.Briefer)
+	go team.Consumer(hub, log, 0).Run(ctx)
+	go team.Streamer(hub, log, 0).Run(ctx)
+	go team.Sweeper(log).Run(ctx, time.Minute)
+	go runnerMgr.Run(ctx)
+	if os.Getenv("GATOR_AUTOPILOT") != "0" {
+		go runnerMgr.RunAutopilot(ctx)
+		log.Info("autopilot on: entering a runner phase queues a job")
+	}
 	if chat.Attachments != nil {
 		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
 	}
@@ -228,6 +238,8 @@ func serve(ctx context.Context) error {
 		PublicURL: cfg.PublicURL,
 		// Channels, DMs and threads, with the same access rules for the API, the WebSocket and search.
 		Conversations: chat,
+		// The agents who answer in them.
+		Agents: team,
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:

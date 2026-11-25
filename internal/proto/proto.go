@@ -14,10 +14,15 @@ import (
 //
 // v2 added the turn_ending/continue exchange: a runner asks before it ends a turn and
 // something may object. A v1 runner never asks, so it behaves exactly as it always did.
-const Version = 2
+//
+// v3 added agents' turns: a job says its Kind (a phase, a reply in a conversation, a summary),
+// its Tier (chat is read-only), its Agent and, for a reply, the conversation it answers in. A v2
+// runner knows none of it and would run a reply as a phase (committing, pushing, objecting to
+// itself), so it is only ever handed phase jobs, which are all of the work tier.
+const Version = 3
 
 // MinSupportedVersion is the oldest runner protocol the server still speaks.
-const MinSupportedVersion = 1
+const MinSupportedVersion = 2
 
 // Timing both sides agree on.
 const (
@@ -185,6 +190,9 @@ type Repo struct {
 	Name          string `json:"name"`
 	URL           string `json:"url"`
 	DefaultBranch string `json:"default_branch"`
+	// ReadBranch is what a read-only job reads instead of the default branch: the branch the
+	// task's work was pushed to (v3). A branch the remote does not have falls back to the default.
+	ReadBranch string `json:"read_branch,omitempty"`
 }
 
 // ContextDoc is earlier work a job should read before starting.
@@ -193,6 +201,35 @@ type ContextDoc struct {
 	Phase string `json:"phase"`
 	Title string `json:"title"`
 	Body  string `json:"body"`
+}
+
+// Kinds of job (v3). Empty is a phase job: what every job was before.
+const (
+	KindPhase   = "phase"
+	KindReply   = "reply"
+	KindSummary = "summary"
+)
+
+// Tiers of a job (v3): what its agent may touch. Empty is work: what every job was before.
+const (
+	TierWork = "work"
+	TierChat = "chat"
+)
+
+// Agent is who does a job, for the runner to sign its commits with (v3).
+type Agent struct {
+	Handle      string `json:"handle"`
+	DisplayName string `json:"display_name"`
+}
+
+// Turn is the conversation a reply answers in (v3), in the order a prompt reads it: who asks
+// what, the conversation (its background, then the latest messages, words from outside the
+// workspace already marked untrusted) and the ask again, briefly.
+type Turn struct {
+	ID           string       `json:"id"`
+	Ask          string       `json:"ask"`
+	Conversation []ContextDoc `json:"conversation,omitempty"`
+	Repeat       string       `json:"repeat,omitempty"`
 }
 
 // Job is one unit of work handed to a runner.
@@ -220,7 +257,23 @@ type Job struct {
 	AgentToken     string    `json:"agent_token,omitempty"`
 	Attempt        int       `json:"attempt"`
 	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	// Kind, Tier, Agent and Turn are v3.
+	Kind  string `json:"kind,omitempty"`
+	Tier  string `json:"tier,omitempty"`
+	Agent *Agent `json:"agent,omitempty"`
+	Turn  *Turn  `json:"turn,omitempty"`
 }
+
+// KindOrPhase is the job's kind; a job that names none is a phase job.
+func (j Job) KindOrPhase() string {
+	if j.Kind == "" {
+		return KindPhase
+	}
+	return j.Kind
+}
+
+// ReadOnly says the job's agent gets no tools that write and a checkout it cannot change.
+func (j Job) ReadOnly() bool { return j.Tier == TierChat }
 
 // Lease hands jobs to the runner. An empty list means nothing is queued for it.
 type Lease struct {

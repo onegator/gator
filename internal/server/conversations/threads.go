@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -9,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -56,6 +58,9 @@ func (t *Threads) ForTask(ctx context.Context, task db.Task) (db.Conversation, e
 	q := db.New(t.pool)
 	if conv, err := q.GetTaskConversation(ctx, task.ID); !errors.Is(err, pgx.ErrNoRows) {
 		return conv, err
+	}
+	if dm, ok := askDM(task); ok { // an ask in a DM lives in the DM, which cannot be a task's
+		return q.GetConversation(ctx, dm)
 	}
 	var channel db.Conversation
 	if !task.ClosedAt.Valid { // a task closed before it had a thread gets one quietly, without a card
@@ -127,6 +132,26 @@ func (t *Threads) Of(ctx context.Context, p auth.Principal, message pgtype.UUID)
 	return t.open(ctx, conv, msg, by)
 }
 
+// Under answers where an answer to a message goes, opening it as Gator when it must: the thread
+// under a message in a channel (with the message's author in it, as when a person opens one),
+// and for a reply, a task's thread or a DM, the conversation the message is in.
+func (t *Threads) Under(ctx context.Context, msg db.Message) (db.Conversation, error) {
+	q := db.New(t.pool)
+	conv, err := q.GetConversation(ctx, msg.ConversationID)
+	if err != nil {
+		return db.Conversation{}, err
+	}
+	if conv.ParentMessageID.Valid || conv.Kind == KindTask || conv.Kind == KindDM {
+		return conv, nil // a reply, a task's thread or a DM is answered where it is
+	}
+	if existing, err := q.GetThreadOfMessage(ctx, msg.ID); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return db.Conversation{}, err
+	}
+	return t.open(ctx, conv, msg, System)
+}
+
 // open creates the thread under msg, or answers the one a concurrent request just created.
 func (t *Threads) open(ctx context.Context, conv db.Conversation, msg db.Message, by Author) (db.Conversation, error) {
 	var thread db.Conversation
@@ -154,4 +179,17 @@ func (t *Threads) open(ctx context.Context, conv db.Conversation, msg db.Message
 		return db.New(t.pool).GetThreadOfMessage(ctx, msg.ID)
 	}
 	return thread, err
+}
+
+// askDM is the DM an ask was opened for, if it was opened for one.
+func askDM(task db.Task) (pgtype.UUID, bool) {
+	if task.Kind != process.AskKind {
+		return pgtype.UUID{}, false
+	}
+	var refs map[string]string
+	var id pgtype.UUID
+	if json.Unmarshal(task.ExternalRefs, &refs) != nil || id.Scan(refs[askRef]) != nil {
+		return id, false
+	}
+	return id, id.Valid
 }

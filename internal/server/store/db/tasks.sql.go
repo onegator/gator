@@ -347,7 +347,7 @@ const getCurrentPhaseJob = `-- name: GetCurrentPhaseJob :one
 SELECT j.id AS job_id, j.status, (j.status = 'queued' AND j.unassignable_since IS NOT NULL)::bool AS unassignable
 FROM jobs j
 JOIN tasks t ON t.id = j.task_id
-WHERE j.task_id = $1 AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
+WHERE j.task_id = $1 AND j.phase = t.phase AND j.created_at >= t.phase_entered_at AND j.kind = 'phase'
 ORDER BY j.created_at DESC
 LIMIT 1
 `
@@ -557,7 +557,7 @@ func (q *Queries) LastRollbackReason(ctx context.Context, arg LastRollbackReason
 }
 
 const listActiveJobsForTask = `-- name: ListActiveJobsForTask :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at
 `
 
 func (q *Queries) ListActiveJobsForTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
@@ -598,6 +598,10 @@ func (q *Queries) ListActiveJobsForTask(ctx context.Context, taskID pgtype.UUID)
 			&i.ContextDocs,
 			&i.Objections,
 			&i.Placement,
+			&i.AgentID,
+			&i.TurnID,
+			&i.Tier,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -680,7 +684,7 @@ const listCurrentPhaseJobs = `-- name: ListCurrentPhaseJobs :many
 SELECT DISTINCT ON (j.task_id) j.task_id, j.id AS job_id, j.status
 FROM jobs j
 JOIN tasks t ON t.id = j.task_id
-WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
+WHERE t.closed_at IS NULL AND j.phase = t.phase AND j.created_at >= t.phase_entered_at AND j.kind = 'phase'
 ORDER BY j.task_id, j.created_at DESC
 `
 
@@ -690,7 +694,8 @@ type ListCurrentPhaseJobsRow struct {
 	Status string      `json:"status"`
 }
 
-// The newest job of each open task's current phase entry, for the inbox.
+// The newest job of each open task's current phase entry, for the inbox. A reply in the task's
+// conversation is not the phase's work.
 func (q *Queries) ListCurrentPhaseJobs(ctx context.Context) ([]ListCurrentPhaseJobsRow, error) {
 	rows, err := q.db.Query(ctx, listCurrentPhaseJobs)
 	if err != nil {
@@ -1287,13 +1292,14 @@ func (q *Queries) SetTaskRequirementsChanged(ctx context.Context, arg SetTaskReq
 }
 
 const taskWorkedOn = `-- name: TaskWorkedOn :one
-SELECT (EXISTS (SELECT 1 FROM jobs j WHERE j.task_id = $1)
+SELECT (EXISTS (SELECT 1 FROM jobs j WHERE j.task_id = $1 AND j.kind = 'phase')
     OR EXISTS (SELECT 1 FROM artifacts a WHERE a.task_id = $1)
     OR EXISTS (SELECT 1 FROM phase_transitions p WHERE p.task_id = $1 AND p.kind NOT IN ('create', 'edit')))::boolean AS worked_on
 `
 
-// Whether anything beyond creating (and admitting, and editing) the task has happened: a job,
-// an artifact, a move. The answer decides whether its kind may still change.
+// Whether anything beyond creating (and admitting, and editing) the task has happened: a job of
+// its process, an artifact, a move. An agent answering in its thread is not work on it. The
+// answer decides whether its kind may still change.
 func (q *Queries) TaskWorkedOn(ctx context.Context, taskID pgtype.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, taskWorkedOn, taskID)
 	var worked_on bool

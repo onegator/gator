@@ -63,6 +63,25 @@ never message bodies. A mention, a DM or a reply in one's thread is pushed. File
 to 25 MB) are kept in `GATOR_ATTACHMENTS_S3_*` (endpoint, bucket, access key, secret key, prefix,
 insecure) or `GATOR_ATTACHMENTS_DIR`; with neither set the server takes none.
 
+## Agents
+
+Agents are members of a project: `@researcher`, `@planner`, `@worker`, `@reviewer`, `@security`,
+`@curator`, `@triage` and `@reporter` come with every project (the database seeds them), and a
+project adds its own (`POST /projects/{id}/agents`, a `@backend-reviewer` for the reviewer role) or
+sees the workspace's. A process template still says `role: reviewer`; the project's agent for the
+role does the job, and every job, commit and card is signed by it. Mentioning an agent in a
+conversation (or writing in a DM with one) is a turn: it answers in the thread under the message,
+its answer streams into its message, its tool calls move the job's card, and what it cost shows
+under it. A `chat` agent reads and answers with no tools that write in a read-only checkout; a
+`work` agent changes code on a `gator/` branch only where a person allowed agents on the task, and
+otherwise answers in chat and a card asks "Let @worker work on this?" (`POST /turns/{id}/allow`).
+A conversation about no task opens a hidden task of kind `ask`; "make this a task" turns it into a
+feature or a bug with its history. Agents delegate to each other with `gator-cli say` and an
+`@handle`, within limits: four turns per chain, a chain budget of twice a turn of the asked agent,
+never the same agent twice in a row, the project's daily budget, and a paused agent says so. A
+person's reply while an agent answers steers it; Stop is `POST /turns/{id}/stop`. The rules live in
+`internal/server/agents`, the conversation an agent is told in `internal/server/conversations/context.go`.
+
 ## Identity and access
 
 - Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`, e.g. Google) with PKCE and a
@@ -138,7 +157,9 @@ and `ghcr.io/onegator/gator-server` for amd64 and arm64.
 Runners hold one WebSocket to `/api/v1/runner`, authenticated with a runner token in the
 handshake. The contract lives in `internal/proto` and is the only code both binaries share.
 
-1. `register` → `registered` with the negotiated protocol version (the server speaks N and N-1).
+1. `register` → `registered` with the negotiated protocol version (the server speaks N and N-1:
+   v3 and v2). A v3 job says its kind (phase, reply, summary), tier (chat is read-only), agent and,
+   for a reply, the conversation it answers in; a v2 runner is handed phase jobs only.
 2. `heartbeat` every 15 s lists the jobs the runner holds; only those leases are extended.
    45 s of silence marks the runner offline.
 3. `lease_request` → `lease`: jobs are handed out with `FOR UPDATE SKIP LOCKED`, matched on
