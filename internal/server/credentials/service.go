@@ -107,7 +107,7 @@ func (s *Service) Put(ctx context.Context, user pgtype.UUID, kind, raw string) (
 		return View{}, err
 	}
 	var row db.UserCredential
-	err = s.tx(ctx, func(q *db.Queries) error {
+	err = s.locked(ctx, func(q *db.Queries) error {
 		var err error
 		if row, err = q.UpsertUserCredential(ctx, db.UpsertUserCredentialParams{UserID: user, Kind: kind, Backend: k.Backend(),
 			Secret: sealed, Hint: sec.Hint}); err != nil {
@@ -130,7 +130,7 @@ func (s *Service) Delete(ctx context.Context, user pgtype.UUID, kind string) err
 	if _, ok := s.kinds.Get(kind); !ok {
 		return fmt.Errorf("%w: %q", ErrUnknownKind, kind)
 	}
-	err := s.tx(ctx, func(q *db.Queries) error {
+	err := s.locked(ctx, func(q *db.Queries) error {
 		n, err := q.DeleteUserCredential(ctx, db.DeleteUserCredentialParams{UserID: user, Kind: kind})
 		if err != nil {
 			return err
@@ -196,7 +196,7 @@ func (s *Service) RunnerLogins(ctx context.Context) (bool, error) {
 
 // SetRunnerLogins sets that rule for the workspace.
 func (s *Service) SetRunnerLogins(ctx context.Context, on bool) error {
-	err := s.tx(ctx, func(q *db.Queries) error {
+	err := s.locked(ctx, func(q *db.Queries) error {
 		if _, err := q.GetWorkspaceSettings(ctx); err != nil { // the row, if a test emptied the table
 			return err
 		}
@@ -257,6 +257,19 @@ func (s *Service) view(r db.UserCredential) View {
 
 func (s *Service) tx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return store.InTx(ctx, s.pool, fn)
+}
+
+// locked runs fn in a transaction that holds the lease lock first. A lease takes the lock, then
+// the queued jobs, then their payers' logins; whatever changes a login and the jobs waiting for it
+// (saving, removing, refusing it, the workspace's rule) takes them in that same order, so the two
+// never wait on each other.
+func (s *Service) locked(ctx context.Context, fn func(q *db.Queries) error) error {
+	return s.tx(ctx, func(q *db.Queries) error {
+		if err := q.LockLeases(ctx); err != nil {
+			return err
+		}
+		return fn(q)
+	})
 }
 
 // emit records an event about a person's logins. It names the kind, never a value.

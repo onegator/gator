@@ -183,7 +183,7 @@ func (s *Service) Refused(ctx context.Context, job db.Job, reason string) error 
 	if !job.CredentialID.Valid {
 		return nil
 	}
-	err := s.tx(ctx, func(q *db.Queries) error {
+	err := s.locked(ctx, func(q *db.Queries) error {
 		row, err := q.GetUserCredentialByID(ctx, job.CredentialID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil

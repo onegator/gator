@@ -109,7 +109,11 @@ RETURNING *;
 
 -- name: LockLeases :exec
 -- Leases are handed out one transaction at a time, so a login one job at a time may hold is never
--- handed to two runners at once. A lease is a handful of rows; the wait is short.
+-- handed to two runners at once. It is taken by every lease, not only those that turn out to choose
+-- such a login: which login a job runs on is known only after its row is locked, and the lock must
+-- come before the rows. Saving, removing or refusing a login takes it first too, so a login and the
+-- jobs waiting for it are always locked in one order (lock, jobs, login) and never deadlock. A lease
+-- is a handful of rows; the wait is short.
 SELECT pg_advisory_xact_lock(7413020250);
 
 -- name: ExtendLeases :execrows
