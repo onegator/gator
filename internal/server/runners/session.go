@@ -591,8 +591,10 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, brie
 			}
 			record(d, d.Origin)
 		}
-		if err := brain.NewCitations(q).Used(ctx, j.ID, brain.HowPacked, packed); err != nil {
-			s.m.log.Warn("recording what a job was handed from the Brain", "job", uuidString(j.ID), "err", err)
+		if use := s.m.cfg.Brain; use != nil {
+			if err := use.Used(ctx, j.ID, brain.HowPacked, packed); err != nil {
+				s.m.log.Warn("recording what a job was handed from the Brain", "job", uuidString(j.ID), "err", err)
+			}
 		}
 	}
 	if p := s.m.cfg.Preparer; p != nil {
@@ -710,6 +712,12 @@ func (s *session) finish(fin proto.Finish) error {
 	if err := s.m.tx(ctx, func(q *db.Queries) error { return s.closeJob(ctx, q, job.ID, fin, status, reason) }); err != nil {
 		return errRetry
 	}
+	// What the agent says it relied on, of what it was handed or looked up.
+	if use := s.m.cfg.Brain; use != nil && status == proto.StatusDone {
+		if err := use.Cited(ctx, job.ID, fin.Summary); err != nil {
+			s.m.log.Warn("recording what a job cited from the Brain", "job", uuidString(job.ID), "err", err)
+		}
+	}
 	if job.Placement == proto.PlacementCloud {
 		s.m.provisionSoon() // the machine that ran it goes now, not on the next sweep
 	}
@@ -783,10 +791,7 @@ func (s *session) closeJob(ctx context.Context, q *db.Queries, jobID pgtype.UUID
 		if err := recordWork(ctx, q, j, fin); err != nil {
 			return err
 		}
-		// What the agent says it relied on, of what it was handed or looked up.
-		if err := brain.NewCitations(q).Cited(ctx, j.ID, fin.Summary); err != nil {
-			return err
-		}
+
 	}
 	j.Status = status
 	extra := map[string]any{"stop_reason": reason}

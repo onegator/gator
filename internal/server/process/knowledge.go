@@ -26,12 +26,11 @@ func (s *Service) Knowledge(ctx context.Context, projectID pgtype.UUID, role, ph
 	if err != nil {
 		return nil, nil, err
 	}
-	shelves := brain.NewLegacy(q, brain.NewPolicy(nil))
-	own, err := shelves.Shelf(ctx, projectID)
+	own, err := s.shelves.Shelf(ctx, projectID)
 	if err != nil {
 		return nil, nil, err
 	}
-	shared, err := shelves.Shelf(ctx, pgtype.UUID{})
+	shared, err := s.shelves.Shelf(ctx, pgtype.UUID{})
 	if err != nil {
 		return nil, nil, err
 	}

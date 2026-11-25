@@ -42,6 +42,12 @@ var (
 )
 
 // Config tunes timing. Zero values take the protocol defaults.
+// BrainUse records which Brain entries a job used. brain.Citations is one.
+type BrainUse interface {
+	Used(ctx context.Context, job pgtype.UUID, how string, entries []pgtype.UUID) error
+	Cited(ctx context.Context, job pgtype.UUID, text string) error
+}
+
 type Config struct {
 	OfflineAfter    time.Duration
 	LeaseTTL        time.Duration
@@ -97,6 +103,8 @@ type Config struct {
 	// ProvisionDelay is the pause between queueing a cloud job and looking for a machine for
 	// it, which gives connected runners the first chance. Zero takes 2 seconds.
 	ProvisionDelay time.Duration
+	// Brain records which Brain entries a job was handed and cited (brain.Citations); nil: none.
+	Brain BrainUse
 }
 
 // AuthorRoles names, for the work of an automation, the role whose agent does a job of a given

@@ -42,14 +42,17 @@ type Curator struct {
 	onCurationClosed func(ctx context.Context, task db.Task) error
 }
 
-// NewCurator builds the consumer; poll defaults to five seconds.
+// NewCurator builds the consumer over a Brain of its own on pool (for a caller that has none at
+// hand); poll defaults to five seconds.
 func NewCurator(pool *pgxpool.Pool, hub *events.Hub, log *slog.Logger, poll time.Duration) *Curator {
+	return NewCuratorFor(pool, brain.New(pool, brain.Deps{}).Service, hub, log, poll)
+}
+
+// NewCuratorFor builds the consumer proposing into knows, the server's own Brain.
+func NewCuratorFor(pool *pgxpool.Pool, knows proposer, hub *events.Hub, log *slog.Logger, poll time.Duration) *Curator {
 	if poll == 0 {
 		poll = 5 * time.Second
 	}
-	// Proposals go into the Brain, checked against what it holds as every proposal is; nothing here
-	// reads it, so the rules of who reads conversations are not needed.
-	knows := brain.New(pool, brain.Deps{}).Service
 	return &Curator{pool: pool, hub: hub, log: log, poll: poll, brain: knows}
 }
 

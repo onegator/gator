@@ -160,6 +160,8 @@ func serve(ctx context.Context) error {
 		CardSources: []conversations.CardSource{curator.NewCards(dbq.New(db.Pool))}})
 	// What the team and its agents know: one store, read under the same rules everywhere.
 	knows := brain.New(db.Pool, brain.Deps{Conversations: chat.Access})
+	// Jobs are handed their part of it, and the knowledge shelves are read from it.
+	svc.UseBrain(knows.Packer, knows.Legacy)
 	// Plugins propose to the Brain too (brain.propose), as proposals a person approves.
 	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins}
 	pluginCfg.LoadEnv()
@@ -174,7 +176,7 @@ func serve(ctx context.Context) error {
 	}
 	notifier := notify.New(db.Pool, svc, sender, hub, log, 0)
 	// Finished work proposes what the product learned; a person approves it.
-	learner := product.NewCurator(db.Pool, hub, log, 0)
+	learner := product.NewCuratorFor(db.Pool, knows.Service, hub, log, 0)
 	// Once a project has learned more than a prompt can carry, a curator proposes a shorter
 	// version of it; the originals are archived, never deleted.
 	condenser := product.NewCondenser(learner, svc, 0, 0)
@@ -212,6 +214,8 @@ func serve(ctx context.Context) error {
 		Judge:          pluginHost,
 		// An automation's work is its agent's: error triage has @triage on the incident.
 		Authors: automations.Authors{},
+		// What every job is handed of the Brain, and cites of it, is recorded.
+		Brain: knows.Citations,
 		// Every job gets an identity of its own to talk back with, revoked when it ends.
 		AgentTokens: auth.Tokens{Pool: db.Pool},
 		// A cloud job no connected runner can take gets a machine of its own, when configured.

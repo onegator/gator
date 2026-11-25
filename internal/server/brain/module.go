@@ -18,6 +18,9 @@ type Module struct {
 	Plugins *PluginProposals
 	// Focus works out people's focus from their work.
 	Focus *Focus
+	// Packer makes the Brain's part of a job's package; Citations records what a job used.
+	Packer    Packer
+	Citations Citations
 }
 
 // Deps are what the Brain needs from the rest of the server.
@@ -55,5 +58,8 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Legacy:  NewLegacy(q, policy),
 		Plugins: NewPluginProposals(q, svc),
 		Focus:   NewFocus(q, svc, nil),
+		// A job reads only what is approved, so its packer needs no rules about conversations.
+		Packer:    NewPacker(q, policy),
+		Citations: NewCitations(q),
 	}
 }

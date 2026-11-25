@@ -96,6 +96,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
 		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool))}})
 	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
+	svc.UseBrain(knows.Packer, knows.Legacy)
 	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{Brain: knows.Plugins, CallTimeout: 2 * time.Second,
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
 		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
@@ -106,7 +107,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
+		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations}
 	for _, c := range configure {
 		c(&rcfg)
 	}

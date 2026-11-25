@@ -71,6 +71,13 @@ type Service struct {
 	templates TemplateResolver
 	caps      CapabilityResolver
 	brain     BrainPacker
+	shelves   Shelves
+}
+
+// Shelves are the conventions written by hand, a project's or the workspace's (no project).
+// brain.Legacy is one.
+type Shelves interface {
+	Shelf(ctx context.Context, project pgtype.UUID) ([]db.BrainEntry, error)
 }
 
 // BrainPacker makes the part of a job's package that comes from the Brain. brain.Packer is one.
@@ -81,8 +88,15 @@ type BrainPacker interface {
 // Option changes how the service is wired.
 type Option func(*Service)
 
-// WithBrain packs jobs' Brain context with p rather than the default packer over the pool.
-func WithBrain(p BrainPacker) Option { return func(s *Service) { s.brain = p } }
+// WithBrain packs jobs' Brain context with p and reads the knowledge shelves from shelves, rather
+// than the default ones over the pool.
+func WithBrain(p BrainPacker, shelves Shelves) Option {
+	return func(s *Service) { s.UseBrain(p, shelves) }
+}
+
+// UseBrain is WithBrain for a service made before the Brain (the Brain's rules read
+// conversations, which need the process). Call it before the service is used.
+func (s *Service) UseBrain(p BrainPacker, shelves Shelves) { s.brain, s.shelves = p, shelves }
 
 // NewService wires the service. A job reads the Brain only through what it is handed and its own
 // identity, so the default packer needs no rules about conversations: an agent never reads a
@@ -90,7 +104,10 @@ func WithBrain(p BrainPacker) Option { return func(s *Service) { s.brain = p } }
 func NewService(pool *pgxpool.Pool, templates TemplateResolver, caps CapabilityResolver, opts ...Option) *Service {
 	s := &Service{pool: pool, templates: templates, caps: caps}
 	if pool != nil {
-		s.brain = brain.NewPacker(db.New(pool), brain.NewPolicy(nil))
+		// Until the server hands it the Brain's own: a job reads only what is approved, so these
+		// need no rules about conversations.
+		q := db.New(pool)
+		s.brain, s.shelves = brain.NewPacker(q, brain.NewPolicy(nil)), brain.NewLegacy(q, brain.NewPolicy(nil))
 	}
 	for _, o := range opts {
 		o(s)
