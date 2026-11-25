@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/redact"
+	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -278,6 +279,6 @@ func (s *Service) locked(ctx context.Context, fn func(q *db.Queries) error) erro
 // emit records an event about a person's logins. It names the kind, never a value.
 func emit(ctx context.Context, q *db.Queries, typ string, user pgtype.UUID, payload map[string]any) error {
 	b, _ := json.Marshal(payload)
-	_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: typ, Aggregate: "user", AggregateID: user, Payload: b})
+	_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: typ, Aggregate: events.AggregateUser, AggregateID: user, Payload: b})
 	return err
 }

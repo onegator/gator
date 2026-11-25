@@ -33,6 +33,10 @@ type Event struct {
 	Personal bool `json:"-"`
 }
 
+// AggregateUser is the aggregate of an event about one person (their model logins): it reaches
+// that person's "user:<id>" topic and nothing else.
+const AggregateUser = "user"
+
 // AudienceResolver answers whom an outbox event concerns, as it is published.
 type AudienceResolver interface {
 	Audience(ctx context.Context, e Event) (users []string, personal bool, err error)
@@ -100,6 +104,9 @@ func (h *Hub) Publish(e Event) {
 	}
 	if e.Aggregate == "conversation" {
 		topics = append(topics, "conversation:"+e.AggregateID)
+	}
+	if e.Aggregate == AggregateUser && e.AggregateID != "" {
+		e.Personal, e.Audience = true, append(e.Audience, e.AggregateID)
 	}
 	if e.Personal {
 		topics = nil

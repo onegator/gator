@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/credentials"
 )
@@ -56,5 +58,36 @@ func TestAJobsWritesAreMaskedOfItsLogin(t *testing.T) {
 	send(auth.Principal{Kind: auth.KindUser, UserID: user})
 	if !strings.Contains(seen, payersToken) {
 		t.Fatalf("a person's own request was changed: %s", seen)
+	}
+}
+
+// A person following "me" hears of their own logins as they change; somebody else following
+// everything they may hear does not.
+func TestLoginEventsReachTheOwnersMeTopic(t *testing.T) {
+	h := newHarness(t)
+	admin := h.token
+	_, other := h.login("member")
+	h.token = other
+	firehose := h.follow("*")
+	h.token = admin
+	me := h.follow("me")
+	time.Sleep(100 * time.Millisecond)
+	if code := h.do("PUT", "/me/credentials/claude_subscription", gen.ModelCredentialSecret{Secret: payersToken}, nil); code != 200 {
+		t.Fatalf("put: %d", code)
+	}
+	e := await(t, me, "credential.saved")
+	if !strings.Contains(string(e.Payload), "claude_subscription") || strings.Contains(string(e.Payload), payersToken) {
+		t.Fatalf("event %s", e.Payload)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	for {
+		_, b, err := firehose.Read(ctx)
+		if err != nil {
+			break // nothing more within the wait
+		}
+		if strings.Contains(string(b), "credential.saved") {
+			t.Fatalf("somebody else heard: %s", b)
+		}
 	}
 }

@@ -182,5 +182,5 @@ func TestEventFilterRules(t *testing.T) {
 }
 
 func loginEvent(user string) events.Event {
-	return events.Event{Type: "credential.refused", Aggregate: "user", AggregateID: user}
+	return events.Event{Type: "credential.refused", Aggregate: events.AggregateUser, AggregateID: user}
 }
