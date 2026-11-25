@@ -75,6 +75,9 @@ func (s *Server) SearchBrain(w http.ResponseWriter, r *http.Request, params gen.
 	if params.Limit != nil {
 		q.Limit = *params.Limit
 	}
+	if params.At != nil {
+		q.At = *params.At
+	}
 	hits, err := s.Brain.Finder.Find(r.Context(), reader, q)
 	if err != nil {
 		s.failBrain(w, err)
@@ -318,4 +321,25 @@ func (s *Server) ForgetMyBrain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, gen.Forgotten{Deleted: int(n)})
+}
+
+func (s *Server) ListBrainToReview(w http.ResponseWriter, r *http.Request, params gen.ListBrainToReviewParams) {
+	reader, ok := s.brainReader(w, r)
+	if !ok {
+		return
+	}
+	days := 90
+	if params.Days != nil {
+		days = *params.Days
+	}
+	var project pgtype.UUID
+	if params.Project != nil {
+		project = fromUUID(*params.Project)
+	}
+	rows, err := s.Brain.Service.ToReview(r.Context(), reader, project, time.Now().Add(-time.Duration(days)*24*time.Hour))
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mapAll(rows, toBrainEntry))
 }

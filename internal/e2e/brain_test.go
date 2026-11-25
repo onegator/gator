@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"testing"
@@ -130,5 +131,33 @@ func TestBrainEntriesVersionsAndVerdicts(t *testing.T) {
 	}
 	if code := h.do("POST", "/brain", gen.NewBrainEntry{Scope: "project", Kind: "preference", Title: "x", Content: "y", ProjectId: &p.Id}, nil); code != 400 {
 		t.Fatalf("a preference is a person's: %d", code)
+	}
+}
+
+// An approved entry nobody has cited for ninety days comes up for review; one a job cited lately
+// does not.
+func TestEntriesNobodyCitesComeUpForReview(t *testing.T) {
+	h := newHarness(t)
+	p := h.oneProject("review")
+	var old, used gen.BrainEntry
+	h.do("POST", "/brain", brainDraft("project", "runbook", "Restart the queue", "kill -HUP the worker", &p), &old)
+	h.do("POST", "/brain", brainDraft("project", "runbook", "Rotate the keys", "make rotate", &p), &used)
+	task := h.taskIn(p.Id.String())
+	job := h.job(task, uniqueBackend(), "x", 0)
+	ctx := context.Background()
+	if _, err := h.pool.Exec(ctx, `UPDATE brain_entries SET approved_at = now() - interval '100 days' WHERE id IN ($1, $2)`,
+		old.Id.String(), used.Id.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.pool.Exec(ctx, `INSERT INTO brain_citations (job_id, entry_id, how) VALUES ($1, $2, 'cited')`,
+		job.Id.String(), used.Id.String()); err != nil {
+		t.Fatal(err)
+	}
+	var review []gen.BrainEntry
+	if code := h.do("GET", "/brain/review?project="+p.Id.String(), nil, &review); code != 200 {
+		t.Fatalf("review: %d", code)
+	}
+	if len(review) != 1 || review[0].Id != old.Id {
+		t.Fatalf("only the entry nobody cites: %+v", review)
 	}
 }

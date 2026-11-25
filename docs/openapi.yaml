@@ -455,6 +455,7 @@ paths:
         - { name: kind, in: query, required: false, schema: { $ref: "#/components/schemas/BrainKind" } }
         - { name: status, in: query, required: false, schema: { $ref: "#/components/schemas/BrainStatus" } }
         - { name: project, in: query, required: false, description: "one project and what is above it", schema: { type: string, format: uuid } }
+        - { name: at, in: query, required: false, description: "what held at this moment: approved by then and not yet replaced (\"what did we know in March\")", schema: { type: string, format: date-time } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainHit" } } } } }
@@ -478,6 +479,17 @@ paths:
       description: What waits for a person's verdict, oldest first, within what the caller may read.
       parameters:
         - { name: project, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainEntry" } } } } }
+  /brain/review:
+    get:
+      operationId: listBrainToReview
+      description: >
+        Approved entries no job has cited for a while (90 days by default), oldest first: the ones worth asking
+        "is this still true?". Archive what no longer holds, revise what changed.
+      parameters:
+        - { name: project, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 3650, default: 90 } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainEntry" } } } } }
   /brain/{brainEntryId}:

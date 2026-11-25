@@ -3,6 +3,7 @@ package brain
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -19,7 +20,9 @@ type Query struct {
 	Project pgtype.UUID
 	// Archived includes entries folded into a condensed one.
 	Archived bool
-	Limit    int
+	// At asks what held at a moment: what was approved by then and not yet replaced.
+	At    time.Time
+	Limit int
 }
 
 // Hit is one entry found, with how well it matched.
@@ -52,10 +55,14 @@ func (f FTS) Search(ctx context.Context, reach Reach, q Query) ([]Hit, error) {
 	if reach.LiveOnly {
 		statuses = []string{StatusApproved}
 	}
+	var at pgtype.Timestamptz
+	if !q.At.IsZero() && !reach.LiveOnly {
+		at = pgtype.Timestamptz{Time: q.At, Valid: true}
+	}
 	rows, err := f.store.SearchBrain(ctx, db.SearchBrainParams{
 		Query: strings.TrimSpace(q.Text), Scopes: orEmpty(q.Scopes), Kinds: orEmpty(q.Kinds), Statuses: orEmpty(statuses),
 		ProjectID: q.Project, IncludeArchived: q.Archived && !reach.LiveOnly,
-		EveryProject: reach.EveryProject, Projects: orNone(reach.Projects), UserID: reach.User, MaxRows: int32(q.Limit),
+		EveryProject: reach.EveryProject, Projects: orNone(reach.Projects), UserID: reach.User, MaxRows: int32(q.Limit), At: at,
 	})
 	if err != nil {
 		return nil, err

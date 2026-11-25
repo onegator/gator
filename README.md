@@ -82,6 +82,24 @@ never the same agent twice in a row, the project's daily budget, and a paused ag
 person's reply while an agent answers steers it; Stop is `POST /turns/{id}/stop`. The rules live in
 `internal/server/agents`, the conversation an agent is told in `internal/server/conversations/context.go`.
 
+## Brain
+
+What the team and its agents know lives in one store, `brain_entries` (`internal/server/brain`):
+scopes `workspace` (conventions everyone follows), `project` (vision, principles, decisions, runbooks),
+`component` (handed to jobs about that component and its neighbours), `user` (a person's expertise,
+preferences and focus: theirs alone unless shared) and `agent` (an agent's own lessons). Agents
+propose, people approve; only approved entries reach a prompt; a change is a new version and the old
+one stays (`GET /brain?at=` answers what held then). One `brain.Policy` decides who reads what for the
+REST API (`/brain`), the MCP server and the package a job is handed: a job reads its project's approved
+entries and the private context of the person its turn acts for (`agent_turns.on_behalf_of`), never of
+anybody else. Every job is handed its part with `[brain:<id>]` tags; what it was handed, looked up and
+cited is in `brain_citations`. The curator (`brain/curator`) proposes what a quiet task thread settled,
+with one `brain_proposal` card a day in the thread; plugins propose with `brain.propose` (GitHub: the
+ADRs in `docs/adr/`); a proposal that contradicts an approved decision asks whether it replaces it.
+The old `/product` and `/knowledge` endpoints are facades over it for one release. The MCP server
+`gator` is at `POST /mcp`: jobs reach it with their own token (the runner adds it to every session) and
+people connect their own clients with theirs; see [docs/agent-tools.md](docs/agent-tools.md).
+
 ## Identity and access
 
 - Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`, e.g. Google) with PKCE and a

@@ -47,8 +47,9 @@ func NewCurator(pool *pgxpool.Pool, hub *events.Hub, log *slog.Logger, poll time
 	if poll == 0 {
 		poll = 5 * time.Second
 	}
-	// Proposals go into the Brain; nothing here reads it, so the rules of who reads are not needed.
-	knows := brain.NewService(brain.PoolTx(pool), db.New(pool), brain.NewPolicy(nil), nil)
+	// Proposals go into the Brain, checked against what it holds as every proposal is; nothing here
+	// reads it, so the rules of who reads conversations are not needed.
+	knows := brain.New(pool, brain.Deps{}).Service
 	return &Curator{pool: pool, hub: hub, log: log, poll: poll, brain: knows}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -33,6 +34,7 @@ type Store interface {
 	InsertEvent(ctx context.Context, arg db.InsertEventParams) (int64, error)
 	ListUserBrain(ctx context.Context, userID pgtype.UUID) ([]db.BrainEntry, error)
 	DeleteUserBrain(ctx context.Context, userID pgtype.UUID) (int64, error)
+	StaleBrainEntries(ctx context.Context, arg db.StaleBrainEntriesParams) ([]db.BrainEntry, error)
 }
 
 // Tx runs fn against one transaction of the store.
@@ -100,10 +102,17 @@ const (
 	VerdictArchive = "archive"
 )
 
-// Effect is what approving an entry does besides approving it: earlier versions stop being true,
-// the entries a condensed one replaces are archived, a decision it contradicts is superseded. A
-// new consequence of approval is one more Effect.
-type Effect func(ctx context.Context, st Store, approved db.BrainEntry) error
+// Effect is what happens to an entry besides storing it, in the same transaction: a proposal is
+// checked against what is approved (Contradictions.Link); approving one makes earlier versions
+// stop being true, archives what a condensed entry replaces and supersedes a decision it
+// contradicts. A new consequence is one more Effect in Hooks.
+type Effect func(ctx context.Context, st Store, e db.BrainEntry) error
+
+// Hooks are the effects of proposing and of approving, run in order after the built-in ones.
+type Hooks struct {
+	Proposed []Effect
+	Approved []Effect
+}
 
 // Service keeps entries: writes and proposals, versions, verdicts, and what one entry is (its
 // versions, links and uses). Who may do which is the Policy's; searching is the Finder's.
@@ -112,17 +121,17 @@ type Service struct {
 	store   Store
 	policy  Policy
 	sources Sources
-	effects []Effect
+	hooks   Hooks
 }
 
-// NewService builds it; effects run, in order, after the built-in ones whenever an entry is
-// approved.
-func NewService(tx Tx, st Store, policy Policy, sources Sources, effects ...Effect) *Service {
+// NewService builds it. Approving an entry always makes its earlier versions stop being true and
+// archives what a condensed entry replaces; hooks add to that.
+func NewService(tx Tx, st Store, policy Policy, sources Sources, hooks Hooks) *Service {
 	if sources == nil {
 		sources = DefaultSources()
 	}
-	builtin := []Effect{supersedeEarlier, archiveCondensed}
-	return &Service{tx: tx, store: st, policy: policy, sources: sources, effects: append(builtin, effects...)}
+	hooks.Approved = append([]Effect{supersedeEarlier, archiveCondensed}, hooks.Approved...)
+	return &Service{tx: tx, store: st, policy: policy, sources: sources, hooks: hooks}
 }
 
 // Policy is the rules the service writes by.
@@ -265,7 +274,7 @@ func (s *Service) decide(ctx context.Context, e db.BrainEntry, verdict string, b
 			return err
 		}
 		if status == StatusApproved {
-			if err := s.approved(ctx, st, out); err != nil {
+			if err := run(ctx, st, out, s.hooks.Approved); err != nil {
 				return err
 			}
 		}
@@ -310,6 +319,17 @@ func (s *Service) Get(ctx context.Context, r Reader, id pgtype.UUID) (Detail, er
 // Proposals are what waits for r's verdict or attention, in project (or everywhere r reads).
 func (s *Service) Proposals(ctx context.Context, r Reader, project pgtype.UUID) ([]db.BrainEntry, error) {
 	rows, err := s.store.ListBrainProposals(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return s.Visible(ctx, r, rows)
+}
+
+// ToReview are the approved entries in project (or everywhere r reads) that no job has cited
+// since before: the ones worth asking whether they still hold.
+func (s *Service) ToReview(ctx context.Context, r Reader, project pgtype.UUID, before time.Time) ([]db.BrainEntry, error) {
+	rows, err := s.store.StaleBrainEntries(ctx, db.StaleBrainEntriesParams{ProjectID: project,
+		Before: pgtype.Timestamptz{Time: before, Valid: true}})
 	if err != nil {
 		return nil, err
 	}
@@ -401,10 +421,9 @@ func (s *Service) put(ctx context.Context, tx Tx, d Draft, by Author, status str
 				return err
 			}
 		}
-		if status == StatusApproved {
-			if err := s.approved(ctx, st, out); err != nil {
-				return err
-			}
+		effects := map[string][]Effect{StatusProposed: s.hooks.Proposed, StatusApproved: s.hooks.Approved}[status]
+		if err := run(ctx, st, out, effects); err != nil {
+			return err
 		}
 		return emit(ctx, st, "brain."+status, out)
 	})
@@ -430,8 +449,8 @@ func (s *Service) previous(ctx context.Context, st Store, d Draft, lineage pgtyp
 	return prev, err == nil, err
 }
 
-func (s *Service) approved(ctx context.Context, st Store, e db.BrainEntry) error {
-	for _, effect := range s.effects {
+func run(ctx context.Context, st Store, e db.BrainEntry, effects []Effect) error {
+	for _, effect := range effects {
 		if err := effect(ctx, st, e); err != nil {
 			return err
 		}

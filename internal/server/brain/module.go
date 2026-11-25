@@ -27,8 +27,8 @@ type Deps struct {
 	Conversations ConversationAccess
 	// Searcher finds candidates; nil: Postgres full-text search.
 	Searcher Searcher
-	// Effects are more consequences of approving an entry (see Effect).
-	Effects []Effect
+	// Hooks are more consequences of proposing and approving entries (see Effect).
+	Hooks Hooks
 }
 
 // New wires the Brain.
@@ -39,7 +39,14 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	if searcher == nil {
 		searcher = NewFTS(q)
 	}
-	svc := NewService(PoolTx(pool), q, policy, DefaultSources(), deps.Effects...)
+	// A proposed decision is checked against the approved ones it may replace, and approving it
+	// supersedes them.
+	contradictions := NewContradictions(searcher)
+	hooks := Hooks{
+		Proposed: append([]Effect{contradictions.Link}, deps.Hooks.Proposed...),
+		Approved: append([]Effect{SupersedeContradicted}, deps.Hooks.Approved...),
+	}
+	svc := NewService(PoolTx(pool), q, policy, DefaultSources(), hooks)
 	return &Module{
 		Policy:  policy,
 		Readers: NewReaders(q),

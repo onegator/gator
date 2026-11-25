@@ -1398,25 +1398,30 @@ WHERE ($1::text = '' OR to_tsvector('simple', e.title || ' ' || e.content) @@ we
   AND (cardinality($4::text[]) = 0 OR e.status = ANY($4::text[]))
   AND ($5::uuid IS NULL OR e.project_id = $5::uuid OR e.project_id IS NULL)
   AND ($6::boolean OR e.archived_at IS NULL)
+  -- What held at a moment: approved by then, and not yet replaced or archived.
+  AND ($7::timestamptz IS NULL OR (e.status IN ('approved', 'superseded', 'archived')
+       AND e.approved_at <= $7::timestamptz AND e.valid_from <= $7::timestamptz
+       AND (e.valid_until IS NULL OR e.valid_until > $7::timestamptz)))
   AND (e.scope = 'workspace' OR e.visibility = 'workspace'
-       OR (e.scope IN ('project', 'component', 'agent') AND ($7::boolean OR e.project_id = ANY($8::uuid[])))
-       OR (e.scope = 'user' AND (e.user_id = $9::uuid
-                                 OR (e.visibility = 'project' AND ($7::boolean OR e.project_id = ANY($8::uuid[]))))))
+       OR (e.scope IN ('project', 'component', 'agent') AND ($8::boolean OR e.project_id = ANY($9::uuid[])))
+       OR (e.scope = 'user' AND (e.user_id = $10::uuid
+                                 OR (e.visibility = 'project' AND ($8::boolean OR e.project_id = ANY($9::uuid[]))))))
 ORDER BY rank DESC, e.updated_at DESC, e.id
-LIMIT $10
+LIMIT $11
 `
 
 type SearchBrainParams struct {
-	Query           string        `json:"query"`
-	Scopes          []string      `json:"scopes"`
-	Kinds           []string      `json:"kinds"`
-	Statuses        []string      `json:"statuses"`
-	ProjectID       pgtype.UUID   `json:"project_id"`
-	IncludeArchived bool          `json:"include_archived"`
-	EveryProject    bool          `json:"every_project"`
-	Projects        []pgtype.UUID `json:"projects"`
-	UserID          pgtype.UUID   `json:"user_id"`
-	MaxRows         int32         `json:"max_rows"`
+	Query           string             `json:"query"`
+	Scopes          []string           `json:"scopes"`
+	Kinds           []string           `json:"kinds"`
+	Statuses        []string           `json:"statuses"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	IncludeArchived bool               `json:"include_archived"`
+	At              pgtype.Timestamptz `json:"at"`
+	EveryProject    bool               `json:"every_project"`
+	Projects        []pgtype.UUID      `json:"projects"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	MaxRows         int32              `json:"max_rows"`
 }
 
 type SearchBrainRow struct {
@@ -1434,6 +1439,7 @@ func (q *Queries) SearchBrain(ctx context.Context, arg SearchBrainParams) ([]Sea
 		arg.Statuses,
 		arg.ProjectID,
 		arg.IncludeArchived,
+		arg.At,
 		arg.EveryProject,
 		arg.Projects,
 		arg.UserID,

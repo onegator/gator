@@ -72,6 +72,10 @@ WHERE (sqlc.arg(query)::text = '' OR to_tsvector('simple', e.title || ' ' || e.c
   AND (cardinality(sqlc.arg(statuses)::text[]) = 0 OR e.status = ANY(sqlc.arg(statuses)::text[]))
   AND (sqlc.narg(project_id)::uuid IS NULL OR e.project_id = sqlc.narg(project_id)::uuid OR e.project_id IS NULL)
   AND (sqlc.arg(include_archived)::boolean OR e.archived_at IS NULL)
+  -- What held at a moment: approved by then, and not yet replaced or archived.
+  AND (sqlc.narg(at)::timestamptz IS NULL OR (e.status IN ('approved', 'superseded', 'archived')
+       AND e.approved_at <= sqlc.narg(at)::timestamptz AND e.valid_from <= sqlc.narg(at)::timestamptz
+       AND (e.valid_until IS NULL OR e.valid_until > sqlc.narg(at)::timestamptz)))
   AND (e.scope = 'workspace' OR e.visibility = 'workspace'
        OR (e.scope IN ('project', 'component', 'agent') AND (sqlc.arg(every_project)::boolean OR e.project_id = ANY(sqlc.arg(projects)::uuid[])))
        OR (e.scope = 'user' AND (e.user_id = sqlc.narg(user_id)::uuid
