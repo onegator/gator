@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/store/db"
+	"github.com/onegator/gator/internal/server/untrusted"
 )
 
 // The package a job is handed from the Brain: deterministic, like the product slice was — the
@@ -76,6 +77,8 @@ type packing struct {
 	// people are the job's project's members, and the person its turn acts for, by name: whose
 	// context a package may carry at all.
 	people map[[16]byte]string
+	// marker fences what came from outside the workspace (a plugin's proposal, approved since).
+	marker untrusted.Marker
 }
 
 // sections are the parts of a package. The conventions on the knowledge shelves (with a topic)
@@ -193,6 +196,7 @@ func (p Packer) Pack(ctx context.Context, req Request) ([]Item, error) {
 		for _, e := range taken {
 			item := render(sec, e, pk)
 			used = fit(&item, used, budget)
+			fence(&item, pk)
 			out = append(out, item)
 		}
 	}
@@ -201,7 +205,7 @@ func (p Packer) Pack(ctx context.Context, req Request) ([]Item, error) {
 
 // packing is req with the people whose context the package may carry.
 func (p Packer) packing(ctx context.Context, req Request) (packing, error) {
-	pk := packing{Request: req, people: map[[16]byte]string{}}
+	pk := packing{Request: req, people: map[[16]byte]string{}, marker: untrusted.New()}
 	members, err := p.store.ListProjectMembersWithUsers(ctx, req.Reader.Project)
 	if err != nil {
 		return pk, err
@@ -270,6 +274,14 @@ func render(sec section, e db.BrainEntry, pk packing) Item {
 	kind, phase, title := sec.label(e, pk)
 	return Item{Entry: e, Kind: kind, Phase: phase, Title: fmt.Sprintf("%s (v%d) %s", title, e.Version, Tag(e.ID)),
 		Body: e.Content, FullBytes: len(e.Content), Private: e.Scope == ScopeUser && !sharedWith(e)}
+}
+
+// fence wraps what a plugin wrote, once it is cut to fit: a person approved it, but it is still
+// words from outside the workspace, read as data, and the fence closes whatever was cut.
+func fence(item *Item, pk packing) {
+	if src := SourceOf(item.Entry); src.Kind == SourcePlugin && !item.Dropped {
+		item.Body = pk.marker.Fence("plugin "+src.Name, item.Body)
+	}
 }
 
 // sharedWith says whether a person's entry is open beyond them.

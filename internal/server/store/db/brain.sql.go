@@ -153,27 +153,6 @@ func (q *Queries) ConversationsDueForCuration(ctx context.Context, arg Conversat
 	return items, nil
 }
 
-const countBrainFromSource = `-- name: CountBrainFromSource :one
-SELECT count(*) FROM brain_entries
-WHERE source->>'kind' = $1::text AND source->>'id' = $2::text
-  AND project_id IS NOT DISTINCT FROM $3::uuid
-`
-
-type CountBrainFromSourceParams struct {
-	SourceKind string      `json:"source_kind"`
-	SourceID   string      `json:"source_id"`
-	ProjectID  pgtype.UUID `json:"project_id"`
-}
-
-// Whether something already came from this source (a message, a plugin's document), so it is
-// proposed once.
-func (q *Queries) CountBrainFromSource(ctx context.Context, arg CountBrainFromSourceParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countBrainFromSource, arg.SourceKind, arg.SourceID, arg.ProjectID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countBrainProposalsForTask = `-- name: CountBrainProposalsForTask :one
 SELECT count(*) FROM brain_entries WHERE project_id = $1 AND kind = $2 AND source_task_id = $3
 `
@@ -199,6 +178,46 @@ SELECT count(*) FROM brain_entries WHERE source_conversation_id = $1 AND status 
 // Proposals from one conversation still waiting: a thread does not fill the inbox.
 func (q *Queries) CountOpenProposalsFrom(ctx context.Context, sourceConversationID pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countOpenProposalsFrom, sourceConversationID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPluginProposalsSince = `-- name: CountPluginProposalsSince :one
+SELECT count(*) FROM brain_entries
+WHERE source->>'kind' = 'plugin' AND source->>'name' = $1::text AND project_id = $2
+  AND created_at > $3::timestamptz
+`
+
+type CountPluginProposalsSinceParams struct {
+	Plugin    string             `json:"plugin"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Since     pgtype.Timestamptz `json:"since"`
+}
+
+// How much a plugin proposed in a project since a moment: a plugin does not fill an inbox.
+func (q *Queries) CountPluginProposalsSince(ctx context.Context, arg CountPluginProposalsSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPluginProposalsSince, arg.Plugin, arg.ProjectID, arg.Since)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPluginSource = `-- name: CountPluginSource :one
+SELECT count(*) FROM brain_entries
+WHERE source->>'kind' = 'plugin' AND source->>'name' = $1::text AND source->>'id' = $2::text
+  AND project_id = $3
+`
+
+type CountPluginSourceParams struct {
+	Plugin    string      `json:"plugin"`
+	SourceID  string      `json:"source_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+// Whether a plugin proposed this source in this project already, so it is proposed once.
+func (q *Queries) CountPluginSource(ctx context.Context, arg CountPluginSourceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPluginSource, arg.Plugin, arg.SourceID, arg.ProjectID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

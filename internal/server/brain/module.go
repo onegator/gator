@@ -15,7 +15,7 @@ type Module struct {
 	// Legacy is the product context's and the knowledge shelves' old doors, over the Brain.
 	Legacy Legacy
 	// Plugins is the door plugins propose through (brain.propose).
-	Plugins PluginProposals
+	Plugins *PluginProposals
 	// Focus works out people's focus from their work.
 	Focus *Focus
 }

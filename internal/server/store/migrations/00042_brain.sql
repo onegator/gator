@@ -67,6 +67,10 @@ CREATE UNIQUE INDEX brain_version_idx ON brain_entries
     (scope, project_id, component_key, user_id, agent_id, kind, title, version) NULLS NOT DISTINCT
     WHERE topic IS NULL;
 
+-- What a plugin proposes, each of its sources once in a project, however many deliveries race.
+CREATE UNIQUE INDEX brain_plugin_source_idx ON brain_entries (project_id, (source->>'name'), (source->>'id'))
+    WHERE source->>'kind' = 'plugin';
+
 -- An entry's lineage is its own id unless it says otherwise.
 -- +goose StatementBegin
 CREATE FUNCTION gator_brain_lineage() RETURNS trigger LANGUAGE plpgsql AS $$

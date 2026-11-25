@@ -117,12 +117,17 @@ ORDER BY e.created_at, e.id;
 -- Keeps a repeated event from proposing the same thing twice.
 SELECT count(*) FROM brain_entries WHERE project_id = $1 AND kind = $2 AND source_task_id = $3;
 
--- name: CountBrainFromSource :one
--- Whether something already came from this source (a message, a plugin's document), so it is
--- proposed once.
+-- name: CountPluginSource :one
+-- Whether a plugin proposed this source in this project already, so it is proposed once.
 SELECT count(*) FROM brain_entries
-WHERE source->>'kind' = sqlc.arg(source_kind)::text AND source->>'id' = sqlc.arg(source_id)::text
-  AND project_id IS NOT DISTINCT FROM sqlc.narg(project_id)::uuid;
+WHERE source->>'kind' = 'plugin' AND source->>'name' = sqlc.arg(plugin)::text AND source->>'id' = sqlc.arg(source_id)::text
+  AND project_id = sqlc.arg(project_id);
+
+-- name: CountPluginProposalsSince :one
+-- How much a plugin proposed in a project since a moment: a plugin does not fill an inbox.
+SELECT count(*) FROM brain_entries
+WHERE source->>'kind' = 'plugin' AND source->>'name' = sqlc.arg(plugin)::text AND project_id = sqlc.arg(project_id)
+  AND created_at > sqlc.arg(since)::timestamptz;
 
 -- name: ListUserBrain :many
 -- Everything about one person, every version: what "me" is, for export and for the screen.
