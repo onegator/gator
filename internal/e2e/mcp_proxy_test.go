@@ -135,7 +135,7 @@ func (h *harness) remoteSetup() remoteSetup {
 	if d.Missing == nil || !slices.Contains(*d.Missing, "MCP server issues-mcp") {
 		h.t.Fatalf("the agent needs the server: %v", d.Missing)
 	}
-	h.install(project, gen.NewInstallation{Kind: "integration", Name: "issues-mcp", RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", "issues-mcp", reg.Id.String())})
+	h.install(project, gen.NewInstallation{Kind: "integration", Name: "issues-mcp", RegistryId: reg.Id, AcceptedPermissions: h.accept("integration", "issues-mcp", reg.Id.String())})
 	var srv gen.McpServer
 	if code := h.do("PUT", "/projects/"+project+"/mcp-servers/issues-mcp", gen.McpServerSettings{Secrets: &map[string]string{"token": secret}}, &srv); code != 200 {
 		h.t.Fatalf("connect: %d", code)
@@ -143,7 +143,7 @@ func (h *harness) remoteSetup() remoteSetup {
 	if !srv.Connected || !slices.Equal(srv.SecretsSet, []string{"token"}) || !slices.Equal(srv.AllowedTools, []string{"search_issues", "get_issue_details"}) {
 		h.t.Fatalf("server: %+v", srv)
 	}
-	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "oncall-triage", RegistryId: &reg.Id, AcceptedPermissions: h.accept("agent", "oncall-triage", reg.Id.String())})
+	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "oncall-triage", RegistryId: reg.Id, AcceptedPermissions: h.accept("agent", "oncall-triage", reg.Id.String())})
 	if !slices.Equal(inst.Agent.Tools, []string{"issues-mcp"}) {
 		h.t.Fatalf("the agent is given the server: %v", inst.Agent.Tools)
 	}

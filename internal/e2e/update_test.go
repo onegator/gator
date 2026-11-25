@@ -40,7 +40,7 @@ func TestUpdatesWaitForAPersonAndForWhatTheyChanged(t *testing.T) {
 	reg, _ := h.registry(r)
 	p := h.oneProject("upd")
 	project := p.Id.String()
-	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: &reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
+	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
 	agent := inst.Agent.Id.String()
 
 	// 1.1.0 is published and fetched: offered, not installed.
@@ -62,7 +62,7 @@ func TestUpdatesWaitForAPersonAndForWhatTheyChanged(t *testing.T) {
 	if pv.From != "1.0.0" || pv.To != "1.1.0" || pv.NeedsAcceptance || len(pv.LocalChanges) != 0 {
 		t.Fatalf("preview: %+v", pv)
 	}
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{}, &got); code != 200 || got.Version != "1.1.0" ||
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{}), &got); code != 200 || got.Version != "1.1.0" ||
 		!strings.Contains(got.Agent.Instructions, "Link every") || got.Agent.Handle != "releaser" {
 		t.Fatalf("update: %d %+v", code, got)
 	}
@@ -77,7 +77,7 @@ func TestUpdatesWaitForAPersonAndForWhatTheyChanged(t *testing.T) {
 		t.Fatalf("more permissions: %+v", pv)
 	}
 	var refusal gen.InstallRefusal
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{}, &refusal); code != 409 || refusal.Code != "permissions_not_accepted" ||
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{}), &refusal); code != 409 || refusal.Code != "permissions_not_accepted" ||
 		refusal.Permissions == nil || !slices.Equal(*refusal.Permissions, []string{"publishes the release notes"}) {
 		t.Fatalf("not accepted: %d %+v", code, refusal)
 	}
@@ -88,7 +88,7 @@ func TestUpdatesWaitForAPersonAndForWhatTheyChanged(t *testing.T) {
 		t.Fatalf("a local edit: %d", code)
 	}
 	accept := []string{"publishes the release notes"}
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &accept}, &refusal); code != 409 ||
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &accept}), &refusal); code != 409 ||
 		refusal.Code != "local_changes" || refusal.LocalChanges == nil || len(*refusal.LocalChanges) != 1 {
 		t.Fatalf("a local edit blocks it: %d %+v", code, refusal)
 	}
@@ -103,7 +103,7 @@ func TestUpdatesWaitForAPersonAndForWhatTheyChanged(t *testing.T) {
 	}
 
 	keep := gen.KeepLocal
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &accept, Resolve: &keep}, &got); code != 200 ||
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &accept, Resolve: &keep}), &got); code != 200 ||
 		got.Version != "2.0.0" || got.Agent.Instructions != own || !strings.Contains(got.Agent.Description, "2.0.0") ||
 		!slices.Contains(got.AcceptedPermissions, "publishes the release notes") {
 		t.Fatalf("kept: %d %+v", code, got)
@@ -114,17 +114,17 @@ func TestUpdatesWaitForAPersonAndForWhatTheyChanged(t *testing.T) {
 	r.Publish()
 	h.fetch(reg.Id.String(), 200)
 	theirs := gen.TakeTheirs
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{}, &refusal); code != 409 || refusal.Code != "local_changes" {
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{}), &refusal); code != 409 || refusal.Code != "local_changes" {
 		t.Fatalf("still their own: %d %+v", code, refusal)
 	}
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{Resolve: &theirs}, &got); code != 200 ||
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{Resolve: &theirs}), &got); code != 200 ||
 		got.Version != "2.1.0" || got.Agent.Instructions != "Write the changelog, shorter.\n" {
 		t.Fatalf("taken: %d %+v", code, got)
 	}
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{}, &refusal); code != 409 {
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{}), &refusal); code != 409 {
 		t.Fatalf("installed already: %d", code)
 	}
-	if code := h.asJob(h.member(project, "member"), "PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{Version: ptr("2.0.0")}, nil); code != 403 {
+	if code := h.asJob(h.member(project, "member"), "PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{Version: "2.0.0", Checksum: "sha256:any"}), nil); code != 403 {
 		t.Fatalf("a member updates: %d", code)
 	}
 }
@@ -137,7 +137,7 @@ func TestDroppingACostCapIsAcceptedAgain(t *testing.T) {
 	r.Publish()
 	reg, _ := h.registry(r)
 	p := h.oneProject("cap")
-	inst := h.install(p.Id.String(), gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: &reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
+	inst := h.install(p.Id.String(), gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
 	r.Package("agents/release-helper", helper("1.0.1", "Write the changelog.\n"))
 	r.Publish()
 	h.fetch(reg.Id.String(), 200)
@@ -148,7 +148,7 @@ func TestDroppingACostCapIsAcceptedAgain(t *testing.T) {
 		t.Fatalf("dropping the caps: %+v", pv)
 	}
 	var refusal gen.InstallRefusal
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{}, &refusal); code != 409 || refusal.Code != "permissions_not_accepted" {
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{}), &refusal); code != 409 || refusal.Code != "permissions_not_accepted" {
 		t.Fatalf("applied without acceptance: %d %+v", code, refusal)
 	}
 }
@@ -166,7 +166,7 @@ func TestAnAgentsOwnSettingsAreLocalChanges(t *testing.T) {
 	reg, _ := h.registry(r)
 	p := h.oneProject("own")
 	project := p.Id.String()
-	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: &reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
+	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
 	if code := h.do("PATCH", "/agents/"+inst.Agent.Id.String(), gen.AgentPatch{Tools: &[]string{"issues-mcp"}, Tier: ptr(gen.AgentPatchTierWork)}, nil); code != 200 {
 		t.Fatalf("local changes: %d", code)
 	}
@@ -185,12 +185,12 @@ func TestAnAgentsOwnSettingsAreLocalChanges(t *testing.T) {
 		t.Fatalf("local changes: %v", parts)
 	}
 	var refusal gen.InstallRefusal
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &pv.AddedPermissions}, &refusal); code != 409 || refusal.Code != "local_changes" {
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &pv.AddedPermissions}), &refusal); code != 409 || refusal.Code != "local_changes" {
 		t.Fatalf("overwritten without a word: %d %+v", code, refusal)
 	}
 	keep := gen.KeepLocal
 	var got gen.Installation
-	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &pv.AddedPermissions, Resolve: &keep}, &got); code != 200 {
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &pv.AddedPermissions, Resolve: &keep}), &got); code != 200 {
 		t.Fatalf("keep: %d", code)
 	}
 	if got.Agent.Tier != "work" || !slices.Equal(got.Agent.Tools, []string{"issues-mcp"}) || len(got.Agent.Skills) != 0 {

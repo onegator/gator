@@ -3588,12 +3588,14 @@ components:
         permissions: { type: array, items: { type: string } }
     NewInstallation:
       type: object
-      required: [kind, name, acceptedPermissions]
+      description: "Exactly the package the person looked at: a name two registries offer, a version published since, or the same version with other files is not what they accepted, and is refused (409)."
+      required: [kind, name, registryId, version, checksum, acceptedPermissions]
       properties:
         kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
         name: { type: string }
-        version: { type: string, description: "default: the newest offered" }
-        registryId: { type: string, format: uuid, description: "default: whichever registry offers it, Gator's first" }
+        version: { type: string }
+        registryId: { type: string, format: uuid }
+        checksum: { type: string, description: "the version's checksum, as the details showed it" }
         acceptedPermissions: { type: array, items: { type: string }, description: "the permissions the person ticked, as the package words them" }
         handle: { type: string, description: "an agent's handle, when the suggested one is taken" }
     Installation:
@@ -3693,16 +3695,19 @@ components:
         createdAt: { type: string, format: date-time }
     InstallationUpdate:
       type: object
+      required: [version, checksum]
       properties:
-        version: { type: string, description: "default: the newest its registry offers" }
+        version: { type: string, description: "the version previewed, in the installation's registry" }
+        checksum: { type: string, description: "its checksum, as the preview showed it" }
         acceptedPermissions: { type: array, items: { type: string }, description: "accepted now; with what was accepted before, every permission of the new version" }
         resolve: { type: string, enum: [keep_local, take_theirs], description: "what becomes of what a person changed since installing" }
     UpdatePreview:
       type: object
-      required: [from, to, addedPermissions, removedPermissions, needsAcceptance, localChanges]
+      required: [from, to, checksum, addedPermissions, removedPermissions, needsAcceptance, localChanges]
       properties:
         from: { type: string }
         to: { type: string }
+        checksum: { type: string, description: "the checksum of the version previewed, to name in the update" }
         addedPermissions: { type: array, items: { type: string }, description: "asked for by the new version and never accepted: to accept again" }
         removedPermissions: { type: array, items: { type: string } }
         needsAcceptance: { type: boolean }

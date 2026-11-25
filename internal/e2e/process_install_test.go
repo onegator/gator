@@ -73,7 +73,7 @@ func TestAProcessPackageSetsAKindsProcessAndGivesItBack(t *testing.T) {
 	// For the workspace: every project without its own gets it.
 	other := h.oneProject("proc2")
 	var ws gen.Installation
-	if code := h.do("POST", "/workspace/installations", gen.NewInstallation{Kind: "process", Name: "incident-postmortem", AcceptedPermissions: asked}, &ws); code != 201 {
+	if code := h.do("POST", "/workspace/installations", h.pin(gen.NewInstallation{Kind: "process", Name: "incident-postmortem", AcceptedPermissions: asked}), &ws); code != 201 {
 		t.Fatalf("workspace install: %d", code)
 	}
 	if tpl := h.template(other.Id.String(), "incident"); *tpl.Source != "workspace" || len(phaseNamesOf(tpl)) != 4 {
@@ -104,8 +104,8 @@ func TestAKindsProcessHasOneOwner(t *testing.T) {
 	project := p.Id.String()
 	inst := h.install(project, gen.NewInstallation{Kind: "process", Name: "incident-postmortem", AcceptedPermissions: h.accept("process", "incident-postmortem", "")})
 	var refusal gen.InstallRefusal
-	if code := h.do("POST", "/projects/"+project+"/installations", gen.NewInstallation{Kind: "process", Name: "incident-lite", RegistryId: &reg.Id,
-		AcceptedPermissions: h.accept("process", "incident-lite", reg.Id.String())}, &refusal); code != 409 || !strings.Contains(refusal.Error, "incident-postmortem sets the process of incident") {
+	if code := h.do("POST", "/projects/"+project+"/installations", h.pin(gen.NewInstallation{Kind: "process", Name: "incident-lite", RegistryId: reg.Id,
+		AcceptedPermissions: h.accept("process", "incident-lite", reg.Id.String())}), &refusal); code != 409 || !strings.Contains(refusal.Error, "incident-postmortem sets the process of incident") {
 		t.Fatalf("a second owner: %d %+v", code, refusal)
 	}
 	own := `{"templates":{"incident":{"kind":"incident","max_rollbacks":0,"phases":[{"name":"implementation","owner":"runner","role":"worker","gate":"human","timeout":"1h"},{"name":"approved","owner":"human","gate":"auto","timeout":"0"}]}},"roles":{"postmortem":"Ours now."}}`

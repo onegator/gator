@@ -63,7 +63,7 @@ func TestANativePluginIsCheckedBeforeItRuns(t *testing.T) {
 	reg, _ := h.registry(r)
 	p := h.oneProject("native")
 
-	in := gen.NewInstallation{Kind: "integration", Name: name, RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", name, reg.Id.String())}
+	in := h.pin(gen.NewInstallation{Kind: "integration", Name: name, RegistryId: reg.Id, AcceptedPermissions: h.accept("integration", name, reg.Id.String())})
 	if code := h.do("POST", "/projects/"+p.Id.String()+"/installations", in, nil); code != 400 {
 		t.Fatalf("a native plugin is the workspace's: %d", code)
 	}
@@ -102,7 +102,7 @@ func TestANativePluginIsCheckedBeforeItRuns(t *testing.T) {
 	}
 
 	// The other build does not hash to what was promised: refused, and nothing of it can run.
-	inBad := gen.NewInstallation{Kind: "integration", Name: bad, RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", bad, reg.Id.String())}
+	inBad := h.pin(gen.NewInstallation{Kind: "integration", Name: bad, RegistryId: reg.Id, AcceptedPermissions: h.accept("integration", bad, reg.Id.String())})
 	var refusal gen.Error
 	if code := h.do("POST", "/workspace/installations", inBad, &refusal); code != 400 || !strings.Contains(refusal.Error, "hashes to") {
 		t.Fatalf("a build that does not match: %d %+v", code, refusal)
@@ -158,7 +158,7 @@ func TestANativePackageTakesNoOtherPluginsName(t *testing.T) {
 	var before []gen.InstalledPlugin
 	h.do("GET", "/plugins", nil, &before)
 	for _, name := range []string{"echo", h.bundled} {
-		in := gen.NewInstallation{Kind: "integration", Name: name, RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", name, reg.Id.String())}
+		in := h.pin(gen.NewInstallation{Kind: "integration", Name: name, RegistryId: reg.Id, AcceptedPermissions: h.accept("integration", name, reg.Id.String())})
 		var refusal gen.InstallRefusal
 		if code := h.do("POST", "/workspace/installations", in, &refusal); code != 409 {
 			t.Fatalf("a package named %s: %d %+v", name, code, refusal)
@@ -172,7 +172,7 @@ func TestANativePackageTakesNoOtherPluginsName(t *testing.T) {
 		}
 	}
 
-	in := gen.NewInstallation{Kind: "integration", Name: broken, RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", broken, reg.Id.String())}
+	in := h.pin(gen.NewInstallation{Kind: "integration", Name: broken, RegistryId: reg.Id, AcceptedPermissions: h.accept("integration", broken, reg.Id.String())})
 	if code := h.do("POST", "/workspace/installations", in, nil); code != 400 {
 		t.Fatalf("a build that is not a plugin: %d", code)
 	}

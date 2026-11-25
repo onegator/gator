@@ -32,7 +32,10 @@ const (
 
 // UpdateRequest asks for an installation to be brought to another version.
 type UpdateRequest struct {
-	Version string // empty: the newest its registry offers
+	// Version and Checksum are the version the person previewed and accepted, in the
+	// installation's registry.
+	Version  string
+	Checksum string
 	// Accepted are the permissions accepted now; with what was accepted before, they must hold
 	// every permission the new version asks for.
 	Accepted []string
@@ -52,6 +55,7 @@ type LocalChange struct {
 // Preview is what an update would do.
 type Preview struct {
 	From, To string
+	Checksum string // of To
 	// Added are the permissions the new version asks for that were never accepted; Removed those
 	// it no longer asks for.
 	Added, Removed []string
@@ -102,7 +106,7 @@ func (s *Installations) preview(ctx context.Context, p auth.Principal, id pgtype
 	_ = json.Unmarshal(inst.Installed, &rec)
 	var accepted []string
 	_ = json.Unmarshal(inst.AcceptedPermissions, &accepted)
-	pv := Preview{From: inst.Version, To: pkg.Item.Version, Added: NewPermissions(pkg.Manifest.Permissions, accepted),
+	pv := Preview{From: inst.Version, To: pkg.Item.Version, Checksum: pkg.Item.Checksum, Added: NewPermissions(pkg.Manifest.Permissions, accepted),
 		Removed: NewPermissions(rec.Manifest.Permissions, pkg.Manifest.Permissions)}
 	incoming, err := up.Incoming(pkg)
 	if err != nil {
@@ -131,12 +135,20 @@ func (s *Installations) preview(ctx context.Context, p auth.Principal, id pgtype
 // Update brings an installation to another version, never by itself: a person asks, accepts what
 // the new version adds, and says what becomes of their own changes.
 func (s *Installations) Update(ctx context.Context, p auth.Principal, id pgtype.UUID, req UpdateRequest) (db.Installation, error) {
+	if req.Version == "" || req.Checksum == "" {
+		return db.Installation{}, invalid("an update names the version and the checksum the person accepted")
+	}
+	if inst, err := s.Get(ctx, p, id); err != nil {
+		return inst, err
+	} else if err := s.canManage(ctx, p, inst.ProjectID); err != nil {
+		return inst, err
+	}
 	inst, pv, pkg, up, err := s.preview(ctx, p, id, req.Version)
 	if err != nil {
 		return inst, err
 	}
-	if err := s.canManage(ctx, p, inst.ProjectID); err != nil {
-		return inst, err
+	if pkg.Item.Checksum != req.Checksum {
+		return inst, fmt.Errorf("%w: %s %s is not the package that was accepted (its checksum differs)", ErrConflict, inst.Name, req.Version)
 	}
 	if pv.From == pv.To && pkg.Item.Checksum == inst.Checksum {
 		return inst, fmt.Errorf("%w: %s %s is installed already", ErrConflict, inst.Name, pv.To)

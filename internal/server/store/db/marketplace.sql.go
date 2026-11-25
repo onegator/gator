@@ -539,7 +539,7 @@ func (q *Queries) ListInstallations(ctx context.Context, projectID pgtype.UUID) 
 }
 
 const listItemVersions = `-- name: ListItemVersions :many
-SELECT i.registry_id, r.name AS registry_name, i.kind, i.name, i.version, i.manifest, i.checksum, i.listed, i.fetched_at
+SELECT i.registry_id, r.name AS registry_name, r.builtin, i.kind, i.name, i.version, i.manifest, i.checksum, i.listed, i.fetched_at
 FROM marketplace_items i JOIN marketplace_registries r ON r.id = i.registry_id
 WHERE i.kind = $1 AND i.name = $2
   AND ($3::uuid IS NULL OR i.registry_id = $3)
@@ -555,6 +555,7 @@ type ListItemVersionsParams struct {
 type ListItemVersionsRow struct {
 	RegistryID   pgtype.UUID        `json:"registry_id"`
 	RegistryName string             `json:"registry_name"`
+	Builtin      bool               `json:"builtin"`
 	Kind         string             `json:"kind"`
 	Name         string             `json:"name"`
 	Version      string             `json:"version"`
@@ -576,6 +577,7 @@ func (q *Queries) ListItemVersions(ctx context.Context, arg ListItemVersionsPara
 		if err := rows.Scan(
 			&i.RegistryID,
 			&i.RegistryName,
+			&i.Builtin,
 			&i.Kind,
 			&i.Name,
 			&i.Version,

@@ -293,6 +293,7 @@ func (f Filter) matches(m Manifest) bool {
 type Version struct {
 	RegistryID   pgtype.UUID
 	RegistryName string
+	Builtin      bool
 	Manifest     Manifest
 	Checksum     string
 	Listed       bool
@@ -314,12 +315,26 @@ func (c *Catalog) Versions(ctx context.Context, p auth.Principal, kind, name str
 		if err := json.Unmarshal(row.Manifest, &m); err != nil {
 			continue
 		}
-		out = append(out, Version{RegistryID: row.RegistryID, RegistryName: row.RegistryName, Manifest: m, Checksum: row.Checksum, Listed: row.Listed})
+		out = append(out, Version{RegistryID: row.RegistryID, RegistryName: row.RegistryName, Builtin: row.Builtin, Manifest: m, Checksum: row.Checksum, Listed: row.Listed})
 	}
 	if len(out) == 0 {
 		return nil, ErrNotFound
 	}
-	slices.SortStableFunc(out, func(a, b Version) int { return CompareVersions(b.Manifest.Version, a.Manifest.Version) })
+	// Gator's own registry first, then each registry's versions newest first: never the highest
+	// version across registries, which is how a registry that publishes a name another offers
+	// would take it over.
+	slices.SortStableFunc(out, func(a, b Version) int {
+		if a.Builtin != b.Builtin {
+			if a.Builtin {
+				return -1
+			}
+			return 1
+		}
+		if a.RegistryName != b.RegistryName {
+			return strings.Compare(a.RegistryName, b.RegistryName)
+		}
+		return CompareVersions(b.Manifest.Version, a.Manifest.Version)
+	})
 	return out, nil
 }
 

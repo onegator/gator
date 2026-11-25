@@ -124,8 +124,8 @@ tools_read_only: [get_issue_details]
 	reg, _ = h.registry(r)
 	p := h.oneProject("oauth")
 	project = p.Id.String()
-	h.install(project, gen.NewInstallation{Kind: "integration", Name: name, RegistryId: &reg.Id, AcceptedPermissions: h.accept("integration", name, reg.Id.String())})
-	h.install(project, gen.NewInstallation{Kind: "agent", Name: "oncall-triage", RegistryId: &reg.Id, AcceptedPermissions: h.accept("agent", "oncall-triage", reg.Id.String())})
+	h.install(project, gen.NewInstallation{Kind: "integration", Name: name, RegistryId: reg.Id, AcceptedPermissions: h.accept("integration", name, reg.Id.String())})
+	h.install(project, gen.NewInstallation{Kind: "agent", Name: "oncall-triage", RegistryId: reg.Id, AcceptedPermissions: h.accept("agent", "oncall-triage", reg.Id.String())})
 	return project, reg
 }
 

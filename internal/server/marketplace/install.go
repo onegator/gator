@@ -74,11 +74,15 @@ type Installed struct {
 
 // Request asks for a package to be installed.
 type Request struct {
-	Project  pgtype.UUID // zero: the workspace
-	Kind     string
-	Name     string
-	Version  string      // empty: the newest listed
-	Registry pgtype.UUID // zero: whichever registry offers it, Gator's first
+	Project pgtype.UUID // zero: the workspace
+	Kind    string
+	Name    string
+	// Registry, Version and Checksum are exactly the package the person looked at and accepted:
+	// a name offered by two registries, a newer version published since, or the same version
+	// with other files, is not what they accepted, and is refused.
+	Registry pgtype.UUID
+	Version  string
+	Checksum string
 	// Accepted are the permissions the person accepted, line by line. Every permission the
 	// package asks for must be among them.
 	Accepted []string
@@ -160,6 +164,9 @@ func (s *Installations) Install(ctx context.Context, p auth.Principal, req Reque
 		}
 		return db.Installation{}, invalid("a %s does not install into %s", req.Kind, where)
 	}
+	if !req.Registry.Valid || req.Version == "" || req.Checksum == "" {
+		return db.Installation{}, invalid("an installation names the registry, the version and the checksum the person accepted")
+	}
 	v, err := s.choose(ctx, p, req.Kind, req.Name, req.Version, req.Registry)
 	if err != nil {
 		return db.Installation{}, err
@@ -167,6 +174,9 @@ func (s *Installations) Install(ctx context.Context, p auth.Principal, req Reque
 	pkg, err := s.packages.Package(ctx, v.RegistryID, req.Kind, req.Name, v.Manifest.Version)
 	if err != nil {
 		return db.Installation{}, err
+	}
+	if pkg.Item.Checksum != req.Checksum {
+		return db.Installation{}, fmt.Errorf("%w: %s %s is not the package that was accepted (its checksum differs)", ErrConflict, req.Name, req.Version)
 	}
 	if missing := NewPermissions(pkg.Manifest.Permissions, req.Accepted); len(missing) > 0 {
 		return db.Installation{}, &PermissionsError{Missing: missing}

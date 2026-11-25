@@ -55,7 +55,7 @@ WHERE i.listed AND (sqlc.narg(kind)::text IS NULL OR i.kind = sqlc.narg(kind))
 ORDER BY r.builtin DESC, r.name, i.kind, i.name;
 
 -- name: ListItemVersions :many
-SELECT i.registry_id, r.name AS registry_name, i.kind, i.name, i.version, i.manifest, i.checksum, i.listed, i.fetched_at
+SELECT i.registry_id, r.name AS registry_name, r.builtin, i.kind, i.name, i.version, i.manifest, i.checksum, i.listed, i.fetched_at
 FROM marketplace_items i JOIN marketplace_registries r ON r.id = i.registry_id
 WHERE i.kind = sqlc.arg(kind) AND i.name = sqlc.arg(name)
   AND (sqlc.narg(registry_id)::uuid IS NULL OR i.registry_id = sqlc.narg(registry_id))

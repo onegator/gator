@@ -55,11 +55,8 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request, project pgtype.
 	if !decode(w, r, &in) {
 		return
 	}
-	req := marketplace.Request{Project: project, Kind: string(in.Kind), Name: in.Name, Version: deref(in.Version),
-		Accepted: in.AcceptedPermissions, Handle: deref(in.Handle)}
-	if in.RegistryId != nil {
-		req.Registry = fromUUID(*in.RegistryId)
-	}
+	req := marketplace.Request{Project: project, Kind: string(in.Kind), Name: in.Name, Version: in.Version, Checksum: in.Checksum,
+		Registry: fromUUID(in.RegistryId), Accepted: in.AcceptedPermissions, Handle: deref(in.Handle)}
 	inst, err := s.Marketplace.Installations.Install(r.Context(), p, req)
 	if err != nil {
 		s.failInstall(w, err)
@@ -180,7 +177,7 @@ func (s *Server) UpdateInstallation(w http.ResponseWriter, r *http.Request, inst
 	if !decode(w, r, &in) {
 		return
 	}
-	req := marketplace.UpdateRequest{Version: deref(in.Version)}
+	req := marketplace.UpdateRequest{Version: in.Version, Checksum: in.Checksum}
 	if in.AcceptedPermissions != nil {
 		req.Accepted = *in.AcceptedPermissions
 	}
@@ -205,7 +202,7 @@ func (s *Server) PreviewInstallationUpdate(w http.ResponseWriter, r *http.Reques
 		s.failMarketplace(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, gen.UpdatePreview{From: pv.From, To: pv.To, AddedPermissions: orEmpty(pv.Added), RemovedPermissions: orEmpty(pv.Removed),
+	writeJSON(w, http.StatusOK, gen.UpdatePreview{From: pv.From, To: pv.To, Checksum: pv.Checksum, AddedPermissions: orEmpty(pv.Added), RemovedPermissions: orEmpty(pv.Removed),
 		NeedsAcceptance: len(pv.Added) > 0, LocalChanges: toLocalChanges(pv.Local)})
 }
 
