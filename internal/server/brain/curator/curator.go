@@ -48,6 +48,7 @@ type store interface {
 	SetCurationJob(ctx context.Context, arg db.SetCurationJobParams) error
 	ReleaseCuration(ctx context.Context, conversationID pgtype.UUID) error
 	GetCuration(ctx context.Context, conversationID pgtype.UUID) (db.BrainCuration, error)
+	SaidSince(ctx context.Context, arg db.SaidSinceParams) (int64, error)
 	CountOpenProposalsFrom(ctx context.Context, conversationID pgtype.UUID) (int64, error)
 	GetConversation(ctx context.Context, id pgtype.UUID) (db.Conversation, error)
 	GetTaskConversation(ctx context.Context, taskID pgtype.UUID) (db.Conversation, error)
@@ -179,10 +180,15 @@ func (c *Curator) Curate(ctx context.Context, conv db.Conversation) (bool, error
 	if n, err := c.store.CountOpenProposalsFrom(ctx, conv.ID); err != nil || n >= int64(c.MaxOpen) {
 		return false, err
 	}
-	// Nothing said since the last curation: nothing to read (a task closing right after one).
-	if prev, err := c.store.GetCuration(ctx, conv.ID); err == nil && conv.LastSeq <= prev.UptoSeq {
-		return false, nil
-	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	// Nothing said since the last curation — cards are not talk — is nothing to read (a task
+	// closing right after one).
+	var since int64
+	if prev, err := c.store.GetCuration(ctx, conv.ID); err == nil {
+		since = prev.UptoSeq
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	if said, err := c.store.SaidSince(ctx, db.SaidSinceParams{ConversationID: conv.ID, Seq: since}); err != nil || said == 0 {
 		return false, err
 	}
 	claim, err := c.store.ClaimCuration(ctx, db.ClaimCurationParams{ConversationID: conv.ID, Upto: conv.LastSeq})

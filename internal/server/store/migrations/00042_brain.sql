@@ -106,7 +106,15 @@ CREATE TABLE brain_citations (
 );
 CREATE INDEX brain_citations_entry_idx ON brain_citations (entry_id, created_at);
 
+-- People who asked the Brain to forget them: their focus is not worked out again until they ask
+-- for it.
+CREATE TABLE brain_focus_off (
+    user_id    uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    since      timestamptz NOT NULL DEFAULT now()
+);
+
 -- +goose Down
+DROP TABLE brain_focus_off;
 DROP TABLE brain_citations;
 DROP TABLE brain_links;
 DROP TABLE brain_entries;

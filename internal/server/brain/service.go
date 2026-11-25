@@ -39,6 +39,9 @@ type Store interface {
 	NarrowLineageVisibility(ctx context.Context, arg db.NarrowLineageVisibilityParams) error
 	NewestApprovedVersion(ctx context.Context, lineage pgtype.UUID) (int32, error)
 	LockLineage(ctx context.Context, lineage pgtype.UUID) error
+	TurnFocusOff(ctx context.Context, userID pgtype.UUID) error
+	TurnFocusOn(ctx context.Context, userID pgtype.UUID) error
+	FocusOffSince(ctx context.Context, userID pgtype.UUID) (pgtype.Timestamptz, error)
 	targetStore
 }
 
@@ -376,13 +379,44 @@ func (s *Service) Mine(ctx context.Context, r Reader) ([]db.BrainEntry, error) {
 	return s.store.ListUserBrain(ctx, r.User)
 }
 
-// Forget deletes everything the Brain holds about r, and answers how many entries that was. What a
-// job was handed of it is kept in no record (see the runner's handContext), so nothing is left.
+// Forget deletes everything the Brain holds about r and answers how many entries that was. Their
+// focus is not worked out again until they turn it back on (SetFocus): forgetting is not undone
+// behind their back. What a job was handed of it is kept in no record (see the runner's
+// handContext), so nothing is left.
 func (s *Service) Forget(ctx context.Context, r Reader) (int64, error) {
 	if !r.User.Valid || r.IsJob() {
 		return 0, ErrForbidden
 	}
-	return s.store.DeleteUserBrain(ctx, r.User)
+	var n int64
+	err := s.tx(ctx, func(st Store) error {
+		if err := st.TurnFocusOff(ctx, r.User); err != nil {
+			return err
+		}
+		var err error
+		n, err = st.DeleteUserBrain(ctx, r.User)
+		return err
+	})
+	return n, err
+}
+
+// SetFocus turns the working out of r's focus on or off.
+func (s *Service) SetFocus(ctx context.Context, r Reader, on bool) error {
+	if !r.User.Valid || r.IsJob() {
+		return ErrForbidden
+	}
+	if on {
+		return s.store.TurnFocusOn(ctx, r.User)
+	}
+	return s.store.TurnFocusOff(ctx, r.User)
+}
+
+// FocusOff answers since when r's focus has been off, or the zero time when it is on.
+func (s *Service) FocusOff(ctx context.Context, r Reader) (time.Time, error) {
+	since, err := s.store.FocusOffSince(ctx, r.User)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, nil
+	}
+	return since.Time, err
 }
 
 // Visible keeps the entries r may read, in order.

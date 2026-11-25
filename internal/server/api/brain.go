@@ -309,7 +309,41 @@ func (s *Server) GetMyBrain(w http.ResponseWriter, r *http.Request) {
 		s.failBrain(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, gen.MyBrain{Entries: mapAll(rows, toBrainEntry), AgentsSee: agentsSee})
+	focus, err := s.focusSetting(r, reader)
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gen.MyBrain{Entries: mapAll(rows, toBrainEntry), AgentsSee: agentsSee, Focus: focus})
+}
+
+func (s *Server) SetMyFocus(w http.ResponseWriter, r *http.Request) {
+	reader, ok := s.brainReader(w, r)
+	if !ok {
+		return
+	}
+	var in gen.FocusSetting
+	if !decode(w, r, &in) {
+		return
+	}
+	if err := s.Brain.Service.SetFocus(r.Context(), reader, in.Enabled); err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	focus, err := s.focusSetting(r, reader)
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, focus)
+}
+
+func (s *Server) focusSetting(r *http.Request, reader brain.Reader) (gen.FocusSetting, error) {
+	since, err := s.Brain.Service.FocusOff(r.Context(), reader)
+	if err != nil || since.IsZero() {
+		return gen.FocusSetting{Enabled: true}, err
+	}
+	return gen.FocusSetting{Enabled: false, OffSince: &since}, nil
 }
 
 func (s *Server) ForgetMyBrain(w http.ResponseWriter, r *http.Request) {

@@ -2,11 +2,13 @@ package brain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/store/db"
@@ -28,6 +30,7 @@ type focusStore interface {
 	ActiveTasksOf(ctx context.Context, arg db.ActiveTasksOfParams) ([]db.ActiveTasksOfRow, error)
 	PeopleActiveSince(ctx context.Context, since pgtype.Timestamptz) ([]pgtype.UUID, error)
 	CurrentFocusOf(ctx context.Context, userID pgtype.UUID) ([]db.BrainEntry, error)
+	FocusOffSince(ctx context.Context, userID pgtype.UUID) (pgtype.Timestamptz, error)
 }
 
 // recorder stores what Gator knows itself. Service is one.
@@ -86,6 +89,12 @@ func (f *Focus) Sweep(ctx context.Context) error {
 // left alone; one that changed is a new version; one about a project they no longer work in is
 // archived.
 func (f *Focus) Refresh(ctx context.Context, user pgtype.UUID) error {
+	// Somebody who asked the Brain to forget them, or turned their focus off, is left alone.
+	if _, err := f.store.FocusOffSince(ctx, user); err == nil {
+		return nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	tasks, err := f.store.ActiveTasksOf(ctx, db.ActiveTasksOfParams{UserID: user, Since: pgtype.Timestamptz{Time: f.now().Add(-focusWindow), Valid: true}})
 	if err != nil {
 		return err

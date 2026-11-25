@@ -584,6 +584,17 @@ paths:
       description: Delete everything the Brain holds about the caller. Nothing of it is kept in any job's record.
       responses:
         "200": { description: forgotten, content: { application/json: { schema: { $ref: "#/components/schemas/Forgotten" } } } }
+  /me/brain/focus:
+    put:
+      operationId: setMyFocus
+      description: >
+        Turn the working out of the caller's focus on or off. Forgetting (DELETE /me/brain) turns it off, and it stays
+        off until the caller turns it on again.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/FocusSetting" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/FocusSetting" } } } }
   /presets:
     get:
       operationId: listProjectPresets
@@ -2518,10 +2529,17 @@ components:
         contextGrowth: { type: number, format: double, description: "how much the median context grew, as a fraction" }
         contextHeld: { type: boolean, description: "it grew by at most 20%" }
         rollbacksFell: { type: boolean }
+    FocusSetting:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        offSince: { type: string, format: date-time, description: "when it was turned off (or the caller asked to be forgotten)" }
     MyBrain:
       type: object
-      required: [entries, agentsSee]
+      required: [entries, agentsSee, focus]
       properties:
+        focus: { $ref: "#/components/schemas/FocusSetting" }
         entries: { type: array, items: { $ref: "#/components/schemas/BrainEntry" }, description: "every version of every entry about the caller" }
         agentsSee: { type: string, description: "what agents are told of it, in a sentence" }
     Forgotten:

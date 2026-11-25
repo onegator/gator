@@ -285,11 +285,13 @@ LIMIT 100;
 
 -- name: PeopleActiveSince :many
 -- Who has worked or talked since a moment: whose focus is worth working out again.
-SELECT DISTINCT m.author_id::uuid AS user_id FROM messages m
-WHERE m.author_kind = 'user' AND m.author_id IS NOT NULL AND m.created_at > sqlc.arg(since)::timestamptz
-UNION
-SELECT DISTINCT t.owner_id::uuid FROM tasks t
-WHERE t.owner_kind = 'user' AND t.owner_id IS NOT NULL AND t.updated_at > sqlc.arg(since)::timestamptz;
+SELECT user_id FROM (
+    SELECT DISTINCT m.author_id::uuid AS user_id FROM messages m
+    WHERE m.author_kind = 'user' AND m.author_id IS NOT NULL AND m.created_at > sqlc.arg(since)::timestamptz
+    UNION
+    SELECT DISTINCT t.owner_id::uuid FROM tasks t
+    WHERE t.owner_kind = 'user' AND t.owner_id IS NOT NULL AND t.updated_at > sqlc.arg(since)::timestamptz) people
+WHERE NOT EXISTS (SELECT 1 FROM brain_focus_off o WHERE o.user_id = people.user_id);
 
 -- name: CurrentFocusOf :many
 -- A person's focus as it stands, per project.
@@ -305,3 +307,18 @@ WHERE lineage = sqlc.arg(lineage)
   AND array_position(ARRAY['private', 'scope', 'project', 'workspace'], visibility)
       > array_position(ARRAY['private', 'scope', 'project', 'workspace'], sqlc.arg(visibility)::text)
   AND NOT (sqlc.arg(visibility)::text = 'private' AND scope <> 'user');
+
+-- name: FocusOffSince :one
+-- When a person turned their focus off (asked the Brain to forget them); no rows: it is on.
+SELECT since FROM brain_focus_off WHERE user_id = $1;
+
+-- name: TurnFocusOff :exec
+INSERT INTO brain_focus_off (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING;
+
+-- name: TurnFocusOn :exec
+DELETE FROM brain_focus_off WHERE user_id = $1;
+
+-- name: SaidSince :one
+-- How much people and agents said in a conversation after a seq (cards are not talk).
+SELECT count(*) FROM messages
+WHERE conversation_id = $1 AND seq > $2 AND kind = 'text' AND author_kind IN ('user', 'agent') AND deleted_at IS NULL;

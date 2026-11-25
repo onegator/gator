@@ -161,6 +161,11 @@ type BrainEntry struct {
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 }
 
+type BrainFocusOff struct {
+	UserID pgtype.UUID        `json:"user_id"`
+	Since  pgtype.Timestamptz `json:"since"`
+}
+
 type BrainLink struct {
 	EntryID    pgtype.UUID        `json:"entry_id"`
 	TargetKind string             `json:"target_kind"`

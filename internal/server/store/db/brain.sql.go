@@ -346,6 +346,18 @@ func (q *Queries) FinishCuration(ctx context.Context, conversationID pgtype.UUID
 	return err
 }
 
+const focusOffSince = `-- name: FocusOffSince :one
+SELECT since FROM brain_focus_off WHERE user_id = $1
+`
+
+// When a person turned their focus off (asked the Brain to forget them); no rows: it is on.
+func (q *Queries) FocusOffSince(ctx context.Context, userID pgtype.UUID) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, focusOffSince, userID)
+	var since pgtype.Timestamptz
+	err := row.Scan(&since)
+	return since, err
+}
+
 const getBrainEntry = `-- name: GetBrainEntry :one
 SELECT id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries WHERE id = $1
 `
@@ -1380,11 +1392,13 @@ func (q *Queries) NewestApprovedVersion(ctx context.Context, lineage pgtype.UUID
 }
 
 const peopleActiveSince = `-- name: PeopleActiveSince :many
-SELECT DISTINCT m.author_id::uuid AS user_id FROM messages m
-WHERE m.author_kind = 'user' AND m.author_id IS NOT NULL AND m.created_at > $1::timestamptz
-UNION
-SELECT DISTINCT t.owner_id::uuid FROM tasks t
-WHERE t.owner_kind = 'user' AND t.owner_id IS NOT NULL AND t.updated_at > $1::timestamptz
+SELECT user_id FROM (
+    SELECT DISTINCT m.author_id::uuid AS user_id FROM messages m
+    WHERE m.author_kind = 'user' AND m.author_id IS NOT NULL AND m.created_at > $1::timestamptz
+    UNION
+    SELECT DISTINCT t.owner_id::uuid FROM tasks t
+    WHERE t.owner_kind = 'user' AND t.owner_id IS NOT NULL AND t.updated_at > $1::timestamptz) people
+WHERE NOT EXISTS (SELECT 1 FROM brain_focus_off o WHERE o.user_id = people.user_id)
 `
 
 // Who has worked or talked since a moment: whose focus is worth working out again.
@@ -1451,6 +1465,24 @@ UPDATE brain_curations SET job_id = NULL, pending_upto = NULL WHERE conversation
 func (q *Queries) ReleaseCuration(ctx context.Context, conversationID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, releaseCuration, conversationID)
 	return err
+}
+
+const saidSince = `-- name: SaidSince :one
+SELECT count(*) FROM messages
+WHERE conversation_id = $1 AND seq > $2 AND kind = 'text' AND author_kind IN ('user', 'agent') AND deleted_at IS NULL
+`
+
+type SaidSinceParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	Seq            int64       `json:"seq"`
+}
+
+// How much people and agents said in a conversation after a seq (cards are not talk).
+func (q *Queries) SaidSince(ctx context.Context, arg SaidSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, saidSince, arg.ConversationID, arg.Seq)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const searchBrain = `-- name: SearchBrain :many
@@ -1828,4 +1860,22 @@ func (q *Queries) TaskBrainOfDay(ctx context.Context, arg TaskBrainOfDayParams) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const turnFocusOff = `-- name: TurnFocusOff :exec
+INSERT INTO brain_focus_off (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING
+`
+
+func (q *Queries) TurnFocusOff(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, turnFocusOff, userID)
+	return err
+}
+
+const turnFocusOn = `-- name: TurnFocusOn :exec
+DELETE FROM brain_focus_off WHERE user_id = $1
+`
+
+func (q *Queries) TurnFocusOn(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, turnFocusOn, userID)
+	return err
 }
