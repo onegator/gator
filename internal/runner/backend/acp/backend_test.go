@@ -229,6 +229,18 @@ func TestReadOnlyJobAnswersPermissionsByTier(t *testing.T) {
 	}
 }
 
+// A read-only job on a session that does not offer the profile's read-only mode does not run.
+func TestReadOnlyNeedsTheReadOnlyMode(t *testing.T) {
+	b, spec, logPath := fake(t, "codex/synthetic-steer.json", backend.Spec{Prompt: "look", Access: backend.Access{ReadOnly: true}})
+	out := b.Run(context.Background(), spec, (&recorder{}).emit)
+	if out.Status != proto.StatusFailed || !strings.Contains(out.Reason, "read-only mode") {
+		t.Fatalf("outcome %q %q", out.Status, out.Reason)
+	}
+	if strings.Contains(strings.Join(methods(readLog(t, logPath)), ","), methodPrompt) {
+		t.Error("the prompt was sent")
+	}
+}
+
 func TestSteerCancelsAndResumesTheLoadedSession(t *testing.T) {
 	rec := &recorder{}
 	b, spec, logPath := fake(t, "codex/synthetic-steer.json", backend.Spec{Prompt: "start"})
@@ -387,8 +399,12 @@ func TestAuthState(t *testing.T) {
 	if s := x.AuthState(); s != "unknown" || !x.Profile.Experimental {
 		t.Errorf("an agent without a profile: %q experimental %v", s, x.Profile.Experimental)
 	}
-	if (Backend{}).Supports(backend.Access{NoTools: true}) || !(Backend{}).Supports(backend.Access{ReadOnly: true}) {
-		t.Error("ACP keeps read-only jobs, not jobs without tools")
+	codex, gemini := New(Agent{Name: "codex"}, nil, nil), New(Agent{Name: "gemini"}, nil, nil)
+	if codex.Supports(backend.Access{NoTools: true}) || !codex.Supports(backend.Access{ReadOnly: true}) || !codex.Supports(backend.Access{}) {
+		t.Error("codex keeps read-only jobs with its read-only mode, and never jobs without tools")
+	}
+	if gemini.Supports(backend.Access{ReadOnly: true}) || !gemini.Supports(backend.Access{}) {
+		t.Error("an agent without a read-only mode takes only work")
 	}
 }
 

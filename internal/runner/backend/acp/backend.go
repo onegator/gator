@@ -67,11 +67,16 @@ func (b Backend) AuthState() string {
 	return b.Profile.authState(getenv, h)
 }
 
-// Supports implements backend.Limited. A read-only job is kept read-only by the permission
-// answers (and the agent's read-only mode where it has one), on a worktree the executor makes
-// read-only too. A job with no tools at all is not something an ACP agent can promise: it runs
-// its own tools, and some of them it does not ask about.
-func (Backend) Supports(a backend.Access) bool { return !a.NoTools }
+// Supports implements backend.Limited. A read-only job runs only on an agent whose profile names a
+// read-only session mode, which the session must offer (start fails otherwise): an agent's own
+// tools do not all ask before they act, so the permission answers alone are not a promise. The
+// worktree is read-only too. A job with no tools at all is not something an ACP agent can promise.
+func (b Backend) Supports(a backend.Access) bool {
+	if a.NoTools {
+		return false
+	}
+	return !a.ReadOnly || b.Profile.ReadOnlyMode != ""
+}
 
 // Run implements backend.Backend.
 func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) backend.Outcome {

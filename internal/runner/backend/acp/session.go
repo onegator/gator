@@ -251,9 +251,14 @@ func (d *driver) start(ctx context.Context, c *conn) (setup, error) {
 	d.mu.Lock()
 	d.sessionID = out.sessionID
 	d.mu.Unlock()
-	if d.spec.Access.ReadOnly && modes.has(d.profile.ReadOnlyMode) {
+	if d.spec.Access.ReadOnly {
+		// A read-only job needs the agent's own read-only mode as well as the permission answers:
+		// not every tool of an agent asks before it acts.
+		if !modes.has(d.profile.ReadOnlyMode) {
+			return out, fmt.Errorf("the agent offers no read-only mode (%q); a read-only job does not run on it", d.profile.ReadOnlyMode)
+		}
 		if err := c.call(step, methodSetMode, setModeParams{SessionID: out.sessionID, ModeID: d.profile.ReadOnlyMode}, nil); err != nil {
-			d.emit("warning", map[string]any{"message": "the agent's read-only mode could not be set; permission answers hold", "error": err.Error()})
+			return out, fmt.Errorf("set the read-only mode: %w", err)
 		}
 	}
 	if models != nil {

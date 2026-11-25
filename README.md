@@ -259,9 +259,10 @@ as Claude's. A steer is `session/cancel`, then `session/load` of the same sessio
 limit and a cost the agent reports (`usage_update`) are counted by the runner, which cancels the
 turn and ends the process group. The agent's permission requests are answered for the job's tier:
 a work job allows them once each; a chat job allows reading, searching, fetching, the job's own MCP
-servers and `gator-cli` alone, and refuses editing, deleting, moving and other commands (and sets
-the agent's read-only mode when its profile names one), on a read-only worktree. A job with no tools
-(summaries) never goes to an ACP backend. Each supported agent has a profile (its login variables
+servers and `gator-cli` alone, and refuses editing, deleting, moving and other commands, on a
+read-only worktree — and runs only on an agent whose profile names a read-only session mode, which
+the session must offer (not every tool of an agent asks first). A job with no tools (summaries)
+never goes to an ACP backend. Each supported agent has a profile (its login variables
 and files for `AuthState`, its read-only mode) and synthetic replays in `testdata/<agent>`: `codex`
 (via codex-acp) and `gemini`; anything else runs as experimental. A policy picks it per role, tier or
 agent (`"backend": "acp:codex"`).

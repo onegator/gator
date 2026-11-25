@@ -213,7 +213,10 @@ Rozszerzenie istniejącego pluginu `github`:
   **Nie zrobione**: review agenta jako GitHub review z komentarzami w liniach (`review_comments` w
   digeście) — digest nie ma jeszcze takiego pola, a format trzeba ustalić z rolą reviewera.
 - **ACP**: Gator nie oferuje agentowi `fs/*` ani `terminal/*` (agent używa własnych narzędzi), a
-  `session/request_permission` odpowiada wg tieru. Steer to `session/cancel`, potem nowy proces i
+  `session/request_permission` odpowiada wg tieru. Job read-only (`chat`) idzie tylko na agenta, którego
+profil zna tryb read-only, a sesja musi go oferować (inaczej start się nie udaje): nie każde narzędzie
+agenta pyta przed działaniem, więc same odpowiedzi na prośby nie są obietnicą. Dziś to `codex`
+(`read-only` codex-acp, do sprawdzenia); `gemini` bierze tylko joby `work`. Steer to `session/cancel`, potem nowy proces i
   `session/load` tej samej sesji; agent bez `loadSession` nie oddaje id sesji, więc executor zaczyna od
   nowa z poprawką. Backend ACP nie obsługuje `NoTools` (agent ma własne narzędzia, nie o wszystkie
   pyta), więc joby `summary` (streszczenia, kuracja) zostają na Claude. Koszt: z `usage_update`
