@@ -2,13 +2,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 
@@ -696,13 +699,51 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), "invalid")
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), "invalid")
 		return false
 	}
+	if missing := missingRequired(raw, v); missing != "" {
+		writeError(w, http.StatusBadRequest, "invalid body: "+missing+" is required", "invalid")
+		return false
+	}
 	return true
+}
+
+// missingRequired names the first field the spec requires that the body left out or sent null.
+// The generated types say which: a required field is a value with a json tag without omitempty
+// (an optional one is a pointer with omitempty). Without this, {} would set a required boolean to
+// false and a required object to null — "config is required" stored as no config at all.
+func missingRequired(raw []byte, v any) string {
+	t := reflect.TypeOf(v)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return ""
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil {
+		return ""
+	}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" || name == "-" || strings.Contains(opts, "omitempty") {
+			continue
+		}
+		if val, ok := body[name]; !ok || string(val) == "null" {
+			return name
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
