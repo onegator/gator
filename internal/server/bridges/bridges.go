@@ -47,7 +47,7 @@ type threads interface {
 // writer writes what a bridge carries in. conversations.Bridged is one.
 type writer interface {
 	Post(ctx context.Context, p conversations.BridgedPost) (db.Message, bool, error)
-	Edit(ctx context.Context, project pgtype.UUID, provider, externalRef, body string) (db.Message, error)
+	Edit(ctx context.Context, project pgtype.UUID, provider, externalRef, body string, by ...conversations.Author) (db.Message, error)
 	BridgeChannel(ctx context.Context, project pgtype.UUID, name, topic string) (db.Conversation, bool, error)
 }
 
@@ -67,6 +67,11 @@ type approver interface {
 	ApproveWaiting(ctx context.Context, taskID, userID pgtype.UUID, phase string, entered time.Time) error
 }
 
+// linkers answer whether a project's bridge redeems link codes. plugins.Linkers is one.
+type linkers interface {
+	RedeemsLinks(ctx context.Context, project pgtype.UUID, provider string) (bool, error)
+}
+
 // Deps are what the package needs from the rest of the server.
 type Deps struct {
 	Threads  threads
@@ -74,6 +79,7 @@ type Deps struct {
 	Rights   rights
 	Roles    roles
 	Approver approver
+	Linkers  linkers
 	// Now is the clock of link codes and of how often an edit goes out; nil is time.Now.
 	Now func() time.Time
 }

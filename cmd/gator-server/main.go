@@ -181,7 +181,8 @@ func serve(ctx context.Context) error {
 	// Messaging plugins (Slack, GitHub comments) bring outside conversations in and mirror ours out,
 	// through the core's rules: their own project, what they connected, untrusted words, no echo.
 	bridge := bridges.New(db.Pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access,
-		Roles: auth.Authorizer{Pool: db.Pool}, Approver: svc})
+		Roles: auth.Authorizer{Pool: db.Pool}, Approver: svc, Linkers: plugins.Linkers{Pool: db.Pool}})
+	go bridge.Run(ctx, time.Hour)
 	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins,
 		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
 		Extensions: []plugins.Extension{{Capability: bridge.Capability(), Methods: bridge.Methods()}},

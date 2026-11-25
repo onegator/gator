@@ -181,9 +181,18 @@ such a plugin may call these methods (others get -32003) or declare the `message
 |---|---|
 | `conversation.find_or_create` | `{external_ref, kind, name?, topic?, parent_ref?, task_id?}` → `{conversation_id, created}`. `kind` is `channel` (the project's channel called `name`, made if missing; a private or archived one is refused), `thread` (the thread under the message whose outside reference is `parent_ref`, which came through this bridge) or `task` (the task's thread). The same `external_ref` again answers the same conversation |
 | `message.post` | `{conversation_id, body, author: {external_id, display_name}, external_ref, mentions?}` → `{message_id, replayed, author_kind}`. Only in a conversation this bridge connected (itself, or the conversation its root lives in). The author is the person their account is linked to, when that person may write there, else an outside identity (`external`) of this project and bridge. `mentions` are agent handles: an outside author's ask is answered in chat, never with work, and agents read it fenced as untrusted. The same `external_ref` again answers the same message |
-| `message.update` | `{external_ref, body}` → null. A message this bridge brought in, edited outside |
+| `message.update` | `{external_ref, body, author: {external_id}}` → null. A message this bridge brought in, edited outside by the account that wrote it (anyone else: -32003) |
 | `member.link` | `{external_id, display_name?, code?}` → `{user_id?, name?, linked}`. With a code the person made in Gator (`POST /api/v1/projects/{id}/external-links`, ten minutes, once, for this project and this plugin), links the account; without, answers who it is linked to. An email address never links an account. Tries are limited per account |
 | `card.action` | `{message_id, action, actor: {external_id}}` → `{done, message}`. A button on a card this bridge mirrored (`approve` on a pending decision card), done for the linked person with their role in the project (member or more); anyone else gets `done: false` and a sentence to show |
+
+A bridge that redeems codes says `"links": true` in its manifest (with the messaging capability);
+Gator makes link codes only for a bridge of the project that does (Slack yes, GitHub no).
+
+API address settings (`api_url`) carry a plugin's secret: the Go plugins here take one only on
+their own host, or on a host the operator lists in `GATOR_PLUGIN_API_HOSTS` (the server passes it
+on; a project admin cannot), through `plugin/netguard.APIBase`. `plugin/netguard` is the outbound
+policy the server uses too (no private address, no plain http unless `GATOR_OUTBOUND_ALLOW_PRIVATE=1`),
+public so that plugins outside this repository can hold their requests to it.
 
 `external_id` must name the account unambiguously in the plugin's own namespace: a Slack user is
 `T0123/U0456` (team and user), never the user id alone. The core keys identities by project and

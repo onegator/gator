@@ -7,6 +7,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -59,6 +60,12 @@ func (s *Service) NewLinkCode(ctx context.Context, p auth.Principal, project pgt
 	}
 	if role < auth.RoleViewer {
 		return LinkCode{}, ErrNotFound
+	}
+	// A code for a bridge that cannot take one would never work: refused rather than handed out.
+	if ok, err := s.deps.Linkers.RedeemsLinks(ctx, project, provider); err != nil {
+		return LinkCode{}, err
+	} else if !ok {
+		return LinkCode{}, fmt.Errorf("%w: %s is not a bridge of this project that takes link codes", ErrInvalid, provider)
 	}
 	now := s.deps.Now()
 	n, err := s.q.CountRecentLinkCodes(ctx, db.CountRecentLinkCodesParams{UserID: p.UserID, Since: ts(now.Add(-time.Hour))})
@@ -172,4 +179,20 @@ func (s *Service) Unlink(ctx context.Context, p auth.Principal, id pgtype.UUID) 
 		return who, nil
 	}
 	return s.q.UnlinkExternalIdentity(ctx, id)
+}
+
+// Run sweeps what links leave behind, every so often, until ctx ends: codes a day past expiry.
+func (s *Service) Run(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		if _, err := s.q.DeleteExpiredLinkCodes(ctx); err != nil && ctx.Err() == nil {
+			slog.Default().Warn("sweeping link codes", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }

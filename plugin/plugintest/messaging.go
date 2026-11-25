@@ -141,6 +141,9 @@ func (c *Core) handleMessaging(method string, raw json.RawMessage) (any, bool, e
 		}
 		for _, x := range m.messages {
 			if x.ExternalRef == p.ExternalRef {
+				if x.Author != p.Author.ExternalID {
+					return nil, true, plugin.Errorf(plugin.CodeForbidden, "only who wrote a message changes it")
+				}
 				x.Body = p.Body
 				return nil, true, nil
 			}

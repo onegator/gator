@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -109,8 +110,9 @@ func (b *Bridged) Post(ctx context.Context, p BridgedPost) (db.Message, bool, er
 }
 
 // Edit changes what a message the bridge brought in says, when its author edited it outside. Only
-// a text message that came in through this bridge is edited; the same words again change nothing.
-func (b *Bridged) Edit(ctx context.Context, project pgtype.UUID, provider, externalRef, body string) (db.Message, error) {
+// a text message that came in through this bridge, written by one of by (the outside identity, or
+// the person it is linked to), is edited; the same words again change nothing.
+func (b *Bridged) Edit(ctx context.Context, project pgtype.UUID, provider, externalRef, body string, by ...Author) (db.Message, error) {
 	body = strings.TrimSpace(body)
 	if body == "" || utf8.RuneCountInString(body) > maxBodyRunes {
 		return db.Message{}, invalid("a message is 1–%d characters", maxBodyRunes)
@@ -127,6 +129,9 @@ func (b *Bridged) Edit(ctx context.Context, project pgtype.UUID, provider, exter
 		}
 		if msg.Kind != messageText || msg.DeletedAt.Valid || OriginOf(msg).Provider != provider {
 			return ErrNotFound // mirrored out from here, or gone: not the bridge's to change
+		}
+		if !slices.ContainsFunc(by, func(a Author) bool { return a.ID.Valid && a.Kind == msg.AuthorKind && a.ID == msg.AuthorID }) {
+			return ErrForbidden // somebody else's words
 		}
 		if out = msg; msg.Body == body {
 			return nil

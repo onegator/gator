@@ -32,6 +32,7 @@ import (
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/version"
 	"github.com/onegator/gator/plugin"
+	"github.com/onegator/gator/plugin/netguard"
 )
 
 var (
@@ -89,6 +90,9 @@ type Config struct {
 	// AllowPrivateOutbound passes GATOR_OUTBOUND_ALLOW_PRIVATE=1 to plugins, which hold their own
 	// requests to netguard's rules: a test's fake API, a company network.
 	AllowPrivateOutbound bool
+	// APIHosts are the hosts plugins' API address settings may name besides their own
+	// (GATOR_PLUGIN_API_HOSTS): the operator's, never a project admin's.
+	APIHosts string
 }
 
 // Extension is core methods for the plugins that declare Capability, each served as the plugin
@@ -119,6 +123,7 @@ type BrainProposer interface {
 func (c *Config) LoadEnv() {
 	c.CatalogueDir = DefaultCatalogueDir()
 	c.HooksURL = strings.TrimRight(os.Getenv("GATOR_HOOKS_URL"), "/")
+	c.APIHosts = os.Getenv(netguard.APIHostsEnv)
 }
 
 func (c *Config) defaults() {
@@ -248,6 +253,8 @@ func (h *Host) Run(ctx context.Context) {
 	defer poll.Stop()
 	refresh := time.NewTicker(h.cfg.RefreshEvery)
 	defer refresh.Stop()
+	prune := time.NewTicker(time.Hour)
+	defer prune.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -256,6 +263,8 @@ func (h *Host) Run(ctx context.Context) {
 			h.syncLogged(ctx)
 		case <-refresh.C:
 			h.RefreshTokens(ctx)
+		case <-prune.C:
+			h.PruneDeliveries(ctx, time.Now().Add(-DeliveryMemory))
 		case <-wake:
 			h.drain(ctx)
 		case <-poll.C:
@@ -435,6 +444,9 @@ func (i *instance) env() ([]string, []string, error) {
 		"LANG=C.UTF-8", "GATOR_PLUGIN_PROJECT=" + i.b.slug}
 	if i.h.cfg.AllowPrivateOutbound {
 		env = append(env, "GATOR_OUTBOUND_ALLOW_PRIVATE=1")
+	}
+	if i.h.cfg.APIHosts != "" {
+		env = append(env, netguard.APIHostsEnv+"="+i.h.cfg.APIHosts)
 	}
 	if i.b.secrets == "" {
 		return env, nil, nil
@@ -839,4 +851,19 @@ func (h *Host) webhookURL(slug, name string) string {
 		return ""
 	}
 	return h.cfg.HooksURL + "/hooks/" + slug + "/" + name
+}
+
+// DeliveryMemory is how long a webhook delivery is remembered. A sender's retries come within
+// minutes; a replay of a signed GitHub delivery older than this is handled again, and what the
+// plugins make of one (a task by its issue, a message by its comment) is made once by its id anyway.
+const DeliveryMemory = 30 * 24 * time.Hour
+
+// PruneDeliveries forgets deliveries received before before.
+func (h *Host) PruneDeliveries(ctx context.Context, before time.Time) {
+	n, err := db.New(h.pool).PruneWebhookDeliveries(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil && ctx.Err() == nil {
+		h.log.Warn("pruning webhook deliveries", "err", err)
+	} else if n > 0 {
+		h.log.Info("pruned webhook deliveries", "count", n)
+	}
 }

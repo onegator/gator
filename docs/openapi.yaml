@@ -1948,7 +1948,8 @@ paths:
     post:
       operationId: createExternalLinkCode
       description: >
-        Make a code that links an account on a bridge (a messaging plugin: slack, github) to the caller, in this project.
+        Make a code that links an account on a bridge to the caller, in this project: a messaging plugin switched on in
+        the project whose manifest says it takes codes (slack does; github does not, 400).
         The person types it where the bridge hears it ("/gator link GTR-…" in Slack); it works once, for ten minutes,
         and is shown only here. Until linked, what that account says is an outside identity's: agents hear it in chat
         and it approves nothing. An email address never links an account. At most ten codes an hour.
@@ -2220,7 +2221,7 @@ components:
       type: object
       required: [provider]
       properties:
-        provider: { type: string, description: "the bridge's plugin name: slack, github" }
+        provider: { type: string, description: "the bridge's plugin name (slack); one that takes no link codes is 400" }
     ExternalLinkCode:
       type: object
       required: [code, provider, expiresAt]

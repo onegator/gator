@@ -54,3 +54,27 @@ func TestTheDialerRefusesWhatThePolicyDoes(t *testing.T) {
 		t.Fatalf("a name for loopback: %v", err)
 	}
 }
+
+func TestAPIBaseKeepsSecretsOnTheirHosts(t *testing.T) {
+	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	none := env(nil)
+	for _, c := range []struct {
+		setting string
+		getenv  func(string) string
+		ok      bool
+	}{
+		{"", none, true},
+		{"https://slack.com/api", none, true},
+		{"https://evil.example/api", none, false},
+		{"http://slack.com/api", none, false},
+		{"https://user:pw@slack.com/api", none, false},
+		{"https://ghe.corp/api/v3", env(map[string]string{APIHostsEnv: "ghe.corp"}), true},
+		{"http://127.0.0.1:9/api", env(map[string]string{APIHostsEnv: "127.0.0.1"}), false},
+		{"http://127.0.0.1:9/api", env(map[string]string{APIHostsEnv: "127.0.0.1", "GATOR_OUTBOUND_ALLOW_PRIVATE": "1"}), true},
+	} {
+		_, err := APIBase(c.setting, "https://slack.com/api", c.getenv)
+		if (err == nil) != c.ok {
+			t.Errorf("%q: %v", c.setting, err)
+		}
+	}
+}

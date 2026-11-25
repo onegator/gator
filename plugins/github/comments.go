@@ -57,7 +57,10 @@ type comment struct {
 	ID      int64  `json:"id"`
 	Body    string `json:"body"`
 	HTMLURL string `json:"html_url"`
-	User    struct {
+	// Association is the commenter's relation to the repository: OWNER, MEMBER, COLLABORATOR,
+	// CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE…
+	Association string `json:"author_association"`
+	User        struct {
 		ID    int64  `json:"id"`
 		Login string `json:"login"`
 		Type  string `json:"type"` // User | Bot
@@ -93,6 +96,12 @@ func (g *gh) onComment(ctx context.Context, core *plugin.Core, repo, event, acti
 	if len(handles) == 0 {
 		return nil
 	}
+	if !trusted(c.Association, setting(core, "commenters", defaultCommenters)) {
+		// On a public repository anyone may comment; an agent's answer is posted where anyone reads
+		// it, with what the agent knows of the repository, the thread and the Brain.
+		return core.Log(ctx, "info", "ignoring an ask from a commenter the repository does not trust", map[string]any{
+			"association": c.Association, "comment": c.HTMLURL})
+	}
 	number, title, isPR := 0, "", event == "pull_request_review_comment"
 	switch {
 	case ev.Issue != nil:
@@ -117,6 +126,23 @@ func (g *gh) onComment(ctx context.Context, core *plugin.Core, repo, event, acti
 		Author:      plugin.ExternalAuthor{ExternalID: strconv.FormatInt(c.User.ID, 10), DisplayName: c.User.Login},
 		ExternalRef: commentRef(ref, c.ID), Mentions: handles})
 	return err
+}
+
+// defaultCommenters are who may ask agents in a comment unless the setting says otherwise: people
+// the repository already trusts with its code.
+const defaultCommenters = "OWNER,MEMBER,COLLABORATOR"
+
+// trusted says whether a commenter's association with the repository is one the setting lets ask.
+func trusted(association, allowed string) bool {
+	if association == "" {
+		return false
+	}
+	for a := range strings.SplitSeq(allowed, ",") {
+		if strings.EqualFold(strings.TrimSpace(a), association) {
+			return true
+		}
+	}
+	return false
 }
 
 func commentRef(ref string, id int64) string { return fmt.Sprintf("%s/comment/%d", ref, id) }

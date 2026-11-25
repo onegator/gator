@@ -69,6 +69,13 @@ func (a *approvals) ApproveWaiting(ctx context.Context, task, user pgtype.UUID, 
 	return nil
 }
 
+// redeems says every slack bridge takes link codes, and nothing else does.
+type redeems struct{}
+
+func (redeems) RedeemsLinks(_ context.Context, _ pgtype.UUID, provider string) (bool, error) {
+	return provider == "slack", nil
+}
+
 type world struct {
 	t       *testing.T
 	ctx     context.Context
@@ -91,7 +98,7 @@ func newWorld(t *testing.T) *world {
 	roles := auth.Authorizer{Pool: pool}
 	chat := conversations.New(pool, conversations.Deps{Roles: roles, Decisions: proc, Tasks: proc})
 	w := &world{t: t, ctx: context.Background(), pool: pool, q: db.New(pool), chat: chat, approve: &approvals{pool: pool}, clock: time.Now()}
-	w.svc = New(pool, Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access, Roles: roles, Approver: w.approve,
+	w.svc = New(pool, Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access, Roles: roles, Approver: w.approve, Linkers: redeems{},
 		Now: func() time.Time { return w.clock }})
 	return w
 }
@@ -280,6 +287,10 @@ func TestLinkingTakesTheCodeOfThisProjectAndBridge(t *testing.T) {
 	stranger := w.person(pgtype.UUID{}, "member")
 	if _, err := w.svc.NewLinkCode(w.ctx, stranger, p, "slack"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a stranger made a code: %v", err)
+	}
+	// A bridge that redeems no codes (GitHub) gets none.
+	if _, err := w.svc.NewLinkCode(w.ctx, member, p, "github"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a code for a bridge that takes none: %v", err)
 	}
 	// A linked person who lost the right to write in the conversation writes as outside again.
 	if _, err := w.pool.Exec(w.ctx, "DELETE FROM memberships WHERE project_id = $1 AND user_id = $2", p, member.UserID); err != nil {
@@ -611,5 +622,49 @@ func TestOutsideAsksAreRateLimited(t *testing.T) {
 	if _, err := w.svc.Post(w.ctx, slack, plugin.MessagePostParams{ConversationID: conversations.UUIDString(conv), Body: "@reviewer hi",
 		Author: plugin.ExternalAuthor{ExternalID: "T1/U2"}, ExternalRef: "T1/C1/u2", Mentions: []string{"reviewer"}}); err != nil {
 		t.Errorf("another account: %v", err)
+	}
+}
+
+// The janitor sweeps codes a day past their expiry.
+func TestTheJanitorSweepsOldCodes(t *testing.T) {
+	w := newWorld(t)
+	p := w.project()
+	member := w.person(p, "member")
+	if _, err := w.svc.NewLinkCode(w.ctx, member, p, "slack"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.pool.Exec(w.ctx, `UPDATE external_link_codes SET expires_at = now() - interval '2 days' WHERE user_id = $1`, member.UserID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(w.ctx, 300*time.Millisecond)
+	defer cancel()
+	w.svc.Run(ctx, time.Hour) // one sweep at once, then it waits for the next until the context ends
+	var n int
+	_ = w.pool.QueryRow(w.ctx, `SELECT count(*) FROM external_link_codes WHERE user_id = $1`, member.UserID).Scan(&n)
+	if n != 0 {
+		t.Errorf("%d old codes left", n)
+	}
+}
+
+// Only the account that wrote a message changes it.
+func TestOnlyTheAuthorEditsAMessage(t *testing.T) {
+	w := newWorld(t)
+	p := w.project()
+	slack := Bridge{Project: p, Provider: "slack"}
+	conv := w.channel(slack, "T1/C1", "eng")
+	r := w.post(slack, conv, "T1/U1", "T1/C1/1", "original")
+	w.post(slack, conv, "T1/U2", "T1/C1/2", "someone else")
+	if err := w.svc.Update(w.ctx, slack, plugin.MessageUpdateParams{ExternalRef: "T1/C1/1", Body: "forged", Author: plugin.ExternalAuthor{ExternalID: "T1/U2"}}); code(err) != plugin.CodeForbidden {
+		t.Errorf("another account edited: %v", err)
+	}
+	if err := w.svc.Update(w.ctx, slack, plugin.MessageUpdateParams{ExternalRef: "T1/C1/1", Body: "forged", Author: plugin.ExternalAuthor{ExternalID: "T1/U9"}}); code(err) != plugin.CodeForbidden {
+		t.Errorf("an unknown account edited: %v", err)
+	}
+	if err := w.svc.Update(w.ctx, slack, plugin.MessageUpdateParams{ExternalRef: "T1/C1/1", Body: "fixed", Author: plugin.ExternalAuthor{ExternalID: "T1/U1"}}); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := words.UUID(r.MessageID)
+	if m, _ := w.q.GetMessage(w.ctx, id); m.Body != "fixed" {
+		t.Errorf("body %q", m.Body)
 	}
 }

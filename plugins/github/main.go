@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/plugin"
+	"github.com/onegator/gator/plugin/netguard"
 )
 
 func main() {

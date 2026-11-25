@@ -121,11 +121,11 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		}})
 	// Messaging bridges, with the core's rules, as the server wires them.
 	bridge := bridges.New(pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access,
-		Roles: auth.Authorizer{Pool: pool}, Approver: svc})
+		Roles: auth.Authorizer{Pool: pool}, Approver: svc, Linkers: plugins.Linkers{Pool: pool}})
 	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{Brain: knows.Plugins, CallTimeout: 2 * time.Second,
 		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
 		Extensions: []plugins.Extension{{Capability: bridge.Capability(), Methods: bridge.Methods()}},
-		EventHooks: []plugins.EventHook{bridge}, AllowPrivateOutbound: testNet.AllowPrivate,
+		EventHooks: []plugins.EventHook{bridge}, AllowPrivateOutbound: testNet.AllowPrivate, APIHosts: "127.0.0.1",
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
 		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
 		CatalogueDir: catalogue, PublicURL: fakePublicURL, HooksURL: fakeHooksURL,

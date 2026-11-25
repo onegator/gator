@@ -17,6 +17,7 @@ type Client struct {
 	Base  string // https://slack.com/api
 	Token string
 	HTTP  *http.Client
+	Err   error // why Base cannot be used; every call answers it
 }
 
 // apiError is Slack's {"ok": false, "error": "…"}.
@@ -30,6 +31,9 @@ const maxAnswer = 1 << 20
 // call posts params as JSON to a Web API method and decodes the answer into out. Methods that read
 // (auth.test, users.info) take a form instead: Slack reads JSON bodies only where it writes.
 func (c *Client) call(ctx context.Context, method string, params, out any) error {
+	if c.Err != nil {
+		return c.Err
+	}
 	if c.Token == "" {
 		return errors.New("slack is not connected: no bot token")
 	}

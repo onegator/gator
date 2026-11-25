@@ -248,7 +248,7 @@ func newFakeGitHub(t *testing.T, token string) *fakeGitHub {
 
 func run(t *testing.T, s plugintest.Scenario) plugintest.Report {
 	t.Helper()
-	s.AllowPrivateOutbound = true // the fake API is on this machine
+	s.AllowPrivateOutbound, s.APIHosts = true, "127.0.0.1" // the fake API is on this machine
 	rep, err := plugintest.Run(context.Background(), []string{pluginBinary(t)}, s, os.Stderr, 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +527,7 @@ func TestThePluginRegistersItsWebhook(t *testing.T) {
 		p, err := plugintest.Start(context.Background(), []string{pluginBinary(t)}, plugintest.NewCore(""), plugintest.Options{
 			ProjectSlug: "demo", Config: map[string]any{"repo": "acme/app", "api_url": gh.URL},
 			Secrets: map[string]string{"token": "tok", "webhook_secret": "whsec"}, WebhookURL: "https://gator.example/hooks/demo/github",
-			AllowPrivateOutbound: true})
+			AllowPrivateOutbound: true, APIHosts: "127.0.0.1"})
 		if err != nil {
 			t.Fatal(err)
 		}

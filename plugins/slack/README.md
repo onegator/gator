@@ -33,7 +33,7 @@ for ten minutes, for this project. An email address never links an account.
 | `bot_token` (secret) | set by **Connect Slack** (`xoxb-…`) |
 | `signing_secret` (secret) | the app's signing secret (Basic Information). Every request is checked against it and refused when older than five minutes |
 | `channels` | Slack channel ids and the project channels they are: `C0123ABC=eng,C0456DEF=ops`. Only these are bridged. A private Gator channel never is |
-| `api_url` | default `https://slack.com/api`; requests go through `netguard` |
+| `api_url` | default `https://slack.com/api`; another host only if the operator lists it in `GATOR_PLUGIN_API_HOSTS` (the bot token goes there); requests go through `netguard` |
 
 ## The Slack app
 

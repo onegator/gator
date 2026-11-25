@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/onegator/gator/plugin"
+	"github.com/onegator/gator/plugin/netguard"
 )
 
 const configSchema = `{"type":"object","properties":{
@@ -26,6 +28,7 @@ var manifest = plugin.Manifest{
 	Description: "Talk to the project's agents from Slack: connected channels and their threads are the project's " +
 		"conversations, answers come back in the thread, and decisions can be approved by a linked account.",
 	Capabilities: []string{plugin.CapabilityMessaging},
+	Links:        true, // /gator link <code>
 	ConfigSchema: json.RawMessage(configSchema),
 	// Slack signs a request but names no delivery; the core takes the body's hash, which a retry
 	// repeats, and every message is posted once by its ts.
@@ -57,11 +60,10 @@ func (s *slack) handlers() plugin.Handlers {
 }
 
 func (s *slack) client(core *plugin.Core) *Client {
-	base := core.Setting("api_url")
-	if base == "" {
-		base = "https://slack.com/api"
-	}
-	return &Client{Base: base, Token: core.Secret("bot_token"), HTTP: s.http}
+	// The bot token goes to the API address, which a project admin sets: only Slack's unless the
+	// operator allowed another host (GATOR_PLUGIN_API_HOSTS).
+	base, err := netguard.APIBase(core.Setting("api_url"), "https://slack.com/api", os.Getenv)
+	return &Client{Base: base, Err: err, Token: core.Secret("bot_token"), HTTP: s.http}
 }
 
 // identity is who the bot is, asked once.
@@ -205,7 +207,7 @@ func (s *slack) event(ctx context.Context, core *plugin.Core, me Identity, raw j
 			return nil
 		}
 		err := core.UpdateMessage(ctx, plugin.MessageUpdateParams{ExternalRef: messageRef(me.TeamID, m.Channel, m.Message.TS),
-			Body: plain(m.Message.Text, me.UserID)})
+			Body: plain(m.Message.Text, me.UserID), Author: plugin.ExternalAuthor{ExternalID: userRef(me.TeamID, m.Message.User)}})
 		if pe, ok := err.(*plugin.Error); ok && pe.Code == plugin.CodeNotFound {
 			return nil // a message from before the bridge
 		}

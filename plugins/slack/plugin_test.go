@@ -118,7 +118,7 @@ func start(t *testing.T, api *fakeSlack) *plugintest.Process {
 	t.Helper()
 	p, err := plugintest.Start(context.Background(), []string{pluginBinary(t)}, plugintest.NewCore(""), plugintest.Options{
 		ProjectSlug: "demo", Config: map[string]any{"channels": "C1=eng", "api_url": api.URL + "/api"},
-		Secrets: map[string]string{"bot_token": "xoxb-test", "signing_secret": secret}, AllowPrivateOutbound: true, Timeout: 10 * time.Second})
+		Secrets: map[string]string{"bot_token": "xoxb-test", "signing_secret": secret}, AllowPrivateOutbound: true, APIHosts: "127.0.0.1", Timeout: 10 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,21 +313,28 @@ func TestVerify(t *testing.T) {
 	}
 }
 
-// Without the server allowing private addresses, the API address cannot point the bridge (and its
-// bot token) at this machine's side of the network.
-func TestTheAPIIsReachedThroughNetguard(t *testing.T) {
+// The bot token goes only where the operator allows: Slack's API, or a host listed in
+// GATOR_PLUGIN_API_HOSTS — and even a listed host on this machine's side of the network only where
+// private addresses are allowed. A project admin's api_url alone sends it nowhere else.
+func TestTheBotTokenGoesOnlyWhereTheOperatorAllows(t *testing.T) {
 	api := newFakeSlack(t)
-	p, err := plugintest.Start(context.Background(), []string{pluginBinary(t)}, plugintest.NewCore(""), plugintest.Options{
-		ProjectSlug: "demo", Config: map[string]any{"channels": "C1=eng", "api_url": api.URL + "/api"},
-		Secrets: map[string]string{"bot_token": "xoxb-test", "signing_secret": secret}, Timeout: 10 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = p.Close() })
-	err = p.Call(context.Background(), plugin.MethodMessagePosted, plugin.MessageHookParams{
-		Conversation: plugin.BridgedConversation{ExternalRef: "T1/C1"}, Message: plugin.BridgedMessage{Kind: "text", Body: "hi"}}, nil)
-	if err == nil || !strings.Contains(err.Error(), "not a public address") {
-		t.Fatalf("a private API address was reached: %v", err)
+	for name, o := range map[string]plugintest.Options{
+		"an admin's address alone":           {AllowPrivateOutbound: true},
+		"a listed host on a private address": {APIHosts: "127.0.0.1"},
+	} {
+		o.ProjectSlug, o.Timeout = "demo", 10*time.Second
+		o.Config = map[string]any{"channels": "C1=eng", "api_url": api.URL + "/api"}
+		o.Secrets = map[string]string{"bot_token": "xoxb-test", "signing_secret": secret}
+		p, err := plugintest.Start(context.Background(), []string{pluginBinary(t)}, plugintest.NewCore(""), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = p.Call(context.Background(), plugin.MethodMessagePosted, plugin.MessageHookParams{
+			Conversation: plugin.BridgedConversation{ExternalRef: "T1/C1"}, Message: plugin.BridgedMessage{Kind: "text", Body: "hi"}}, nil)
+		_ = p.Close()
+		if err == nil || !strings.Contains(err.Error(), "refused") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 	if len(api.of("auth.test")) != 0 {
 		t.Error("the fake API was called")

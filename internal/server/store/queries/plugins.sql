@@ -141,3 +141,8 @@ DELETE FROM plugins p WHERE p.id = $1 AND NOT EXISTS (SELECT 1 FROM project_plug
 
 -- name: GetPluginByID :one
 SELECT * FROM plugins WHERE id = $1;
+
+-- name: PruneWebhookDeliveries :execrows
+-- Deliveries are remembered long enough that a sender's retries, and a replay of a signed request,
+-- are known; senders that sign with a timestamp (Slack) refuse older ones anyway.
+DELETE FROM webhook_deliveries WHERE received_at < sqlc.arg(before);

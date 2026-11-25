@@ -26,6 +26,7 @@ import (
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/netguard"
+	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
@@ -90,7 +91,7 @@ func newWorld(t *testing.T, allowPrivate bool) *world {
 		Roles: roles, Voice: team.Voice, Open: chat.Access, Packer: chat.Packer})
 	w.remote.PollEvery = 10 * time.Millisecond
 	team.AnswerElsewhere(agents.KindRemote, w.remote)
-	bridge := bridges.New(pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access, Roles: roles, Approver: svc})
+	bridge := bridges.New(pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access, Roles: roles, Approver: svc, Linkers: plugins.Linkers{Pool: pool}})
 	w.in = NewInbound(InboundDeps{Pool: pool, Bridge: bridge, Tokens: auth.Tokens{Pool: pool}, Roles: roles, PublicURL: "https://gator.example"})
 	w.in.Wait = 0
 	if err := pool.QueryRow(ctx, "INSERT INTO projects(slug,name) VALUES($1,'P') RETURNING id", w.slug).Scan(&w.project); err != nil {

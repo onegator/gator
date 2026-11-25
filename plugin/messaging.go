@@ -93,10 +93,11 @@ type MessagePostResult struct {
 }
 
 // MessageUpdateParams changes what a message the bridge brought in says, when its author edited it
-// outside.
+// outside. Author is who edited it: only the account that wrote it changes it.
 type MessageUpdateParams struct {
-	ExternalRef string `json:"external_ref"`
-	Body        string `json:"body"`
+	ExternalRef string         `json:"external_ref"`
+	Body        string         `json:"body"`
+	Author      ExternalAuthor `json:"author"`
 }
 
 // MemberLinkParams links an outside account to the Gator account of the person who made Code (in

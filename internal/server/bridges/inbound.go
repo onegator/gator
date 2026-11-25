@@ -230,8 +230,22 @@ func (s *Service) Update(ctx context.Context, b Bridge, p plugin.MessageUpdatePa
 	if !validRef(p.ExternalRef) {
 		return invalid("external_ref is 1–%d characters of one line", maxRef)
 	}
-	_, err := s.deps.Writer.Edit(ctx, b.Project, b.Provider, p.ExternalRef, p.Body)
+	who, err := s.q.FindExternalIdentity(ctx, db.FindExternalIdentityParams{ProjectID: b.Project, Provider: b.Provider,
+		ExternalID: strings.TrimSpace(p.Author.ExternalID)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return forbidden("only who wrote a message changes it")
+	}
+	if err != nil {
+		return err
+	}
+	by := []conversations.Author{{Kind: conversations.AuthorExternal, ID: who.ID}}
+	if who.UserID.Valid {
+		by = append(by, conversations.Author{Kind: conversations.AuthorUser, ID: who.UserID})
+	}
+	_, err = s.deps.Writer.Edit(ctx, b.Project, b.Provider, p.ExternalRef, p.Body, by...)
 	switch {
+	case errors.Is(err, conversations.ErrForbidden):
+		return forbidden("only who wrote a message changes it")
 	case errors.Is(err, conversations.ErrNotFound):
 		return notFound("no message %q came in through this bridge", p.ExternalRef)
 	case errors.Is(err, conversations.ErrInvalid):

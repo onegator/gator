@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/onegator/gator/plugin"
+	"github.com/onegator/gator/plugin/netguard"
 )
 
 // External references the plugin keeps on tasks.
@@ -43,7 +45,8 @@ const configSchema = `{"type":"object","properties":{
 	"trigger_label":{"type":"string","title":"Only issues labelled","description":"only issues with this label become tasks; empty: every open issue"},
 	"label_prefix":{"type":"string","title":"Phase label prefix","description":"prefix of phase labels; default gator:"},
 	"check_phase":{"type":"string","title":"CI phase","description":"phase whose gate gets CI checks; default implementation"},
-	"mention":{"type":"string","title":"Mention","description":"a comment with @<mention> <agent> asks that agent, e.g. @gator reviewer; default gator"}
+	"mention":{"type":"string","title":"Mention","description":"a comment with @<mention> <agent> asks that agent, e.g. @gator reviewer; default gator"},
+	"commenters":{"type":"string","title":"Who may ask","description":"the commenters' associations with the repository whose comments ask agents, comma separated; default OWNER,MEMBER,COLLABORATOR. Answers are public, with what the agent knows: on a public repository, widening this lets anyone have it"}
 	},"required":["repo"]}`
 
 var manifest = plugin.Manifest{
@@ -95,8 +98,10 @@ func setting(core *plugin.Core, key, def string) string {
 }
 
 func (g *gh) client(core *plugin.Core) *Client {
-	return &Client{Base: strings.TrimRight(setting(core, "api_url", "https://api.github.com"), "/"),
-		Token: core.Secret("token"), Repo: core.Setting("repo"), HTTP: g.http}
+	// The token goes to the API address, which a project admin sets; the hosts it may name besides
+	// GitHub's are the operator's (GATOR_PLUGIN_API_HOSTS, for GitHub Enterprise).
+	base, err := netguard.APIBase(strings.TrimRight(core.Setting("api_url"), "/"), "https://api.github.com", os.Getenv)
+	return &Client{Base: base, Err: err, Token: core.Secret("token"), Repo: core.Setting("repo"), HTTP: g.http}
 }
 
 // asPluginErr turns GitHub's answers into plugin errors. A bad request is this repository's

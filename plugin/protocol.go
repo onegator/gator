@@ -78,6 +78,9 @@ type Manifest struct {
 	Webhook        *WebhookSpec    `json:"webhook,omitempty"`
 	// Connect lets a person sign in to the outside system instead of pasting a token.
 	Connect *ConnectSpec `json:"connect,omitempty"`
+	// Links says a messaging bridge redeems link codes (member.link): a person can make one for it
+	// in Gator. A bridge that does not is refused a code, which would never work.
+	Links bool `json:"links,omitempty"`
 }
 
 // Schedule asks the core to call the schedule hook every Every (a Go duration, at least 1s).
@@ -168,6 +171,9 @@ func (m Manifest) Validate() error {
 	// A bridge's hooks carry what people say; a plugin hears them only as a declared bridge.
 	if (m.HasHook(MethodMessagePosted) || m.HasHook(MethodMessageEdited)) && !contains(m.Capabilities, CapabilityMessaging) {
 		return fmt.Errorf("manifest: messagePosted and messageEdited need the %s capability", CapabilityMessaging)
+	}
+	if m.Links && !contains(m.Capabilities, CapabilityMessaging) {
+		return fmt.Errorf("manifest: links needs the %s capability", CapabilityMessaging)
 	}
 	if c := m.Connect; c != nil {
 		if !strings.HasPrefix(c.AuthorizeURL, "https://") || !strings.HasPrefix(c.TokenURL, "https://") {
