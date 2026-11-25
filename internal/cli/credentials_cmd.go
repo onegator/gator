@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // ModelCredential is one of the person's model logins, as the server shows it: never its value.
@@ -116,13 +118,23 @@ func cmdCredentialSet(ctx context.Context, env *Env, args []string) error {
 	if err != nil {
 		return err
 	}
+	s, err := open(env, g)
+	if err != nil {
+		return err
+	}
 	var raw []byte
-	if *file != "" && *file != "-" {
+	switch f, isFile := env.Stdin.(*os.File); {
+	case *file != "" && *file != "-":
 		raw, err = os.ReadFile(*file)
-	} else {
-		if f, ok := env.Stdin.(*os.File); ok && f == os.Stdin {
-			fmt.Fprintf(env.Stderr, "Paste the %s and press Ctrl-D:\n", kind)
-		}
+	case isFile && term.IsTerminal(int(f.Fd())) && multiline(ctx, s.client, kind):
+		return coded(exitUserErr, "a %s is a file's contents: pass --file (for Codex, --file ~/.codex/auth.json)", kind)
+	case isFile && term.IsTerminal(int(f.Fd())):
+		// Typed or pasted at a terminal: not echoed, so it is neither on the screen nor in a
+		// terminal's scrollback.
+		fmt.Fprintf(env.Stderr, "Paste the %s (it is not shown) and press Enter: ", kind)
+		raw, err = term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(env.Stderr)
+	default:
 		raw, err = io.ReadAll(io.LimitReader(env.Stdin, 1<<20))
 	}
 	if err != nil {
@@ -131,10 +143,6 @@ func cmdCredentialSet(ctx context.Context, env *Env, args []string) error {
 	secret := strings.TrimSpace(string(raw))
 	if secret == "" {
 		return coded(exitUserErr, "no login given: pipe it on stdin or pass --file")
-	}
-	s, err := open(env, g)
-	if err != nil {
-		return err
 	}
 	c, err := s.client.PutCredential(ctx, kind, secret)
 	if err != nil {
@@ -196,4 +204,19 @@ func cmdCredentialRemove(ctx context.Context, env *Env, args []string) error {
 		fmt.Fprintf(env.Stdout, "Removed your %s.\n", kind)
 	}
 	return nil
+}
+
+// multiline says whether the server keeps a login of kind as a file's contents, which a terminal's
+// hidden prompt reads only the first line of.
+func multiline(ctx context.Context, c *Client, kind string) bool {
+	all, err := c.Credentials(ctx)
+	if err != nil {
+		return false
+	}
+	for _, k := range all.Kinds {
+		if k.Kind == kind {
+			return k.Multiline
+		}
+	}
+	return false
 }

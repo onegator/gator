@@ -530,3 +530,14 @@ func TestCredentialsAreReadFromStdinAndShownMasked(t *testing.T) {
 		t.Fatalf("second remove: %d", code)
 	}
 }
+
+// A login kept as a file is not read at a terminal's hidden prompt, which takes one line.
+func TestAFileLoginIsNotReadAtAPrompt(t *testing.T) {
+	f := newFake(t)
+	e, _, _ := f.env(t)
+	f.signIn(t, e)
+	c := &Client{Base: f.srv.URL, Token: f.token, HTTP: f.srv.Client()}
+	if !multiline(context.Background(), c, "chatgpt_subscription") || multiline(context.Background(), c, "claude_subscription") {
+		t.Fatal("which logins are files")
+	}
+}
