@@ -37,6 +37,7 @@ pomysły, bo licencja PolyForm Noncommercial wyklucza kopiowanie kodu.
 | 4 | [Marketplace](phase-4-marketplace.md) | paczki agentów i skilli, katalog integracji, proxy MCP | 2, (3) | 3 tyg. |
 | 5 | [Otwarcie na zewnątrz](phase-5-external.md) | backend ACP w runnerze, A2A, most do Slacka, komentarze GitHub | 2, 4 | 4 tyg. |
 | 6 | [UI](phase-6-ui.md) | trzy panele, rozmowa z kartami, Brain, Marketplace, opcjonalny klient web | 1 → równolegle | 4 tyg. + web |
+| 7 | [Przegląd zmian i żywe sesje](phase-7-review-and-sessions.md) | diff każdej tury i komentarze na liniach, Claude jako żywa sesja, zgody na narzędzia, załączniki dla agenta | 5, 6 | 5–6 tyg. |
 
 Szacunki zakładają 1–2 osoby z agentami. Fazy 1 i 6a idą razem, bo rozmowa bez ekranu nie istnieje.
 
@@ -44,7 +45,12 @@ Szacunki zakładają 1–2 osoby z agentami. Fazy 1 i 6a idą razem, bo rozmowa 
 1 Rozmowy ──► 2 Agenci ──► 3 Brain ──► 4 Marketplace ──► 5 Zewnętrzne
    │              │                                  ▲
    └── 6a UI ─────┴── 6b UI (Brain, Marketplace) ────┘    6c web (decyzja)
+                                                     │
+                              7 Przegląd zmian, żywe sesje, zgody ◄┘
 ```
+
+Faza 7 bierze pomysły z [pingdotgg/t3code](https://github.com/pingdotgg/t3code) (MIT). Z serwera
+bierzemy wzorce. Kod przenosimy tylko dla natywnego widoku diffu w Swift, z notą licencji.
 
 ## Pierwszy pionowy wycinek (koniec fazy 2)
 
@@ -71,6 +77,7 @@ przychodzi jako karta w wątku taska i działa tym samym endpointem co dziś `/t
 | 3 | `00042_brain.sql`, `00043_brain_backfill.sql`, `00044_brain_curation.sql`, `00045_brain_embeddings.sql` (opcjonalna, pgvector; numer zarezerwowany, jeszcze nie napisana) |
 | 4 | `00046_marketplace.sql`, `00047_mcp_servers.sql` |
 | 5 | `00048_messaging_bridges.sql`, `00049_external_agents.sql` |
+| 7 | `00050_turn_checkpoints.sql`, `00051_review_comments.sql`, `00052_runtime_requests.sql`, `00053_message_intent.sql`, `00054_job_settling.sql` |
 
 Faza 1 dostała dwie migracje więcej niż w pierwszej wersji planu: backfill `#general` i backfill
 wątków otwartych tasków to osobne kroki (osobne PR-y), więc numery kolejnych faz przesunęły się o 2.
