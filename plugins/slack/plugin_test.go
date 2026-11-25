@@ -312,3 +312,24 @@ func TestVerify(t *testing.T) {
 		t.Error("verify")
 	}
 }
+
+// Without the server allowing private addresses, the API address cannot point the bridge (and its
+// bot token) at this machine's side of the network.
+func TestTheAPIIsReachedThroughNetguard(t *testing.T) {
+	api := newFakeSlack(t)
+	p, err := plugintest.Start(context.Background(), []string{pluginBinary(t)}, plugintest.NewCore(""), plugintest.Options{
+		ProjectSlug: "demo", Config: map[string]any{"channels": "C1=eng", "api_url": api.URL + "/api"},
+		Secrets: map[string]string{"bot_token": "xoxb-test", "signing_secret": secret}, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	err = p.Call(context.Background(), plugin.MethodMessagePosted, plugin.MessageHookParams{
+		Conversation: plugin.BridgedConversation{ExternalRef: "T1/C1"}, Message: plugin.BridgedMessage{Kind: "text", Body: "hi"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "not a public address") {
+		t.Fatalf("a private API address was reached: %v", err)
+	}
+	if len(api.of("auth.test")) != 0 {
+		t.Error("the fake API was called")
+	}
+}
