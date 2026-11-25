@@ -31,6 +31,8 @@ type Store interface {
 	ListBrainLinks(ctx context.Context, ids []pgtype.UUID) ([]db.BrainLink, error)
 	ListBrainCitations(ctx context.Context, ids []pgtype.UUID) ([]db.ListBrainCitationsRow, error)
 	InsertEvent(ctx context.Context, arg db.InsertEventParams) (int64, error)
+	ListUserBrain(ctx context.Context, userID pgtype.UUID) ([]db.BrainEntry, error)
+	DeleteUserBrain(ctx context.Context, userID pgtype.UUID) (int64, error)
 }
 
 // Tx runs fn against one transaction of the store.
@@ -312,6 +314,24 @@ func (s *Service) Proposals(ctx context.Context, r Reader, project pgtype.UUID) 
 		return nil, err
 	}
 	return s.Visible(ctx, r, rows)
+}
+
+// Mine is everything the Brain holds about r, every version: what "me" is, to read and to take
+// away.
+func (s *Service) Mine(ctx context.Context, r Reader) ([]db.BrainEntry, error) {
+	if !r.User.Valid || r.IsJob() {
+		return nil, ErrForbidden
+	}
+	return s.store.ListUserBrain(ctx, r.User)
+}
+
+// Forget deletes everything the Brain holds about r, and answers how many entries that was. What a
+// job was handed of it is kept in no record (see the runner's handContext), so nothing is left.
+func (s *Service) Forget(ctx context.Context, r Reader) (int64, error) {
+	if !r.User.Valid || r.IsJob() {
+		return 0, ErrForbidden
+	}
+	return s.store.DeleteUserBrain(ctx, r.User)
 }
 
 // Visible keeps the entries r may read, in order.

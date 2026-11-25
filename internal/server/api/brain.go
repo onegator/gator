@@ -288,3 +288,34 @@ func (s *Server) GetBrainImpact(w http.ResponseWriter, r *http.Request, projectI
 	writeJSON(w, http.StatusOK, gen.BrainImpact{Before: sample(impact.Before), After: sample(impact.After),
 		ContextGrowth: impact.ContextGrowth, ContextHeld: impact.ContextHeld, RollbacksFell: impact.RollbacksFell})
 }
+
+// agentsSee is what a person is told agents see of their context.
+const agentsSee = "An agent sees your private entries (and your focus) only in a turn you asked for, directly or through " +
+	"agents it asked. Entries you share with a project are seen by its people and by every agent working in it; " +
+	"nothing of yours is kept in the record of what a job was handed."
+
+func (s *Server) GetMyBrain(w http.ResponseWriter, r *http.Request) {
+	reader, ok := s.brainReader(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.Brain.Service.Mine(r.Context(), reader)
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gen.MyBrain{Entries: mapAll(rows, toBrainEntry), AgentsSee: agentsSee})
+}
+
+func (s *Server) ForgetMyBrain(w http.ResponseWriter, r *http.Request) {
+	reader, ok := s.brainReader(w, r)
+	if !ok {
+		return
+	}
+	n, err := s.Brain.Service.Forget(r.Context(), reader)
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gen.Forgotten{Deleted: int(n)})
+}

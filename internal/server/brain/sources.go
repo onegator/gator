@@ -26,13 +26,14 @@ type Sources map[string]SourceRule
 // DefaultSources are the kinds Gator itself writes.
 func DefaultSources() Sources {
 	return Sources{
-		SourceManual:  anything,
-		SourceImport:  anything,
-		SourceMessage: needs("id", func(s Source) string { return s.ID }),
-		SourceTask:    needs("id", func(s Source) string { return s.ID }),
-		SourceJob:     needs("id", func(s Source) string { return s.ID }),
-		SourcePlugin:  needs("name", func(s Source) string { return s.Name }),
-		SourcePack:    needs("name", func(s Source) string { return s.Name }),
+		SourceManual:   anything,
+		SourceImport:   anything,
+		SourceMessage:  needs("id", func(s Source) string { return s.ID }),
+		SourceTask:     needs("id", func(s Source) string { return s.ID }),
+		SourceJob:      needs("id", func(s Source) string { return s.ID }),
+		SourcePlugin:   needs("name", func(s Source) string { return s.Name }),
+		SourcePack:     needs("name", func(s Source) string { return s.Name }),
+		SourceActivity: anything,
 	}
 }
 

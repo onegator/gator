@@ -243,3 +243,30 @@ SELECT * FROM brain_entries
 WHERE source_task_id = $1 AND scope IN ('project', 'component') AND NOT source_private
   AND created_at >= sqlc.arg(day)::timestamptz AND created_at < sqlc.arg(day)::timestamptz + interval '1 day'
 ORDER BY created_at, id;
+
+-- name: ActiveTasksOf :many
+-- The open tasks a person owns, or talked about in their thread since a moment: what their focus
+-- is worked out from. Asks are a conversation's, not work.
+SELECT t.id, t.project_id, t.title, t.phase, coalesce(t.owner_kind = 'user' AND t.owner_id = sqlc.arg(user_id)::uuid, false)::boolean AS owns
+FROM tasks t
+WHERE t.closed_at IS NULL AND t.kind <> 'ask' AND (
+    (t.owner_kind = 'user' AND t.owner_id = sqlc.arg(user_id)::uuid)
+    OR EXISTS (SELECT 1 FROM conversations c JOIN messages m ON m.conversation_id = c.id
+               WHERE c.task_id = t.id AND m.author_kind = 'user' AND m.author_id = sqlc.arg(user_id)::uuid
+                 AND m.created_at > sqlc.arg(since)::timestamptz))
+ORDER BY t.project_id, t.title
+LIMIT 100;
+
+-- name: PeopleActiveSince :many
+-- Who has worked or talked since a moment: whose focus is worth working out again.
+SELECT DISTINCT m.author_id::uuid AS user_id FROM messages m
+WHERE m.author_kind = 'user' AND m.author_id IS NOT NULL AND m.created_at > sqlc.arg(since)::timestamptz
+UNION
+SELECT DISTINCT t.owner_id::uuid FROM tasks t
+WHERE t.owner_kind = 'user' AND t.owner_id IS NOT NULL AND t.updated_at > sqlc.arg(since)::timestamptz;
+
+-- name: CurrentFocusOf :many
+-- A person's focus as it stands, per project.
+SELECT DISTINCT ON (lineage) * FROM brain_entries
+WHERE scope = 'user' AND user_id = $1 AND kind = 'focus' AND status = 'approved' AND valid_until IS NULL
+ORDER BY lineage, version DESC;

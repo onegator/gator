@@ -11,6 +11,59 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activeTasksOf = `-- name: ActiveTasksOf :many
+SELECT t.id, t.project_id, t.title, t.phase, coalesce(t.owner_kind = 'user' AND t.owner_id = $1::uuid, false)::boolean AS owns
+FROM tasks t
+WHERE t.closed_at IS NULL AND t.kind <> 'ask' AND (
+    (t.owner_kind = 'user' AND t.owner_id = $1::uuid)
+    OR EXISTS (SELECT 1 FROM conversations c JOIN messages m ON m.conversation_id = c.id
+               WHERE c.task_id = t.id AND m.author_kind = 'user' AND m.author_id = $1::uuid
+                 AND m.created_at > $2::timestamptz))
+ORDER BY t.project_id, t.title
+LIMIT 100
+`
+
+type ActiveTasksOfParams struct {
+	UserID pgtype.UUID        `json:"user_id"`
+	Since  pgtype.Timestamptz `json:"since"`
+}
+
+type ActiveTasksOfRow struct {
+	ID        pgtype.UUID `json:"id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+	Title     string      `json:"title"`
+	Phase     string      `json:"phase"`
+	Owns      bool        `json:"owns"`
+}
+
+// The open tasks a person owns, or talked about in their thread since a moment: what their focus
+// is worked out from. Asks are a conversation's, not work.
+func (q *Queries) ActiveTasksOf(ctx context.Context, arg ActiveTasksOfParams) ([]ActiveTasksOfRow, error) {
+	rows, err := q.db.Query(ctx, activeTasksOf, arg.UserID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ActiveTasksOfRow
+	for rows.Next() {
+		var i ActiveTasksOfRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Phase,
+			&i.Owns,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const archiveBrainEntries = `-- name: ArchiveBrainEntries :execrows
 UPDATE brain_entries SET archived_at = now(), updated_at = now()
 WHERE id = ANY($1::uuid[]) AND archived_at IS NULL
@@ -164,6 +217,65 @@ func (q *Queries) CurationByJob(ctx context.Context, jobID pgtype.UUID) (BrainCu
 		&i.CuratedAt,
 	)
 	return i, err
+}
+
+const currentFocusOf = `-- name: CurrentFocusOf :many
+SELECT DISTINCT ON (lineage) id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries
+WHERE scope = 'user' AND user_id = $1 AND kind = 'focus' AND status = 'approved' AND valid_until IS NULL
+ORDER BY lineage, version DESC
+`
+
+// A person's focus as it stands, per project.
+func (q *Queries) CurrentFocusOf(ctx context.Context, userID pgtype.UUID) ([]BrainEntry, error) {
+	rows, err := q.db.Query(ctx, currentFocusOf, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainEntry
+	for rows.Next() {
+		var i BrainEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ProjectID,
+			&i.ComponentKey,
+			&i.UserID,
+			&i.AgentID,
+			&i.Kind,
+			&i.Topic,
+			&i.Title,
+			&i.Content,
+			&i.Visibility,
+			&i.Status,
+			&i.Lineage,
+			&i.Version,
+			&i.Supersedes,
+			&i.ValidFrom,
+			&i.ValidUntil,
+			&i.Confidence,
+			&i.Source,
+			&i.SourceTaskID,
+			&i.SourceConversationID,
+			&i.SourcePrivate,
+			&i.Position,
+			&i.CondensedFrom,
+			&i.ArchivedAt,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deleteBrainEntry = `-- name: DeleteBrainEntry :execrows
@@ -1200,6 +1312,35 @@ func (q *Queries) MessageAtSeq(ctx context.Context, arg MessageAtSeqParams) (Mes
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const peopleActiveSince = `-- name: PeopleActiveSince :many
+SELECT DISTINCT m.author_id::uuid AS user_id FROM messages m
+WHERE m.author_kind = 'user' AND m.author_id IS NOT NULL AND m.created_at > $1::timestamptz
+UNION
+SELECT DISTINCT t.owner_id::uuid FROM tasks t
+WHERE t.owner_kind = 'user' AND t.owner_id IS NOT NULL AND t.updated_at > $1::timestamptz
+`
+
+// Who has worked or talked since a moment: whose focus is worth working out again.
+func (q *Queries) PeopleActiveSince(ctx context.Context, since pgtype.Timestamptz) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, peopleActiveSince, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var user_id pgtype.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const recordBrainCitations = `-- name: RecordBrainCitations :exec

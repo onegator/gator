@@ -244,6 +244,8 @@ func serve(ctx context.Context) error {
 	curations.On(curate, curate.Events()...)
 	go curations.Run(ctx)
 	go curate.Run(ctx, time.Minute)
+	// A person's focus is worked out from their work, and theirs alone.
+	go knows.Focus.Run(ctx, time.Hour)
 
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,

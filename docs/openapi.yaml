@@ -558,6 +558,20 @@ paths:
         - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainImpact" } } } }
+  /me/brain:
+    get:
+      operationId: getMyBrain
+      description: >
+        Everything the Brain holds about the caller, every version: their expertise, preferences and focus (worked out
+        from the tasks they own and talk about, never approved by anyone, never seen by anyone else), and what agents see
+        of it. This is the export.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MyBrain" } } } }
+    delete:
+      operationId: forgetMyBrain
+      description: Delete everything the Brain holds about the caller. Nothing of it is kept in any job's record.
+      responses:
+        "200": { description: forgotten, content: { application/json: { schema: { $ref: "#/components/schemas/Forgotten" } } } }
   /presets:
     get:
       operationId: listProjectPresets
@@ -2492,6 +2506,17 @@ components:
         contextGrowth: { type: number, format: double, description: "how much the median context grew, as a fraction" }
         contextHeld: { type: boolean, description: "it grew by at most 20%" }
         rollbacksFell: { type: boolean }
+    MyBrain:
+      type: object
+      required: [entries, agentsSee]
+      properties:
+        entries: { type: array, items: { $ref: "#/components/schemas/BrainEntry" }, description: "every version of every entry about the caller" }
+        agentsSee: { type: string, description: "what agents are told of it, in a sentence" }
+    Forgotten:
+      type: object
+      required: [deleted]
+      properties:
+        deleted: { type: integer, description: "entries deleted" }
     ProductEntry:
       type: object
       required: [id, kind, title, content, version, status, createdAt]

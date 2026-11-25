@@ -16,6 +16,8 @@ type Module struct {
 	Legacy Legacy
 	// Plugins is the door plugins propose through (brain.propose).
 	Plugins PluginProposals
+	// Focus works out people's focus from their work.
+	Focus *Focus
 }
 
 // Deps are what the Brain needs from the rest of the server.
@@ -45,5 +47,6 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Finder:  NewFinder(searcher, policy),
 		Legacy:  NewLegacy(q),
 		Plugins: NewPluginProposals(q, svc),
+		Focus:   NewFocus(q, svc, nil),
 	}
 }
