@@ -177,3 +177,11 @@ DO UPDATE SET last_read_seq = GREATEST(conversation_members.last_read_seq, EXCLU
 -- name: LockConversation :exec
 -- Holds the conversation's row until the transaction ends: writers of its cards go one at a time.
 SELECT id FROM conversations WHERE id = $1 FOR UPDATE;
+
+-- name: KeyShareProject :exec
+-- Taken before a conversation's own locks when a transaction will insert rows that point at the
+-- project: the same order a deletion of the project cascades in, so the two cannot deadlock.
+SELECT 1 FROM projects WHERE id = $1 FOR KEY SHARE;
+
+-- name: KeyShareTask :exec
+SELECT 1 FROM tasks WHERE id = $1 FOR KEY SHARE;

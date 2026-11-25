@@ -136,7 +136,7 @@ func (m *Messages) Post(ctx context.Context, p auth.Principal, conversation pgty
 		return Posted{}, err
 	}
 	var msg db.Message
-	err = store.InTx(ctx, m.pool, func(q *db.Queries) error {
+	err = store.InTxRetry(ctx, m.pool, func(q *db.Queries) error {
 		seq, err := q.NextMessageSeq(ctx, conv.ID)
 		if err != nil {
 			return err

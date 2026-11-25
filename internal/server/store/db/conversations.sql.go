@@ -430,6 +430,26 @@ func (q *Queries) JoinDefaultChannel(ctx context.Context, arg JoinDefaultChannel
 	return err
 }
 
+const keyShareProject = `-- name: KeyShareProject :exec
+SELECT 1 FROM projects WHERE id = $1 FOR KEY SHARE
+`
+
+// Taken before a conversation's own locks when a transaction will insert rows that point at the
+// project: the same order a deletion of the project cascades in, so the two cannot deadlock.
+func (q *Queries) KeyShareProject(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, keyShareProject, id)
+	return err
+}
+
+const keyShareTask = `-- name: KeyShareTask :exec
+SELECT 1 FROM tasks WHERE id = $1 FOR KEY SHARE
+`
+
+func (q *Queries) KeyShareTask(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, keyShareTask, id)
+	return err
+}
+
 const linkTaskConversation = `-- name: LinkTaskConversation :one
 UPDATE conversations SET kind = 'task', task_id = $1, project_id = $2
 WHERE id = $3 AND kind = 'thread'
