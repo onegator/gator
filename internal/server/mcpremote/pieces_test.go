@@ -125,3 +125,13 @@ func TestDiscoveryKeepsEndpointsOnTheAuthorizationServer(t *testing.T) {
 		t.Fatalf("an authorization server the package did not declare: %v", err)
 	}
 }
+
+func TestNobodysFailureDoesNotTripTheBreaker(t *testing.T) {
+	br := limits.NewBreaker(1, time.Hour)
+	for _, err := range []error{ErrNotConnected, context.Canceled, ErrNoKeyring} {
+		_, _ = guarded{Upstream: failing{err: err}, breaker: br}.CallTool(context.Background(), "x", nil)
+	}
+	if br.State() != limits.Closed {
+		t.Fatal("a call nobody could make tripped the breaker")
+	}
+}

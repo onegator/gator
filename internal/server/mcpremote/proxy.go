@@ -106,6 +106,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	up, closeUp, err := p.dial.Dial(r.Context(), g.Server)
+	if errors.Is(err, ErrNotConnected) {
+		refuse(w, http.StatusConflict, "nobody has connected "+name+" yet")
+		return
+	}
 	if err != nil {
 		refuse(w, http.StatusBadGateway, "the server cannot be reached")
 		return

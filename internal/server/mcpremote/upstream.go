@@ -61,8 +61,14 @@ type HTTPDialer struct {
 	Net netguard.Policy
 }
 
-// Dial implements Dialer. Nothing is sent until the first call.
-func (d HTTPDialer) Dial(_ context.Context, srv db.McpServer) (Upstream, func(), error) {
+// Dial implements Dialer. Nothing is sent until the first call; a server with no credential yet
+// is not dialed at all (ErrNotConnected), so its breaker never counts what is nobody's failure.
+func (d HTTPDialer) Dial(ctx context.Context, srv db.McpServer) (Upstream, func(), error) {
+	if d.Credentials != nil {
+		if err := d.Credentials.Authorize(ctx, srv, http.Header{}); err != nil {
+			return nil, nil, err
+		}
+	}
 	base := d.Net.Transport()
 	timeout := 30 * time.Second
 	if d.HTTP != nil {

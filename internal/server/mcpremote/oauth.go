@@ -73,7 +73,23 @@ type OAuth struct {
 	http      *http.Client
 	cache     *ToolCache
 	now       func() time.Time
-	mu        sync.Mutex // one renewal at a time: a refresh token is often good once
+	mu        sync.Mutex
+	renewing  map[[16]byte]*sync.Mutex // one renewal at a time per server: a refresh token is often good once
+}
+
+// lock is a server's renewal lock.
+func (o *OAuth) lock(server pgtype.UUID) *sync.Mutex {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.renewing == nil {
+		o.renewing = map[[16]byte]*sync.Mutex{}
+	}
+	m, ok := o.renewing[server.Bytes]
+	if !ok {
+		m = &sync.Mutex{}
+		o.renewing[server.Bytes] = m
+	}
+	return m
 }
 
 // NewOAuth builds it.
@@ -170,8 +186,9 @@ func (o *OAuth) Authorize(ctx context.Context, srv db.McpServer, h http.Header) 
 // renew trades the refresh token for a new access token. Another request may have renewed it a
 // moment ago: the server's row is read again under the lock.
 func (o *OAuth) renew(ctx context.Context, srv db.McpServer) (db.McpServer, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	l := o.lock(srv.ID)
+	l.Lock()
+	defer l.Unlock()
 	cur, err := o.store.GetMCPServerIn(ctx, db.GetMCPServerInParams{ProjectID: srv.ProjectID, Name: srv.Name})
 	if err != nil {
 		return srv, err

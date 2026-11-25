@@ -489,3 +489,26 @@ func TestWorkspaceServersAreAuditedAndArgumentsMasked(t *testing.T) {
 		}
 	}
 }
+
+// A server nobody connected yet is not dialed, and what it cannot answer is not its breaker's.
+func TestAServerNotConnectedDoesNotTripItsBreaker(t *testing.T) {
+	h := newHarness(t)
+	s := h.remoteSetup()
+	if code := h.do("PUT", "/projects/"+s.project+"/mcp-servers/unconnected", gen.McpServerSettings{Url: ptr(s.fake.URL + "/mcp"),
+		Auth: ptr(gen.McpServerSettingsAuthBearer), AllowedTools: &[]string{"search_issues"}}, nil); code != 200 {
+		t.Fatalf("server: %d", code)
+	}
+	h.do("PATCH", "/agents/"+s.agent.Id.String(), gen.AgentPatch{Tools: &[]string{"issues-mcp", "unconnected"}}, nil)
+	_, job := h.replyJobOf(s.project, "oncall")
+	before := s.fake.hits.Load()
+	for range 6 {
+		if _, err := h.proxySession(h.srv.URL+"/mcp/proxy/unconnected", map[string]string{"Authorization": "Bearer " + h.identity(job, s.project)}); err == nil {
+			t.Fatal("a server nobody connected answered")
+		}
+	}
+	var srv gen.McpServer
+	h.do("GET", "/projects/"+s.project+"/mcp-servers/unconnected", nil, &srv)
+	if srv.Breaker != "closed" || s.fake.hits.Load() != before {
+		t.Fatalf("breaker %s, the server was called %d times", srv.Breaker, s.fake.hits.Load()-before)
+	}
+}

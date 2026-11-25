@@ -93,8 +93,14 @@ func (u guarded) CallTool(ctx context.Context, name string, args json.RawMessage
 const rejectedByTransport = -32005
 
 // failed is what of err counts against the server: anything but an answer it gave.
+//
+// Nor is a call nobody could make — a server not connected yet, a caller who went away: the
+// breaker is about the server, and those say nothing of it.
 func failed(err error) error {
 	if we, ok := errors.AsType[*jsonrpc.Error](err); ok && we.Code != rejectedByTransport {
+		return nil
+	}
+	if errors.Is(err, ErrNotConnected) || errors.Is(err, ErrNoKeyring) || errors.Is(err, context.Canceled) {
 		return nil
 	}
 	return err
