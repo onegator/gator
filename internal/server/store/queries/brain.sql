@@ -43,14 +43,6 @@ UPDATE brain_entries SET status = sqlc.arg(status),
     updated_at = now()
 WHERE id = sqlc.arg(id) RETURNING *;
 
--- name: SetLegacyProductStatus :one
--- The product context's own door: approving keeps who approved (or nobody), archiving leaves
--- approved_at as it was, and nothing else moves — the facade answers what the old table did.
-UPDATE brain_entries SET status = sqlc.arg(status), approved_by = sqlc.narg(approved_by),
-    approved_at = CASE WHEN sqlc.arg(status)::text = 'approved' THEN now() ELSE approved_at END,
-    updated_at = now()
-WHERE id = sqlc.arg(id) RETURNING *;
-
 -- name: SupersedeOtherVersions :execrows
 -- Once a version is approved, the versions before it stop being true from now on. They stay, so
 -- "what did we know in March" has an answer.
@@ -64,15 +56,6 @@ WHERE id = $1 AND status = 'approved' RETURNING *;
 -- name: ArchiveBrainEntries :execrows
 UPDATE brain_entries SET archived_at = now(), updated_at = now()
 WHERE id = ANY(sqlc.arg(ids)::uuid[]) AND archived_at IS NULL;
-
--- name: SetBrainArchivedAt :exec
-UPDATE brain_entries SET archived_at = sqlc.narg(archived_at), updated_at = now() WHERE id = sqlc.arg(id);
-
--- name: UpdateBrainInPlace :one
--- A convention is a shelf note, edited where it stands, as knowledge entries always were.
-UPDATE brain_entries SET topic = sqlc.narg(topic), title = sqlc.arg(title), content = sqlc.arg(content),
-    position = sqlc.arg(position), updated_at = now()
-WHERE id = sqlc.arg(id) RETURNING *;
 
 -- name: DeleteBrainEntry :execrows
 DELETE FROM brain_entries WHERE id = $1;
@@ -114,8 +97,7 @@ ORDER BY e.created_at, e.id;
 
 -- name: CountBrainProposalsForTask :one
 -- Keeps a repeated event from proposing the same thing twice.
-SELECT count(*) FROM brain_entries
-WHERE project_id = $1 AND kind = $2 AND source_task_id = $3 AND source->>'kind' = sqlc.arg(source_kind)::text;
+SELECT count(*) FROM brain_entries WHERE project_id = $1 AND kind = $2 AND source_task_id = $3;
 
 -- name: CountBrainFromSource :one
 -- Whether something already came from this source (a message, a plugin's document), so it is
@@ -161,3 +143,43 @@ WHERE e.status = 'approved' AND e.archived_at IS NULL AND e.approved_at < sqlc.a
   AND (sqlc.narg(project_id)::uuid IS NULL OR e.project_id = sqlc.narg(project_id)::uuid)
   AND NOT EXISTS (SELECT 1 FROM brain_citations c WHERE c.entry_id = e.id AND c.how = 'cited' AND c.created_at >= sqlc.arg(before)::timestamptz)
 ORDER BY e.approved_at LIMIT 100;
+
+-- The doors the product context and the knowledge entries had, over the Brain.
+
+-- name: ListProductEntries :many
+-- A project's product context, every version: what GET /projects/{id}/product always answered.
+SELECT * FROM brain_entries
+WHERE scope = 'project' AND project_id = $1 AND kind = ANY(sqlc.arg(kinds)::text[])
+ORDER BY kind, title, version DESC;
+
+-- name: ListProposedProduct :many
+-- What the inbox shows of the product context: proposals waiting for a person, in live projects.
+SELECT e.* FROM brain_entries e JOIN projects p ON p.id = e.project_id
+WHERE e.scope = 'project' AND e.kind = ANY(sqlc.arg(kinds)::text[]) AND e.status = 'proposed' AND e.archived_at IS NULL
+  AND p.archived_at IS NULL AND (sqlc.narg(project_id)::uuid IS NULL OR e.project_id = sqlc.narg(project_id)::uuid)
+ORDER BY e.created_at;
+
+-- name: LiveEntriesOfKind :many
+-- What a condensation would fold together: approved, not archived, not itself a condensate.
+SELECT DISTINCT ON (lineage) * FROM brain_entries
+WHERE scope = 'project' AND project_id = $1 AND kind = $2 AND status = 'approved' AND archived_at IS NULL
+  AND cardinality(condensed_from) = 0
+ORDER BY lineage, version DESC;
+
+-- name: KindsWorthCondensing :many
+-- Kinds whose live entries have grown past what a prompt should carry, with how much they hold.
+SELECT project_id, kind, count(*)::bigint AS entries, coalesce(sum(length(content)), 0)::bigint AS bytes
+FROM (SELECT DISTINCT ON (lineage) project_id, kind, content
+      FROM brain_entries
+      WHERE scope = 'project' AND kind = ANY(sqlc.arg(kinds)::text[]) AND status = 'approved'
+        AND archived_at IS NULL AND cardinality(condensed_from) = 0
+      ORDER BY lineage, version DESC) live
+GROUP BY project_id, kind
+HAVING count(*) >= sqlc.arg(min_entries)::bigint OR coalesce(sum(length(content)), 0) >= sqlc.arg(min_bytes)::bigint;
+
+-- name: ListKnowledgeShelf :many
+-- The conventions written by hand, on their shelves: a project's own, or the workspace's (no project).
+SELECT * FROM brain_entries
+WHERE kind = 'convention' AND topic IS NOT NULL AND status = 'approved' AND scope IN ('workspace', 'project')
+  AND project_id IS NOT DISTINCT FROM sqlc.narg(project_id)::uuid
+ORDER BY position, topic, title;

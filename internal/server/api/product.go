@@ -2,26 +2,22 @@ package api
 
 import (
 	"net/http"
-	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
-	"github.com/onegator/gator/internal/server/product"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
-func toProductEntry(e db.ProductContext) gen.ProductEntry {
-	out := gen.ProductEntry{Id: toUUID(e.ID), Kind: gen.ProductEntryKind(e.Kind), Title: e.Title, Content: e.Content,
-		Version: int(e.Version), Status: gen.ProductEntryStatus(e.Status), CreatedAt: e.CreatedAt.Time}
-	out.SourceTaskId = toUUIDPtr(e.SourceTaskID)
-	if e.ApprovedAt.Valid {
-		at := e.ApprovedAt.Time
-		out.ApprovedAt = &at
-	}
+// The product context's doors, kept for one release over the Brain: a project's entries of the
+// product kinds, in the words they always had ("principles", three statuses).
+
+func toProductEntry(e db.BrainEntry) gen.ProductEntry {
+	out := gen.ProductEntry{Id: toUUID(e.ID), Kind: gen.ProductEntryKind(brain.ProductKind(e.Kind)), Title: e.Title,
+		Content: e.Content, Version: int(e.Version), Status: gen.ProductEntryStatus(brain.ProductStatus(e.Status)),
+		CreatedAt: e.CreatedAt.Time, SourceTaskId: toUUIDPtr(e.SourceTaskID), ApprovedAt: timePtr(e.ApprovedAt)}
 	return out
 }
 
@@ -29,7 +25,7 @@ func (s *Server) ListProductContext(w http.ResponseWriter, r *http.Request, proj
 	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
 		return
 	}
-	rows, err := db.New(s.Pool).ListProductContext(r.Context(), fromUUID(projectId))
+	rows, err := s.Brain.Legacy.Product(r.Context(), fromUUID(projectId))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -39,7 +35,10 @@ func (s *Server) ListProductContext(w http.ResponseWriter, r *http.Request, proj
 
 // AddProductEntry writes what a person says about the product; it needs no approval.
 func (s *Server) AddProductEntry(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
-	p, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleMember)
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleMember); !ok {
+		return
+	}
+	reader, ok := s.brainReader(w, r)
 	if !ok {
 		return
 	}
@@ -51,28 +50,29 @@ func (s *Server) AddProductEntry(w http.ResponseWriter, r *http.Request, project
 		writeError(w, http.StatusBadRequest, "title and content are required", "invalid")
 		return
 	}
-	entry, err := db.New(s.Pool).CreateProductEntry(r.Context(), db.CreateProductEntryParams{
-		ProjectID: fromUUID(projectId), Kind: string(in.Kind), Title: in.Title, Content: in.Content,
-		Status: "approved", CreatedByKind: string(auth.KindUser), CreatedBy: p.UserID,
-		ApprovedBy: p.UserID, ApprovedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
+	entry, err := s.Brain.Service.Write(r.Context(), reader, brain.Draft{Scope: brain.ScopeProject, Project: fromUUID(projectId),
+		Kind: brain.KindOfProduct(string(in.Kind)), Title: in.Title, Content: in.Content})
 	if err != nil {
-		s.fail(w, err)
+		s.failBrain(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, toProductEntry(entry))
 }
 
-// SetProductEntryStatus approves a proposal or archives an entry.
+// SetProductEntryStatus approves a proposal or archives an entry. Approving a condensed entry
+// archives the entries it replaces: still readable, no longer carried into every prompt.
 func (s *Server) SetProductEntryStatus(w http.ResponseWriter, r *http.Request, entryId openapi_types.UUID) {
 	p, ok := s.principal(w, r)
 	if !ok {
 		return
 	}
-	q := db.New(s.Pool)
-	entry, err := q.GetProductEntry(r.Context(), fromUUID(entryId))
+	entry, err := db.New(s.Pool).GetBrainEntry(r.Context(), fromUUID(entryId))
 	if err != nil {
 		s.fail(w, err)
+		return
+	}
+	if entry.Scope != brain.ScopeProject {
+		writeError(w, http.StatusNotFound, "not found", "not_found")
 		return
 	}
 	if _, ok := s.requireProject(w, r, entry.ProjectID, auth.RoleMember); !ok {
@@ -82,23 +82,14 @@ func (s *Server) SetProductEntryStatus(w http.ResponseWriter, r *http.Request, e
 	if !decode(w, r, &in) {
 		return
 	}
-	params := db.SetProductEntryStatusParams{ID: entry.ID, Status: string(in.Status)}
-	if string(in.Status) == "approved" {
-		params.ApprovedBy = p.UserID
+	verdict := brain.VerdictArchive
+	if in.Status == gen.ProductStatusChangeStatusApproved {
+		verdict = brain.VerdictApprove
 	}
-	updated, err := q.SetProductEntryStatus(r.Context(), params)
+	updated, err := s.Brain.Service.DecideAs(r.Context(), entry.ID, verdict, p.UserID)
 	if err != nil {
-		s.fail(w, err)
+		s.failBrain(w, err)
 		return
-	}
-	// Approving a condensed entry is what folds the originals away. They are archived, not
-	// deleted: still readable for anyone who wants to know what went into this one, and no
-	// longer carried into every prompt.
-	if n, err := product.ArchiveCondensedSources(r.Context(), q, updated); err != nil {
-		s.fail(w, err)
-		return
-	} else if n > 0 {
-		s.Log.Info("archived the entries a condensed one replaces", "entry", updated.ID, "archived", n)
 	}
 	writeJSON(w, http.StatusOK, toProductEntry(updated))
 }

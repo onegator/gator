@@ -46,25 +46,18 @@ func (q *Queries) CountBrainFromSource(ctx context.Context, arg CountBrainFromSo
 }
 
 const countBrainProposalsForTask = `-- name: CountBrainProposalsForTask :one
-SELECT count(*) FROM brain_entries
-WHERE project_id = $1 AND kind = $2 AND source_task_id = $3 AND source->>'kind' = $4::text
+SELECT count(*) FROM brain_entries WHERE project_id = $1 AND kind = $2 AND source_task_id = $3
 `
 
 type CountBrainProposalsForTaskParams struct {
 	ProjectID    pgtype.UUID `json:"project_id"`
 	Kind         string      `json:"kind"`
 	SourceTaskID pgtype.UUID `json:"source_task_id"`
-	SourceKind   string      `json:"source_kind"`
 }
 
 // Keeps a repeated event from proposing the same thing twice.
 func (q *Queries) CountBrainProposalsForTask(ctx context.Context, arg CountBrainProposalsForTaskParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countBrainProposalsForTask,
-		arg.ProjectID,
-		arg.Kind,
-		arg.SourceTaskID,
-		arg.SourceKind,
-	)
+	row := q.db.QueryRow(ctx, countBrainProposalsForTask, arg.ProjectID, arg.Kind, arg.SourceTaskID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -280,6 +273,56 @@ func (q *Queries) InsertBrainLink(ctx context.Context, arg InsertBrainLinkParams
 		arg.Relation,
 	)
 	return err
+}
+
+const kindsWorthCondensing = `-- name: KindsWorthCondensing :many
+SELECT project_id, kind, count(*)::bigint AS entries, coalesce(sum(length(content)), 0)::bigint AS bytes
+FROM (SELECT DISTINCT ON (lineage) project_id, kind, content
+      FROM brain_entries
+      WHERE scope = 'project' AND kind = ANY($1::text[]) AND status = 'approved'
+        AND archived_at IS NULL AND cardinality(condensed_from) = 0
+      ORDER BY lineage, version DESC) live
+GROUP BY project_id, kind
+HAVING count(*) >= $2::bigint OR coalesce(sum(length(content)), 0) >= $3::bigint
+`
+
+type KindsWorthCondensingParams struct {
+	Kinds      []string `json:"kinds"`
+	MinEntries int64    `json:"min_entries"`
+	MinBytes   int64    `json:"min_bytes"`
+}
+
+type KindsWorthCondensingRow struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Kind      string      `json:"kind"`
+	Entries   int64       `json:"entries"`
+	Bytes     int64       `json:"bytes"`
+}
+
+// Kinds whose live entries have grown past what a prompt should carry, with how much they hold.
+func (q *Queries) KindsWorthCondensing(ctx context.Context, arg KindsWorthCondensingParams) ([]KindsWorthCondensingRow, error) {
+	rows, err := q.db.Query(ctx, kindsWorthCondensing, arg.Kinds, arg.MinEntries, arg.MinBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []KindsWorthCondensingRow
+	for rows.Next() {
+		var i KindsWorthCondensingRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.Kind,
+			&i.Entries,
+			&i.Bytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const latestBrainVersion = `-- name: LatestBrainVersion :one
@@ -613,6 +656,197 @@ func (q *Queries) ListJobCitations(ctx context.Context, jobID pgtype.UUID) ([]Br
 	return items, nil
 }
 
+const listKnowledgeShelf = `-- name: ListKnowledgeShelf :many
+SELECT id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries
+WHERE kind = 'convention' AND topic IS NOT NULL AND status = 'approved' AND scope IN ('workspace', 'project')
+  AND project_id IS NOT DISTINCT FROM $1::uuid
+ORDER BY position, topic, title
+`
+
+// The conventions written by hand, on their shelves: a project's own, or the workspace's (no project).
+func (q *Queries) ListKnowledgeShelf(ctx context.Context, projectID pgtype.UUID) ([]BrainEntry, error) {
+	rows, err := q.db.Query(ctx, listKnowledgeShelf, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainEntry
+	for rows.Next() {
+		var i BrainEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ProjectID,
+			&i.ComponentKey,
+			&i.UserID,
+			&i.AgentID,
+			&i.Kind,
+			&i.Topic,
+			&i.Title,
+			&i.Content,
+			&i.Visibility,
+			&i.Status,
+			&i.Lineage,
+			&i.Version,
+			&i.Supersedes,
+			&i.ValidFrom,
+			&i.ValidUntil,
+			&i.Confidence,
+			&i.Source,
+			&i.SourceTaskID,
+			&i.SourceConversationID,
+			&i.SourcePrivate,
+			&i.Position,
+			&i.CondensedFrom,
+			&i.ArchivedAt,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProductEntries = `-- name: ListProductEntries :many
+
+SELECT id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries
+WHERE scope = 'project' AND project_id = $1 AND kind = ANY($2::text[])
+ORDER BY kind, title, version DESC
+`
+
+type ListProductEntriesParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Kinds     []string    `json:"kinds"`
+}
+
+// The doors the product context and the knowledge entries had, over the Brain.
+// A project's product context, every version: what GET /projects/{id}/product always answered.
+func (q *Queries) ListProductEntries(ctx context.Context, arg ListProductEntriesParams) ([]BrainEntry, error) {
+	rows, err := q.db.Query(ctx, listProductEntries, arg.ProjectID, arg.Kinds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainEntry
+	for rows.Next() {
+		var i BrainEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ProjectID,
+			&i.ComponentKey,
+			&i.UserID,
+			&i.AgentID,
+			&i.Kind,
+			&i.Topic,
+			&i.Title,
+			&i.Content,
+			&i.Visibility,
+			&i.Status,
+			&i.Lineage,
+			&i.Version,
+			&i.Supersedes,
+			&i.ValidFrom,
+			&i.ValidUntil,
+			&i.Confidence,
+			&i.Source,
+			&i.SourceTaskID,
+			&i.SourceConversationID,
+			&i.SourcePrivate,
+			&i.Position,
+			&i.CondensedFrom,
+			&i.ArchivedAt,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProposedProduct = `-- name: ListProposedProduct :many
+SELECT e.id, e.scope, e.project_id, e.component_key, e.user_id, e.agent_id, e.kind, e.topic, e.title, e.content, e.visibility, e.status, e.lineage, e.version, e.supersedes, e.valid_from, e.valid_until, e.confidence, e.source, e.source_task_id, e.source_conversation_id, e.source_private, e.position, e.condensed_from, e.archived_at, e.created_by_kind, e.created_by, e.approved_by, e.approved_at, e.created_at, e.updated_at FROM brain_entries e JOIN projects p ON p.id = e.project_id
+WHERE e.scope = 'project' AND e.kind = ANY($1::text[]) AND e.status = 'proposed' AND e.archived_at IS NULL
+  AND p.archived_at IS NULL AND ($2::uuid IS NULL OR e.project_id = $2::uuid)
+ORDER BY e.created_at
+`
+
+type ListProposedProductParams struct {
+	Kinds     []string    `json:"kinds"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+// What the inbox shows of the product context: proposals waiting for a person, in live projects.
+func (q *Queries) ListProposedProduct(ctx context.Context, arg ListProposedProductParams) ([]BrainEntry, error) {
+	rows, err := q.db.Query(ctx, listProposedProduct, arg.Kinds, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainEntry
+	for rows.Next() {
+		var i BrainEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ProjectID,
+			&i.ComponentKey,
+			&i.UserID,
+			&i.AgentID,
+			&i.Kind,
+			&i.Topic,
+			&i.Title,
+			&i.Content,
+			&i.Visibility,
+			&i.Status,
+			&i.Lineage,
+			&i.Version,
+			&i.Supersedes,
+			&i.ValidFrom,
+			&i.ValidUntil,
+			&i.Confidence,
+			&i.Source,
+			&i.SourceTaskID,
+			&i.SourceConversationID,
+			&i.SourcePrivate,
+			&i.Position,
+			&i.CondensedFrom,
+			&i.ArchivedAt,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserBrain = `-- name: ListUserBrain :many
 SELECT id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries WHERE scope = 'user' AND user_id = $1 ORDER BY kind, title, version DESC
 `
@@ -687,6 +921,71 @@ type LiveBrainEntriesParams struct {
 // condensed one and still true. Narrowed by scope and place; brain.Policy decides the rest.
 func (q *Queries) LiveBrainEntries(ctx context.Context, arg LiveBrainEntriesParams) ([]BrainEntry, error) {
 	rows, err := q.db.Query(ctx, liveBrainEntries, arg.Scopes, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainEntry
+	for rows.Next() {
+		var i BrainEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ProjectID,
+			&i.ComponentKey,
+			&i.UserID,
+			&i.AgentID,
+			&i.Kind,
+			&i.Topic,
+			&i.Title,
+			&i.Content,
+			&i.Visibility,
+			&i.Status,
+			&i.Lineage,
+			&i.Version,
+			&i.Supersedes,
+			&i.ValidFrom,
+			&i.ValidUntil,
+			&i.Confidence,
+			&i.Source,
+			&i.SourceTaskID,
+			&i.SourceConversationID,
+			&i.SourcePrivate,
+			&i.Position,
+			&i.CondensedFrom,
+			&i.ArchivedAt,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveEntriesOfKind = `-- name: LiveEntriesOfKind :many
+SELECT DISTINCT ON (lineage) id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries
+WHERE scope = 'project' AND project_id = $1 AND kind = $2 AND status = 'approved' AND archived_at IS NULL
+  AND cardinality(condensed_from) = 0
+ORDER BY lineage, version DESC
+`
+
+type LiveEntriesOfKindParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Kind      string      `json:"kind"`
+}
+
+// What a condensation would fold together: approved, not archived, not itself a condensate.
+func (q *Queries) LiveEntriesOfKind(ctx context.Context, arg LiveEntriesOfKindParams) ([]BrainEntry, error) {
+	rows, err := q.db.Query(ctx, liveEntriesOfKind, arg.ProjectID, arg.Kind)
 	if err != nil {
 		return nil, err
 	}
@@ -856,20 +1155,6 @@ func (q *Queries) SearchBrain(ctx context.Context, arg SearchBrainParams) ([]Sea
 	return items, nil
 }
 
-const setBrainArchivedAt = `-- name: SetBrainArchivedAt :exec
-UPDATE brain_entries SET archived_at = $1, updated_at = now() WHERE id = $2
-`
-
-type SetBrainArchivedAtParams struct {
-	ArchivedAt pgtype.Timestamptz `json:"archived_at"`
-	ID         pgtype.UUID        `json:"id"`
-}
-
-func (q *Queries) SetBrainArchivedAt(ctx context.Context, arg SetBrainArchivedAtParams) error {
-	_, err := q.db.Exec(ctx, setBrainArchivedAt, arg.ArchivedAt, arg.ID)
-	return err
-}
-
 const setBrainStatus = `-- name: SetBrainStatus :one
 UPDATE brain_entries SET status = $1,
     approved_by = CASE WHEN $1::text = 'approved' THEN $2::uuid ELSE approved_by END,
@@ -888,60 +1173,6 @@ type SetBrainStatusParams struct {
 
 func (q *Queries) SetBrainStatus(ctx context.Context, arg SetBrainStatusParams) (BrainEntry, error) {
 	row := q.db.QueryRow(ctx, setBrainStatus, arg.Status, arg.ApprovedBy, arg.ID)
-	var i BrainEntry
-	err := row.Scan(
-		&i.ID,
-		&i.Scope,
-		&i.ProjectID,
-		&i.ComponentKey,
-		&i.UserID,
-		&i.AgentID,
-		&i.Kind,
-		&i.Topic,
-		&i.Title,
-		&i.Content,
-		&i.Visibility,
-		&i.Status,
-		&i.Lineage,
-		&i.Version,
-		&i.Supersedes,
-		&i.ValidFrom,
-		&i.ValidUntil,
-		&i.Confidence,
-		&i.Source,
-		&i.SourceTaskID,
-		&i.SourceConversationID,
-		&i.SourcePrivate,
-		&i.Position,
-		&i.CondensedFrom,
-		&i.ArchivedAt,
-		&i.CreatedByKind,
-		&i.CreatedBy,
-		&i.ApprovedBy,
-		&i.ApprovedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const setLegacyProductStatus = `-- name: SetLegacyProductStatus :one
-UPDATE brain_entries SET status = $1, approved_by = $2,
-    approved_at = CASE WHEN $1::text = 'approved' THEN now() ELSE approved_at END,
-    updated_at = now()
-WHERE id = $3 RETURNING id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at
-`
-
-type SetLegacyProductStatusParams struct {
-	Status     string      `json:"status"`
-	ApprovedBy pgtype.UUID `json:"approved_by"`
-	ID         pgtype.UUID `json:"id"`
-}
-
-// The product context's own door: approving keeps who approved (or nobody), archiving leaves
-// approved_at as it was, and nothing else moves — the facade answers what the old table did.
-func (q *Queries) SetLegacyProductStatus(ctx context.Context, arg SetLegacyProductStatusParams) (BrainEntry, error) {
-	row := q.db.QueryRow(ctx, setLegacyProductStatus, arg.Status, arg.ApprovedBy, arg.ID)
 	var i BrainEntry
 	err := row.Scan(
 		&i.ID,
@@ -1107,64 +1338,4 @@ func (q *Queries) SupersedeOtherVersions(ctx context.Context, arg SupersedeOther
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const updateBrainInPlace = `-- name: UpdateBrainInPlace :one
-UPDATE brain_entries SET topic = $1, title = $2, content = $3,
-    position = $4, updated_at = now()
-WHERE id = $5 RETURNING id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at
-`
-
-type UpdateBrainInPlaceParams struct {
-	Topic    *string     `json:"topic"`
-	Title    string      `json:"title"`
-	Content  string      `json:"content"`
-	Position int32       `json:"position"`
-	ID       pgtype.UUID `json:"id"`
-}
-
-// A convention is a shelf note, edited where it stands, as knowledge entries always were.
-func (q *Queries) UpdateBrainInPlace(ctx context.Context, arg UpdateBrainInPlaceParams) (BrainEntry, error) {
-	row := q.db.QueryRow(ctx, updateBrainInPlace,
-		arg.Topic,
-		arg.Title,
-		arg.Content,
-		arg.Position,
-		arg.ID,
-	)
-	var i BrainEntry
-	err := row.Scan(
-		&i.ID,
-		&i.Scope,
-		&i.ProjectID,
-		&i.ComponentKey,
-		&i.UserID,
-		&i.AgentID,
-		&i.Kind,
-		&i.Topic,
-		&i.Title,
-		&i.Content,
-		&i.Visibility,
-		&i.Status,
-		&i.Lineage,
-		&i.Version,
-		&i.Supersedes,
-		&i.ValidFrom,
-		&i.ValidUntil,
-		&i.Confidence,
-		&i.Source,
-		&i.SourceTaskID,
-		&i.SourceConversationID,
-		&i.SourcePrivate,
-		&i.Position,
-		&i.CondensedFrom,
-		&i.ArchivedAt,
-		&i.CreatedByKind,
-		&i.CreatedBy,
-		&i.ApprovedBy,
-		&i.ApprovedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
 }

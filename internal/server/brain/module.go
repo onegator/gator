@@ -12,6 +12,8 @@ type Module struct {
 	Readers Readers
 	Service *Service
 	Finder  Finder
+	// Legacy is the product context's and the knowledge shelves' old doors, over the Brain.
+	Legacy Legacy
 }
 
 // Deps are what the Brain needs from the rest of the server.
@@ -38,5 +40,6 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Readers: NewReaders(q),
 		Service: NewService(PoolTx(pool), q, policy, DefaultSources(), deps.Effects...),
 		Finder:  NewFinder(searcher, policy),
+		Legacy:  NewLegacy(q),
 	}
 }

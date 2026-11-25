@@ -357,10 +357,21 @@ type JobEvent struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-type KnowledgeEntry struct {
+type KnowledgeEntriesLegacy struct {
 	ID        pgtype.UUID        `json:"id"`
 	ProjectID pgtype.UUID        `json:"project_id"`
 	Scope     string             `json:"scope"`
+	Title     string             `json:"title"`
+	Content   string             `json:"content"`
+	Position  int32              `json:"position"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type KnowledgeEntry struct {
+	ID        pgtype.UUID        `json:"id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Scope     *string            `json:"scope"`
 	Title     string             `json:"title"`
 	Content   string             `json:"content"`
 	Position  int32              `json:"position"`
@@ -496,6 +507,24 @@ type PluginKv struct {
 }
 
 type ProductContext struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Kind          string             `json:"kind"`
+	Title         string             `json:"title"`
+	Content       string             `json:"content"`
+	Version       int32              `json:"version"`
+	Status        string             `json:"status"`
+	SourceTaskID  pgtype.UUID        `json:"source_task_id"`
+	CreatedByKind string             `json:"created_by_kind"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	ApprovedBy    pgtype.UUID        `json:"approved_by"`
+	ApprovedAt    pgtype.Timestamptz `json:"approved_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
+	CondensedFrom []pgtype.UUID      `json:"condensed_from"`
+}
+
+type ProductContextLegacy struct {
 	ID            pgtype.UUID        `json:"id"`
 	ProjectID     pgtype.UUID        `json:"project_id"`
 	Kind          string             `json:"kind"`

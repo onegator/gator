@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -188,12 +189,12 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 	}
 	// What the product decided about itself, for the roles that reason about direction.
 	if readsProduct(role) {
-		entries, err := q.ListApprovedProductContext(ctx, t.ProjectID)
+		entries, err := brain.NewLegacy(q).ApprovedProduct(ctx, t.ProjectID)
 		if err != nil {
 			return nil, err
 		}
 		for _, e := range entries {
-			add(ContextDoc{Kind: "product", Phase: e.Kind, Title: productTitle(e), Body: e.Content, Origin: "product"})
+			add(ContextDoc{Kind: "product", Phase: brain.ProductKind(e.Kind), Title: productTitle(e), Body: e.Content, Origin: "product"})
 		}
 	}
 
@@ -258,6 +259,6 @@ func readsProduct(role string) bool {
 	return false
 }
 
-func productTitle(e db.ProductContext) string {
-	return fmt.Sprintf("%s: %s (v%d)", e.Kind, e.Title, e.Version)
+func productTitle(e db.BrainEntry) string {
+	return fmt.Sprintf("%s: %s (v%d)", brain.ProductKind(e.Kind), e.Title, e.Version)
 }

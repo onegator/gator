@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/knowledge"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -25,11 +26,12 @@ func (s *Service) Knowledge(ctx context.Context, projectID pgtype.UUID, role, ph
 	if err != nil {
 		return nil, nil, err
 	}
-	own, err := q.ListProjectKnowledge(ctx, projectID)
+	shelves := brain.NewLegacy(q)
+	own, err := shelves.Shelf(ctx, projectID)
 	if err != nil {
 		return nil, nil, err
 	}
-	shared, err := q.ListWorkspaceKnowledge(ctx)
+	shared, err := shelves.Shelf(ctx, pgtype.UUID{})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -39,14 +41,15 @@ func (s *Service) Knowledge(ctx context.Context, projectID pgtype.UUID, role, ph
 	}
 
 	taken := map[string]string{} // scope/title → where it came from
-	add := func(e db.KnowledgeEntry, where string) {
-		key := e.Scope + "/" + e.Title
+	add := func(e db.BrainEntry, where string) {
+		topic := deref(e.Topic)
+		key := topic + "/" + e.Title
 		if from, clash := taken[key]; clash {
-			warnings = append(warnings, fmt.Sprintf("%s %q from %s is hidden by the one from %s", e.Scope, e.Title, where, from))
+			warnings = append(warnings, fmt.Sprintf("%s %q from %s is hidden by the one from %s", topic, e.Title, where, from))
 			return
 		}
 		taken[key] = where
-		docs = append(docs, ContextDoc{Kind: "knowledge", Phase: e.Scope, Title: fmt.Sprintf("%s: %s", e.Scope, e.Title), Body: e.Content})
+		docs = append(docs, ContextDoc{Kind: "knowledge", Phase: topic, Title: fmt.Sprintf("%s: %s", topic, e.Title), Body: e.Content})
 	}
 	for _, e := range own {
 		add(e, "this project")
@@ -123,4 +126,11 @@ func overlaps(a, b []string) bool {
 		}
 	}
 	return false
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

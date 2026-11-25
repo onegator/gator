@@ -13,6 +13,7 @@ import (
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -220,7 +221,7 @@ func (s *Server) proposalDecisions(ctx context.Context, pid pgtype.UUID, readabl
 	if err != nil {
 		return nil, err
 	}
-	entries, err := q.ListProposedProductEntries(ctx, pid)
+	entries, err := brain.NewLegacy(q).ProposedProduct(ctx, pid)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +252,7 @@ func (s *Server) proposalDecisions(ctx context.Context, pid pgtype.UUID, readabl
 		out = append(out, gen.Decision{
 			Id: "product:" + uuidString(e.ID), Reason: gen.DecisionReasonProductProposed,
 			WaitingSince: e.CreatedAt.Time, Urgency: 4,
-			Summary: "Proposed as a " + e.Kind + " for the product context. Agents read it only once you approve it.",
+			Summary: "Proposed as a " + brain.ProductKind(e.Kind) + " for the product context. Agents read it only once you approve it.",
 			Actions: []gen.DecisionAction{gen.DecisionActionApproveEntry, gen.DecisionActionArchiveEntry, gen.DecisionActionOpen},
 			Subject: gen.DecisionSubject{Kind: gen.DecisionSubjectKindProductEntry, Id: uuidString(e.ID), ProjectId: &project, Name: e.Title},
 		})

@@ -151,7 +151,7 @@ func (s *Service) Write(ctx context.Context, r Reader, d Draft) (db.BrainEntry, 
 	if rights.Approve && !d.Propose && !r.IsJob() {
 		status = StatusApproved
 	}
-	return s.put(ctx, d, by, status, r.User, pgtype.UUID{})
+	return s.put(ctx, s.tx, d, by, status, r.User, pgtype.UUID{})
 }
 
 // Propose stores a proposal from a part of Gator that has already decided it may make one: the
@@ -161,7 +161,7 @@ func (s *Service) Propose(ctx context.Context, d Draft, by Author) (db.BrainEntr
 	if err != nil {
 		return db.BrainEntry{}, err
 	}
-	return s.put(ctx, d, by, StatusProposed, pgtype.UUID{}, pgtype.UUID{})
+	return s.put(ctx, s.tx, d, by, StatusProposed, pgtype.UUID{}, pgtype.UUID{})
 }
 
 // Record stores what Gator itself knows and needs nobody's approval for — a person's focus, worked
@@ -171,7 +171,18 @@ func (s *Service) Record(ctx context.Context, d Draft, by Author, status string)
 	if err != nil {
 		return db.BrainEntry{}, err
 	}
-	return s.put(ctx, d, by, status, pgtype.UUID{}, pgtype.UUID{})
+	return s.put(ctx, s.tx, d, by, status, pgtype.UUID{}, pgtype.UUID{})
+}
+
+// RecordIn is Record within a transaction the caller holds: what a new project starts from, made
+// in the same step as the project.
+func (s *Service) RecordIn(ctx context.Context, st Store, d Draft, by Author, status string) (db.BrainEntry, error) {
+	d, err := s.prepare(d)
+	if err != nil {
+		return db.BrainEntry{}, err
+	}
+	held := func(_ context.Context, fn func(Store) error) error { return fn(st) }
+	return s.put(ctx, held, d, by, status, by.ID, pgtype.UUID{})
 }
 
 // Revise writes a new version of an entry. The old one stays: approving the new one is what
@@ -208,7 +219,7 @@ func (s *Service) Revise(ctx context.Context, r Reader, id pgtype.UUID, c Change
 	if r.IsJob() {
 		by = Author{Kind: ByRunner, ID: r.Job}
 	}
-	return s.put(ctx, d, by, status, r.User, e.Lineage)
+	return s.put(ctx, s.tx, d, by, status, r.User, e.Lineage)
 }
 
 // Decide approves, rejects or archives an entry, as r.
@@ -336,7 +347,7 @@ func (s *Service) readable(ctx context.Context, r Reader, id pgtype.UUID) (db.Br
 
 // put stores d as the next version of its lineage — the one given, or the entry with the same
 // title in the same place — and runs what approval does when it is approved.
-func (s *Service) put(ctx context.Context, d Draft, by Author, status string, approver, lineage pgtype.UUID) (db.BrainEntry, error) {
+func (s *Service) put(ctx context.Context, tx Tx, d Draft, by Author, status string, approver, lineage pgtype.UUID) (db.BrainEntry, error) {
 	source, _ := json.Marshal(d.Source)
 	params := db.InsertBrainEntryParams{
 		Scope: d.Scope, ProjectID: d.Project, ComponentKey: optional(d.Component), UserID: d.User, AgentID: d.Agent,
@@ -353,7 +364,7 @@ func (s *Service) put(ctx context.Context, d Draft, by Author, status string, ap
 		params.ApprovedAt = pgtype.Timestamptz{Time: now(), Valid: true}
 	}
 	var out db.BrainEntry
-	err := s.tx(ctx, func(st Store) error {
+	err := tx(ctx, func(st Store) error {
 		prev, found, err := s.previous(ctx, st, d, lineage)
 		if err != nil {
 			return err

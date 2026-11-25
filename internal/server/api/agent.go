@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -200,12 +202,14 @@ func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "an entry needs a title and content", "invalid")
 		return
 	}
-	entry, err := db.New(s.Pool).CreateProductEntry(r.Context(), db.CreateProductEntryParams{
-		ProjectID: job.ProjectID, Kind: string(in.Kind), Title: title, Content: content,
-		Status: "proposed", SourceTaskID: job.TaskID, CreatedByKind: "runner",
-	})
+	reader, ok := s.jobReader(w, r, job)
+	if !ok {
+		return
+	}
+	entry, err := s.Brain.Service.Write(r.Context(), reader, brain.Draft{Scope: brain.ScopeProject, Project: job.ProjectID,
+		Kind: string(in.Kind), Title: title, Content: content, Task: job.TaskID})
 	if err != nil {
-		s.fail(w, err)
+		s.failBrain(w, err)
 		return
 	}
 	s.note(r, job, "product propose", map[string]any{"kind": string(in.Kind), "title": title})
@@ -243,16 +247,46 @@ func (s *Server) AgentKnowledge(w http.ResponseWriter, r *http.Request, params g
 	if params.Limit != nil && *params.Limit > 0 {
 		limit = *params.Limit
 	}
-	rows, err := db.New(s.Pool).SearchProjectDocuments(r.Context(), db.SearchProjectDocumentsParams{
-		ProjectID: job.ProjectID, Query: query, MaxRows: int32(limit)})
-	if err != nil {
-		s.fail(w, err)
+	reader, ok := s.jobReader(w, r, job)
+	if !ok {
 		return
 	}
-	out := make([]gen.AgentDocument, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, gen.AgentDocument{Kind: row.Kind, Title: fmt.Sprint(row.Title), Body: row.Content})
+	hits, err := s.Brain.Finder.Find(r.Context(), reader, brain.Query{Text: query, Project: job.ProjectID, Limit: limit})
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	out := make([]gen.AgentDocument, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, toAgentDocument(h.Entry))
 	}
 	s.note(r, job, "knowledge search", map[string]any{"query": query, "found": len(out)})
 	writeJSON(w, http.StatusOK, out)
+}
+
+// jobReader is the job as the Brain's rules see it: a member of its project, lent the private
+// context of the person its turn acts for.
+func (s *Server) jobReader(w http.ResponseWriter, r *http.Request, job db.Job) (brain.Reader, bool) {
+	if s.Brain == nil {
+		writeError(w, http.StatusServiceUnavailable, "the Brain is not enabled on this server", "unavailable")
+		return brain.Reader{}, false
+	}
+	reader, err := s.Brain.Readers.ForJob(r.Context(), job)
+	if err != nil {
+		s.fail(w, err)
+		return brain.Reader{}, false
+	}
+	return reader, true
+}
+
+// toAgentDocument is an entry as gator-cli knowledge search has always shown it: knowledge for a
+// convention, product for the product context, the kind for the rest.
+func toAgentDocument(e db.BrainEntry) gen.AgentDocument {
+	switch {
+	case e.Kind == brain.KindConvention && e.Topic != nil:
+		return gen.AgentDocument{Kind: "knowledge", Title: *e.Topic + ": " + e.Title, Body: e.Content}
+	case e.Scope == brain.ScopeProject && slices.Contains(brain.ProductKinds, e.Kind):
+		return gen.AgentDocument{Kind: "product", Title: brain.ProductKind(e.Kind) + ": " + e.Title, Body: e.Content}
+	}
+	return gen.AgentDocument{Kind: e.Kind, Title: e.Title, Body: e.Content}
 }

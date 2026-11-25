@@ -87,7 +87,7 @@ func (s *Server) components(r *http.Request, projectID pgtype.UUID) ([]gen.Compo
 	}
 	linked := map[[16]byte][]gen.ProductEntry{}
 	for _, d := range decisions {
-		linked[d.OfID.Bytes] = append(linked[d.OfID.Bytes], toProductEntry(d.ProductContext))
+		linked[d.OfID.Bytes] = append(linked[d.OfID.Bytes], toProductEntry(d.BrainEntry))
 	}
 	out := make([]gen.Component, 0, len(rows))
 	for _, c := range rows {
@@ -217,12 +217,12 @@ func (s *Server) setDecisions(r *http.Request, c db.Component, ids []openapi_typ
 		want[fromUUID(id).Bytes] = fromUUID(id)
 	}
 	for _, d := range current {
-		if _, ok := want[d.ProductContext.ID.Bytes]; !ok {
-			if _, err := q.UnlinkComponentDecision(ctx, db.UnlinkComponentDecisionParams{ComponentID: c.ID, EntryID: d.ProductContext.ID}); err != nil {
+		if _, ok := want[d.BrainEntry.ID.Bytes]; !ok {
+			if _, err := q.UnlinkComponentDecision(ctx, db.UnlinkComponentDecisionParams{ComponentID: c.ID, EntryID: d.BrainEntry.ID}); err != nil {
 				return err
 			}
 		}
-		delete(want, d.ProductContext.ID.Bytes)
+		delete(want, d.BrainEntry.ID.Bytes)
 	}
 	for _, id := range want {
 		if err := q.LinkComponentDecision(ctx, db.LinkComponentDecisionParams{ComponentID: c.ID, EntryID: id}); err != nil {
