@@ -17,11 +17,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/redact"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
-	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -506,7 +506,7 @@ func (s *session) lease(ctx context.Context, free int) ([]leasedJob, error) {
 			}
 			domains = append(domains, domain)
 			leased, err := q.LeaseJob(ctx, db.LeaseJobParams{ID: j.ID, RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
-				CredentialID: choice.ID, CredentialKind: choice.Kind, CredentialExclusive: choice.Exclusive})
+				CredentialID: choice.ID, CredentialKind: choice.Kind, CredentialExclusive: choice.Exclusive, CredentialVersion: choice.Version})
 			if errors.Is(err, pgx.ErrNoRows) {
 				continue
 			}
@@ -799,7 +799,7 @@ func (s *session) events(ev proto.Events) error {
 		}
 		// The runner masks the login's values too; this is the server not trusting that it did.
 		if len(masks) > 0 {
-			payload = []byte(secrets.Mask(string(payload), masks))
+			payload = []byte(redact.Values(string(payload), masks))
 			e.Payload = payload
 		}
 		at := e.At
@@ -878,21 +878,25 @@ func (s *session) finish(fin proto.Finish) error {
 // must not lose it — and masks the login's values in what the finish says. What was rewritten is
 // taken out of the finish: it is kept with the login, never in the job's receipt.
 func (s *session) keepLogin(ctx context.Context, job db.Job, fin *proto.Finish) error {
+	masks := s.masksOf(ctx, job)
 	if r := fin.CredentialRefresh; r != nil {
 		if err := s.m.cfg.Credentials.Refreshed(ctx, job, *r); err != nil {
 			s.m.log.Warn("keeping what a job rewrote of its login", "job", uuidString(job.ID), "err", err)
 			return errRetry
 		}
 		fin.CredentialRefresh = nil
+		// The rotated values are masked as well as those the job was leased with.
+		masks = redact.Union(masks, s.m.cfg.Credentials.Sensitive(ctx, job))
+		s.remember(job.ID, masks)
 	}
-	if masks := s.masksOf(ctx, job); len(masks) > 0 {
-		fin.Summary = secrets.Mask(fin.Summary, masks)
-		fin.StopReason = secrets.Mask(fin.StopReason, masks)
-		fin.CredentialRefused = secrets.Mask(fin.CredentialRefused, masks)
+	if len(masks) > 0 {
+		fin.Summary = redact.Values(fin.Summary, masks)
+		fin.StopReason = redact.Values(fin.StopReason, masks)
+		fin.CredentialRefused = redact.Values(fin.CredentialRefused, masks)
 		if fin.Digest != nil {
 			for _, l := range [][]string{fin.Digest.Changes, fin.Digest.Decisions, fin.Digest.Rejected, fin.Digest.Left} {
 				for i := range l {
-					l[i] = secrets.Mask(l[i], masks)
+					l[i] = redact.Values(l[i], masks)
 				}
 			}
 		}

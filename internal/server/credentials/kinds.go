@@ -224,6 +224,9 @@ func (k codexLogin) Sensitive(secret string) []string {
 	if a.Tokens.IDToken != "" {
 		out = append(out, a.Tokens.IDToken)
 	}
+	if a.APIKey != nil && *a.APIKey != "" {
+		out = append(out, *a.APIKey) // a ChatGPT login may carry a key Codex made for it
+	}
 	return out
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/onegator/gator/internal/redact"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -177,7 +178,7 @@ func (s *Service) Check(ctx context.Context, user pgtype.UUID, kind string) (Vie
 	case errors.Is(err, ErrUnavailable), errors.Is(err, ErrCannotCheck):
 		return s.view(row), err
 	case err != nil:
-		row, err = s.setStatus(ctx, q, row, StatusError, secrets.Mask(err.Error(), k.Sensitive(secret)), true)
+		row, err = s.setStatus(ctx, q, row, StatusError, redact.Values(err.Error(), k.Sensitive(secret)), true)
 	default:
 		row, err = s.setStatus(ctx, q, row, StatusOK, "", true)
 	}

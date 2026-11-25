@@ -55,7 +55,16 @@ func (f *fakeLogins) Refused(_ context.Context, _ db.Job, reason string) error {
 	return nil
 }
 
-func (f *fakeLogins) Sensitive(context.Context, db.Job) []string { return []string{payerSecret} }
+func (f *fakeLogins) Sensitive(context.Context, db.Job) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.refreshed) > 0 {
+		return []string{payerSecret, rotatedSecret} // the login as the job left it
+	}
+	return []string{payerSecret}
+}
+
+const rotatedSecret = "rt_rotated_while_the_job_ran_0123456789"
 
 // payersJob is a job a person asked for, with fake logins in place: the person and their login are
 // real rows, which the lease and the usage refer to.
@@ -157,6 +166,7 @@ func TestReportsOfAJobOnItsPayersLogin(t *testing.T) {
 		t.Fatal("the event was not masked")
 	}
 	fin := proto.Finish{JobID: id, Status: proto.StatusFailed, StopReason: "claude: Invalid API key (" + payerSecret + ")", Usage: usage,
+		Summary:           "rotated to " + rotatedSecret,
 		CredentialRefresh: &proto.CredentialRefresh{ID: uuidString(logins.id), Files: map[string][]byte{"auth.json": []byte(`{"new":true}`)}},
 		CredentialRefused: "Invalid API key"}
 	if err := s.finish(fin); err != nil {
@@ -169,7 +179,7 @@ func TestReportsOfAJobOnItsPayersLogin(t *testing.T) {
 	if done.Status != proto.StatusFailed || !strings.Contains(*done.StopReason, "turned down") {
 		t.Fatalf("job %s %v", done.Status, *done.StopReason)
 	}
-	if r := string(done.Receipt); strings.Contains(r, "credential_refresh") || strings.Contains(r, payerSecret) {
+	if r := string(done.Receipt); strings.Contains(r, "credential_refresh") || strings.Contains(r, payerSecret) || strings.Contains(r, rotatedSecret) {
 		t.Fatalf("receipt %s", r)
 	}
 	if n := f.count(t, "SELECT count(*) FROM usage_records WHERE job_id = $1 AND paid_by = $2 AND credential_kind = 'claude_subscription'", job.ID, payer); n != 1 {

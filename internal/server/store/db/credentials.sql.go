@@ -50,7 +50,7 @@ func (q *Queries) DeleteUserCredential(ctx context.Context, arg DeleteUserCreden
 }
 
 const getUserCredential = `-- name: GetUserCredential :one
-SELECT id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at FROM user_credentials WHERE user_id = $1 AND kind = $2
+SELECT id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at, version FROM user_credentials WHERE user_id = $1 AND kind = $2
 `
 
 type GetUserCredentialParams struct {
@@ -74,12 +74,13 @@ func (q *Queries) GetUserCredential(ctx context.Context, arg GetUserCredentialPa
 		&i.UpdatedAt,
 		&i.CheckedAt,
 		&i.LastUsedAt,
+		&i.Version,
 	)
 	return i, err
 }
 
 const getUserCredentialByID = `-- name: GetUserCredentialByID :one
-SELECT id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at FROM user_credentials WHERE id = $1
+SELECT id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at, version FROM user_credentials WHERE id = $1
 `
 
 func (q *Queries) GetUserCredentialByID(ctx context.Context, id pgtype.UUID) (UserCredential, error) {
@@ -98,12 +99,13 @@ func (q *Queries) GetUserCredentialByID(ctx context.Context, id pgtype.UUID) (Us
 		&i.UpdatedAt,
 		&i.CheckedAt,
 		&i.LastUsedAt,
+		&i.Version,
 	)
 	return i, err
 }
 
 const listUserCredentials = `-- name: ListUserCredentials :many
-SELECT id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at FROM user_credentials WHERE user_id = $1 ORDER BY created_at, kind
+SELECT id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at, version FROM user_credentials WHERE user_id = $1 ORDER BY created_at, kind
 `
 
 func (q *Queries) ListUserCredentials(ctx context.Context, userID pgtype.UUID) ([]UserCredential, error) {
@@ -128,6 +130,7 @@ func (q *Queries) ListUserCredentials(ctx context.Context, userID pgtype.UUID) (
 			&i.UpdatedAt,
 			&i.CheckedAt,
 			&i.LastUsedAt,
+			&i.Version,
 		); err != nil {
 			return nil, err
 		}
@@ -167,36 +170,31 @@ func (q *Queries) ReleaseWaitingJobs(ctx context.Context, payerID pgtype.UUID) (
 	return result.RowsAffected(), nil
 }
 
-const replaceUserCredentialSecret = `-- name: ReplaceUserCredentialSecret :one
-UPDATE user_credentials SET secret = $2, hint = $3, updated_at = now() WHERE id = $1
-RETURNING id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at
+const replaceUserCredentialSecret = `-- name: ReplaceUserCredentialSecret :execrows
+UPDATE user_credentials SET secret = $2, hint = $3, updated_at = now(), version = version + 1
+WHERE id = $1 AND version = $4
 `
 
 type ReplaceUserCredentialSecretParams struct {
-	ID     pgtype.UUID `json:"id"`
-	Secret string      `json:"secret"`
-	Hint   string      `json:"hint"`
+	ID            pgtype.UUID `json:"id"`
+	Secret        string      `json:"secret"`
+	Hint          string      `json:"hint"`
+	LeasedVersion int32       `json:"leased_version"`
 }
 
-// What the agent rewrote while it worked (a refreshed token); the login keeps its standing.
-func (q *Queries) ReplaceUserCredentialSecret(ctx context.Context, arg ReplaceUserCredentialSecretParams) (UserCredential, error) {
-	row := q.db.QueryRow(ctx, replaceUserCredentialSecret, arg.ID, arg.Secret, arg.Hint)
-	var i UserCredential
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Kind,
-		&i.Backend,
-		&i.Secret,
-		&i.Hint,
-		&i.Status,
-		&i.LastError,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.CheckedAt,
-		&i.LastUsedAt,
+// What the agent rewrote while it worked (a refreshed token); the login keeps its standing. Only
+// the version the job was leased: a login its owner saved again since is theirs, not the job's.
+func (q *Queries) ReplaceUserCredentialSecret(ctx context.Context, arg ReplaceUserCredentialSecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceUserCredentialSecret,
+		arg.ID,
+		arg.Secret,
+		arg.Hint,
+		arg.LeasedVersion,
 	)
-	return i, err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const runnerLoginsAllowed = `-- name: RunnerLoginsAllowed :one
@@ -244,7 +242,7 @@ const setUserCredentialStatus = `-- name: SetUserCredentialStatus :one
 UPDATE user_credentials
 SET status = $2, last_error = $3, checked_at = COALESCE($4, checked_at), updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at
+RETURNING id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at, version
 `
 
 type SetUserCredentialStatusParams struct {
@@ -275,6 +273,7 @@ func (q *Queries) SetUserCredentialStatus(ctx context.Context, arg SetUserCreden
 		&i.UpdatedAt,
 		&i.CheckedAt,
 		&i.LastUsedAt,
+		&i.Version,
 	)
 	return i, err
 }
@@ -307,8 +306,9 @@ INSERT INTO user_credentials (user_id, kind, backend, secret, hint)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (user_id, kind) DO UPDATE
 SET backend = EXCLUDED.backend, secret = EXCLUDED.secret, hint = EXCLUDED.hint,
-    status = 'unchecked', last_error = '', checked_at = NULL, updated_at = now()
-RETURNING id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at
+    status = 'unchecked', last_error = '', checked_at = NULL, updated_at = now(),
+    version = user_credentials.version + 1
+RETURNING id, user_id, kind, backend, secret, hint, status, last_error, created_at, updated_at, checked_at, last_used_at, version
 `
 
 type UpsertUserCredentialParams struct {
@@ -342,6 +342,7 @@ func (q *Queries) UpsertUserCredential(ctx context.Context, arg UpsertUserCreden
 		&i.UpdatedAt,
 		&i.CheckedAt,
 		&i.LastUsedAt,
+		&i.Version,
 	)
 	return i, err
 }

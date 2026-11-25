@@ -221,3 +221,27 @@ func TestABackendThatWouldOutrankThePayerIsNotOffered(t *testing.T) {
 		t.Fatalf("payer logins on %v", got)
 	}
 }
+
+// A token Codex rotates while the job runs is masked in what the job sends from then on, though
+// the server never named it.
+func TestARotatedTokenIsMaskedFromTheMomentItIsWritten(t *testing.T) {
+	be := &scripted{run: func(_ context.Context, _ int, spec backend.Spec, emit backend.Emit) backend.Outcome {
+		var home string
+		for _, kv := range spec.Env {
+			if v, ok := strings.CutPrefix(kv, "CODEX_HOME="); ok {
+				home = v
+			}
+		}
+		_ = os.WriteFile(filepath.Join(home, "auth.json"), []byte(codexAuthNew), 0o600)
+		emit("text", map[string]any{"text": "now " + newRefresh})
+		return backend.Outcome{Status: proto.StatusDone, Summary: "rotated to " + newRefresh, Usage: usage()}
+	}}
+	e := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}, LoginDir: t.TempDir()}
+	io, sent := recordingIO()
+	fin := e.Run(context.Background(), proto.Job{JobID: "j7", Backend: "fake", Credential: &proto.Credential{ID: "c7",
+		Home:   &proto.CredentialHome{Env: "CODEX_HOME", Files: map[string][]byte{"auth.json": []byte(codexAuthOld)}, Refresh: []string{"auth.json"}},
+		Redact: []string{accessToken, oldRefresh}}}, io)
+	if strings.Contains(sent(), newRefresh) || strings.Contains(fin.Summary, newRefresh) {
+		t.Fatalf("the rotated token left the runner:\n%s\n%s", sent(), fin.Summary)
+	}
+}

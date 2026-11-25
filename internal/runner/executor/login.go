@@ -11,8 +11,10 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/redact"
 	"github.com/onegator/gator/internal/runner/client"
 )
 
@@ -26,6 +28,12 @@ type login struct {
 	// and its configuration (configDir) are in it, and it goes with the job.
 	root string
 	home string
+
+	// The values masked besides those the server named: what the CLI wrote into its rewritten
+	// files (a rotated refresh token), read again whenever one of them changes.
+	mu     sync.Mutex
+	stamps map[string]int64
+	extra  []string
 }
 
 // loginPrefix names a job's login directory, for SweepLogins to find what a crash left.
@@ -46,7 +54,7 @@ func openLogin(c *proto.Credential, dir string) (*login, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &login{cred: c, root: root}
+	l := &login{cred: c, root: root, stamps: map[string]int64{}}
 	names := make([]string, 0, len(c.Env))
 	for k := range c.Env {
 		names = append(names, k)
@@ -81,6 +89,9 @@ func openLogin(c *proto.Credential, dir string) (*login, error) {
 			}
 		}
 		l.env = append(l.env, h.Env+"="+dir)
+		for _, name := range h.Refresh {
+			l.stamps[name] = stamp(filepath.Join(dir, name))
+		}
 	}
 	return l, nil
 }
@@ -171,23 +182,82 @@ func SweepLogins(dir string) (int, error) {
 	return n, nil
 }
 
+// masks are the login's values: those the server named, and every value the CLI has since written
+// into the files it rewrites. A rotated token is masked from the moment it is written, not only in
+// the receipt.
+func (l *login) masks() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.home != "" && l.cred.Home != nil {
+		for _, name := range l.cred.Home.Refresh {
+			if name != filepath.Base(name) {
+				continue
+			}
+			p := filepath.Join(l.home, name)
+			st := stamp(p)
+			if st == l.stamps[name] {
+				continue
+			}
+			l.stamps[name] = st
+			if b, err := os.ReadFile(p); err == nil {
+				l.extra = redact.Union(l.extra, valuesIn(b))
+			}
+		}
+	}
+	return redact.Union(l.cred.Redact, l.extra)
+}
+
+// stamp tells one version of a file from the next: its modification time and size.
+func stamp(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.ModTime().UnixNano() ^ fi.Size()
+}
+
+// valuesIn are the strings of a JSON document long enough to be a token. The runner does not know
+// the login's kinds, so it masks every such value of a file the login keeps: a timestamp masked
+// too is a small price for a refresh token that is not.
+func valuesIn(b []byte) []string {
+	var v any
+	if json.Unmarshal(b, &v) != nil {
+		return nil
+	}
+	var out []string
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case string:
+			if len(x) >= 20 {
+				out = append(out, x)
+			}
+		case map[string]any:
+			for _, e := range x {
+				walk(e)
+			}
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		}
+	}
+	walk(v)
+	return out
+}
+
 // mask replaces every value of the login in s.
 func (l *login) mask(s string) string {
 	if l == nil {
 		return s
 	}
-	for _, v := range l.cred.Redact {
-		if len(v) >= 8 {
-			s = strings.ReplaceAll(s, v, "[redacted]")
-		}
-	}
-	return s
+	return redact.Values(s, l.masks())
 }
 
 // maskIO masks the login's values in everything the job sends while it runs: its events, and what
 // it says when it asks to end its turn.
 func (l *login) maskIO(io client.JobIO) client.JobIO {
-	if l == nil || len(l.cred.Redact) == 0 {
+	if l == nil {
 		return io
 	}
 	emit := io.Emit

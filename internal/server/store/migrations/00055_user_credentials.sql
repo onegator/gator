@@ -20,6 +20,8 @@ CREATE TABLE user_credentials (
     updated_at   timestamptz NOT NULL DEFAULT now(),
     checked_at   timestamptz,
     last_used_at timestamptz,
+    -- Bumped whenever the secret changes: a job's refresh replaces only the version it was leased.
+    version      integer NOT NULL DEFAULT 1,
     UNIQUE (user_id, kind)
 );
 
@@ -31,6 +33,7 @@ ALTER TABLE jobs
     ADD COLUMN payer_id uuid,
     ADD COLUMN credential_id uuid REFERENCES user_credentials(id) ON DELETE SET NULL,
     ADD COLUMN credential_kind text NOT NULL DEFAULT '',
+    ADD COLUMN credential_version integer NOT NULL DEFAULT 0,
     -- A login whose refresh token rotates is held by one job at a time; see the index below.
     ADD COLUMN credential_exclusive boolean NOT NULL DEFAULT false,
     ADD COLUMN waiting_reason text NOT NULL DEFAULT '';
@@ -60,6 +63,6 @@ DROP INDEX usage_records_paid_by_idx;
 ALTER TABLE usage_records DROP COLUMN credential_kind, DROP COLUMN paid_by;
 DROP INDEX jobs_payer_idx;
 DROP INDEX jobs_exclusive_credential_idx;
-ALTER TABLE jobs DROP COLUMN waiting_reason, DROP COLUMN credential_exclusive, DROP COLUMN credential_kind,
+ALTER TABLE jobs DROP COLUMN waiting_reason, DROP COLUMN credential_exclusive, DROP COLUMN credential_version, DROP COLUMN credential_kind,
     DROP COLUMN credential_id, DROP COLUMN payer_id;
 DROP TABLE user_credentials;

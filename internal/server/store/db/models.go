@@ -446,6 +446,7 @@ type Job struct {
 	PayerID             pgtype.UUID        `json:"payer_id"`
 	CredentialID        pgtype.UUID        `json:"credential_id"`
 	CredentialKind      string             `json:"credential_kind"`
+	CredentialVersion   int32              `json:"credential_version"`
 	CredentialExclusive bool               `json:"credential_exclusive"`
 	WaitingReason       string             `json:"waiting_reason"`
 }
@@ -952,6 +953,7 @@ type UserCredential struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 	CheckedAt  pgtype.Timestamptz `json:"checked_at"`
 	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	Version    int32              `json:"version"`
 }
 
 type WebhookDelivery struct {

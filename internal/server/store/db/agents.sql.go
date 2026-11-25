@@ -417,7 +417,7 @@ func (q *Queries) GetAgentByHandle(ctx context.Context, arg GetAgentByHandlePara
 }
 
 const getJobOfTurn = `-- name: GetJobOfTurn :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE turn_id = $1 AND kind = 'reply' ORDER BY created_at LIMIT 1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE turn_id = $1 AND kind = 'reply' ORDER BY created_at LIMIT 1
 `
 
 // The job a turn's start queued, even when the start did not live to record it on the turn.
@@ -460,6 +460,7 @@ func (q *Queries) GetJobOfTurn(ctx context.Context, turnID pgtype.UUID) (Job, er
 		&i.PayerID,
 		&i.CredentialID,
 		&i.CredentialKind,
+		&i.CredentialVersion,
 		&i.CredentialExclusive,
 		&i.WaitingReason,
 	)

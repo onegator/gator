@@ -65,7 +65,7 @@ func (s *Service) Choose(ctx context.Context, q *db.Queries, job db.Job, open bo
 				continue
 			}
 		}
-		choice := runners.CredentialChoice{Kind: k.Name(), ID: row.ID, Exclusive: rotating}
+		choice := runners.CredentialChoice{Kind: k.Name(), ID: row.ID, Exclusive: rotating, Version: row.Version}
 		if open {
 			secret, err := s.open(row)
 			if err != nil {
@@ -150,6 +150,10 @@ func (s *Service) Refreshed(ctx context.Context, job db.Job, r proto.CredentialR
 	if err != nil {
 		return err
 	}
+	if row.Version != job.CredentialVersion {
+		s.log.Info("a job's refreshed login was not kept: its owner saved another since", "job", uuidString(job.ID))
+		return nil
+	}
 	k, _ := s.kinds.Get(row.Kind)
 	rot, ok := k.(Rotating)
 	if !ok {
@@ -173,7 +177,11 @@ func (s *Service) Refreshed(ctx context.Context, job db.Job, r proto.CredentialR
 	if err != nil {
 		return err
 	}
-	_, err = q.ReplaceUserCredentialSecret(ctx, db.ReplaceUserCredentialSecretParams{ID: row.ID, Secret: sealed, Hint: sec.Hint})
+	n, err := q.ReplaceUserCredentialSecret(ctx, db.ReplaceUserCredentialSecretParams{ID: row.ID, Secret: sealed, Hint: sec.Hint,
+		LeasedVersion: job.CredentialVersion})
+	if err == nil && n == 0 {
+		s.log.Info("a job's refreshed login was not kept: its owner saved another since", "job", uuidString(job.ID))
+	}
 	return err
 }
 

@@ -66,7 +66,7 @@ INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF($12::text, ''), 'local'),
         $13, $14, COALESCE(NULLIF($15::text, ''), 'work'),
         COALESCE(NULLIF($16::text, ''), 'phase'), $17, $18)
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason
 `
 
 type CreateJobParams struct {
@@ -150,6 +150,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.PayerID,
 		&i.CredentialID,
 		&i.CredentialKind,
+		&i.CredentialVersion,
 		&i.CredentialExclusive,
 		&i.WaitingReason,
 	)
@@ -200,7 +201,7 @@ func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) error {
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE id = $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -242,6 +243,7 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 		&i.PayerID,
 		&i.CredentialID,
 		&i.CredentialKind,
+		&i.CredentialVersion,
 		&i.CredentialExclusive,
 		&i.WaitingReason,
 	)
@@ -249,7 +251,7 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 }
 
 const getJobForUpdate = `-- name: GetJobForUpdate :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE id = $1 FOR UPDATE
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -291,6 +293,7 @@ func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, err
 		&i.PayerID,
 		&i.CredentialID,
 		&i.CredentialKind,
+		&i.CredentialVersion,
 		&i.CredentialExclusive,
 		&i.WaitingReason,
 	)
@@ -379,7 +382,7 @@ func (q *Queries) InsertReceipt(ctx context.Context, arg InsertReceiptParams) er
 }
 
 const leaseCandidates = `-- name: LeaseCandidates :many
-SELECT j.id, j.task_id, j.project_id, j.phase, j.role, j.backend, j.instruction, j.status, j.runner_id, j.attempts, j.max_attempts, j.lease_expires_at, j.last_event_at, j.bounds, j.receipt, j.stop_reason, j.created_by_kind, j.created_by, j.created_at, j.started_at, j.finished_at, j.updated_at, j.model, j.unassignable_since, j.context_bytes, j.context_docs, j.objections, j.placement, j.agent_id, j.turn_id, j.tier, j.kind, j.payer_id, j.credential_id, j.credential_kind, j.credential_exclusive, j.waiting_reason FROM jobs j
+SELECT j.id, j.task_id, j.project_id, j.phase, j.role, j.backend, j.instruction, j.status, j.runner_id, j.attempts, j.max_attempts, j.lease_expires_at, j.last_event_at, j.bounds, j.receipt, j.stop_reason, j.created_by_kind, j.created_by, j.created_at, j.started_at, j.finished_at, j.updated_at, j.model, j.unassignable_since, j.context_bytes, j.context_docs, j.objections, j.placement, j.agent_id, j.turn_id, j.tier, j.kind, j.payer_id, j.credential_id, j.credential_kind, j.credential_version, j.credential_exclusive, j.waiting_reason FROM jobs j
 WHERE j.status = 'queued'
   AND j.backend = ANY($1::text[])
   AND (cardinality($2::uuid[]) = 0 OR j.project_id = ANY($2::uuid[]))
@@ -479,6 +482,7 @@ func (q *Queries) LeaseCandidates(ctx context.Context, arg LeaseCandidatesParams
 			&i.PayerID,
 			&i.CredentialID,
 			&i.CredentialKind,
+			&i.CredentialVersion,
 			&i.CredentialExclusive,
 			&i.WaitingReason,
 		); err != nil {
@@ -497,9 +501,10 @@ UPDATE jobs
 SET status = 'leased', runner_id = $1, lease_expires_at = $2,
     attempts = attempts + 1, updated_at = now(), unassignable_since = NULL, waiting_reason = '',
     credential_id = $3, credential_kind = $4,
-    credential_exclusive = $5
-WHERE id = $6 AND status = 'queued'
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason
+    credential_version = $5,
+    credential_exclusive = $6
+WHERE id = $7 AND status = 'queued'
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason
 `
 
 type LeaseJobParams struct {
@@ -507,6 +512,7 @@ type LeaseJobParams struct {
 	LeaseUntil          pgtype.Timestamptz `json:"lease_until"`
 	CredentialID        pgtype.UUID        `json:"credential_id"`
 	CredentialKind      string             `json:"credential_kind"`
+	CredentialVersion   int32              `json:"credential_version"`
 	CredentialExclusive bool               `json:"credential_exclusive"`
 	ID                  pgtype.UUID        `json:"id"`
 }
@@ -518,6 +524,7 @@ func (q *Queries) LeaseJob(ctx context.Context, arg LeaseJobParams) (Job, error)
 		arg.LeaseUntil,
 		arg.CredentialID,
 		arg.CredentialKind,
+		arg.CredentialVersion,
 		arg.CredentialExclusive,
 		arg.ID,
 	)
@@ -558,6 +565,7 @@ func (q *Queries) LeaseJob(ctx context.Context, arg LeaseJobParams) (Job, error)
 		&i.PayerID,
 		&i.CredentialID,
 		&i.CredentialKind,
+		&i.CredentialVersion,
 		&i.CredentialExclusive,
 		&i.WaitingReason,
 	)
@@ -726,7 +734,7 @@ func (q *Queries) ListJobEvents(ctx context.Context, arg ListJobEventsParams) ([
 }
 
 const listJobsByTask = `-- name: ListJobsByTask :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE task_id = $1 ORDER BY created_at
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE task_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
@@ -774,6 +782,7 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 			&i.PayerID,
 			&i.CredentialID,
 			&i.CredentialKind,
+			&i.CredentialVersion,
 			&i.CredentialExclusive,
 			&i.WaitingReason,
 		); err != nil {
@@ -788,7 +797,7 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 }
 
 const listQueuedCloudJobs = `-- name: ListQueuedCloudJobs :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE status = 'queued' AND placement = 'cloud'
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE status = 'queued' AND placement = 'cloud'
   -- A job waiting for its payer's login gets no machine: it would sit there with nothing to run.
   AND waiting_reason = ''
 ORDER BY created_at LIMIT $1
@@ -840,6 +849,7 @@ func (q *Queries) ListQueuedCloudJobs(ctx context.Context, max int32) ([]Job, er
 			&i.PayerID,
 			&i.CredentialID,
 			&i.CredentialKind,
+			&i.CredentialVersion,
 			&i.CredentialExclusive,
 			&i.WaitingReason,
 		); err != nil {
@@ -952,7 +962,7 @@ const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
 SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
 WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason
 `
 
 type MarkJobActiveParams struct {
@@ -1000,6 +1010,7 @@ func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (J
 		&i.PayerID,
 		&i.CredentialID,
 		&i.CredentialKind,
+		&i.CredentialVersion,
 		&i.CredentialExclusive,
 		&i.WaitingReason,
 	)

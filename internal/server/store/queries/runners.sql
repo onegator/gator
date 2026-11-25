@@ -103,6 +103,7 @@ UPDATE jobs
 SET status = 'leased', runner_id = sqlc.arg(runner_id), lease_expires_at = sqlc.arg(lease_until),
     attempts = attempts + 1, updated_at = now(), unassignable_since = NULL, waiting_reason = '',
     credential_id = sqlc.narg(credential_id), credential_kind = sqlc.arg(credential_kind),
+    credential_version = sqlc.arg(credential_version),
     credential_exclusive = sqlc.arg(credential_exclusive)
 WHERE id = sqlc.arg(id) AND status = 'queued'
 RETURNING *;

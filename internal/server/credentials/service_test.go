@@ -287,7 +287,7 @@ func TestAChatGPTLoginIsOneJobsAtATime(t *testing.T) {
 		t.Fatalf("first: %+v", c)
 	}
 	if _, err := f.q.LeaseJob(f.ctx, db.LeaseJobParams{ID: first.ID, LeaseUntil: pgtype.Timestamptz{}, CredentialID: c.ID,
-		CredentialKind: c.Kind, CredentialExclusive: true}); err != nil {
+		CredentialKind: c.Kind, CredentialExclusive: true, CredentialVersion: c.Version}); err != nil {
 		t.Fatal(err)
 	}
 	if c2 := f.choose(second); !strings.Contains(c2.Wait, "in use by another job") {
@@ -364,5 +364,34 @@ func TestPayerRules(t *testing.T) {
 	who, _ = payers.Payer(f.ctx, f.q, runners.PayerQuestion{Task: task, PaidBy: ann, CreatedBy: process.Actor{Kind: process.ActorUser, ID: bob}})
 	if who != ann {
 		t.Fatalf("a named payer: %v", who)
+	}
+}
+
+// A refresh from a job replaces only the login it was leased: one its owner saved since stays.
+func TestARefreshDoesNotOverwriteALoginSavedSince(t *testing.T) {
+	f := newFixture(t)
+	ann := f.user("Ann")
+	f.put(ann, ChatGPTSubscription, chatgptAuth)
+	job := f.job(ann, ann, BackendCodex)
+	c := f.choose(job)
+	leased, err := f.q.LeaseJob(f.ctx, db.LeaseJobParams{ID: job.ID, CredentialID: c.ID, CredentialKind: c.Kind,
+		CredentialExclusive: true, CredentialVersion: c.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := strings.Replace(chatgptAuth, "rt_refresh_0123456789abcdef", "rt_saved_by_ann_0123456789", 1)
+	f.put(ann, ChatGPTSubscription, saved) // Ann signs in again while the job runs
+	rotated := strings.Replace(chatgptAuth, "rt_refresh_0123456789abcdef", "rt_rotated_by_job_987654321", 1)
+	if err := f.svc.Refreshed(f.ctx, leased, proto.CredentialRefresh{ID: c.Credential.ID, Files: map[string][]byte{"auth.json": []byte(rotated)}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.svc.Sensitive(f.ctx, leased), " "); !strings.Contains(got, "rt_saved_by_ann") || strings.Contains(got, "rt_rotated_by_job") {
+		t.Fatalf("the job's refresh replaced Ann's new login: %s", got)
+	}
+	// A key Codex keeps in a ChatGPT login is masked too.
+	k, _ := f.svc.kinds.Get(ChatGPTSubscription)
+	withKey := strings.Replace(chatgptAuth, `"OPENAI_API_KEY": null`, `"OPENAI_API_KEY": "sk-proj-made-by-codex-0123456789"`, 1)
+	if got := strings.Join(k.Sensitive(withKey), " "); !strings.Contains(got, "sk-proj-made-by-codex-0123456789") {
+		t.Fatalf("sensitive: %s", got)
 	}
 }

@@ -13,7 +13,8 @@ INSERT INTO user_credentials (user_id, kind, backend, secret, hint)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (user_id, kind) DO UPDATE
 SET backend = EXCLUDED.backend, secret = EXCLUDED.secret, hint = EXCLUDED.hint,
-    status = 'unchecked', last_error = '', checked_at = NULL, updated_at = now()
+    status = 'unchecked', last_error = '', checked_at = NULL, updated_at = now(),
+    version = user_credentials.version + 1
 RETURNING *;
 
 -- name: DeleteUserCredential :execrows
@@ -25,10 +26,11 @@ SET status = $2, last_error = $3, checked_at = COALESCE(sqlc.narg(checked_at), c
 WHERE id = $1
 RETURNING *;
 
--- name: ReplaceUserCredentialSecret :one
--- What the agent rewrote while it worked (a refreshed token); the login keeps its standing.
-UPDATE user_credentials SET secret = $2, hint = $3, updated_at = now() WHERE id = $1
-RETURNING *;
+-- name: ReplaceUserCredentialSecret :execrows
+-- What the agent rewrote while it worked (a refreshed token); the login keeps its standing. Only
+-- the version the job was leased: a login its owner saved again since is theirs, not the job's.
+UPDATE user_credentials SET secret = $2, hint = $3, updated_at = now(), version = version + 1
+WHERE id = $1 AND version = sqlc.arg(leased_version);
 
 -- name: TouchUserCredential :exec
 UPDATE user_credentials SET last_used_at = now() WHERE id = $1;

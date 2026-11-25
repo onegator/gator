@@ -35,6 +35,9 @@ type CredentialChoice struct {
 	ID   pgtype.UUID
 	// Exclusive is a login one job at a time may hold.
 	Exclusive bool
+	// Version is the login's version leased, which a refresh from the job may replace and nothing
+	// newer.
+	Version int32
 	// Credential is the payer's login as the runner hands it to the agent; nil for RunnerLogin, or
 	// when not opened.
 	Credential *proto.Credential
