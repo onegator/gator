@@ -166,6 +166,9 @@ type TurnBrief struct {
 	// Private says the conversation is not the whole project's: what the job was handed of it
 	// reaches the runner but is not kept in the job's record, which the project reads.
 	Private bool
+	// Files are the files people sent in the conversation that the agent is handed (v4): the
+	// runner fetches each with the job's own identity.
+	Files []proto.Attachment
 }
 
 // TurnBriefer briefs the agent of a reply. The agents package provides one.

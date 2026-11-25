@@ -1109,6 +1109,20 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentThread" } } } }
         "403": { $ref: "#/components/responses/Error" }
+  /agent/attachments/{attachmentId}:
+    get:
+      operationId: agentAttachment
+      description: |
+        A file sent in the conversation the job's reply answers in (or with the message its thread
+        hangs under), for the job's own identity: what the runner fetches of Job.attachments into a
+        directory outside the worktree. Never shown inline: application/octet-stream, whatever the
+        file says it is.
+      parameters: [ { $ref: "#/components/parameters/attachmentId" } ]
+      responses:
+        "200": { description: the file, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /agent/tasks:
     post:
       operationId: agentProposeTask

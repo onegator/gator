@@ -474,6 +474,9 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	brief := s.brief(ctx, j)
 	pj.Context = s.handContext(ctx, q, j, brief)
 	if j.Kind == KindReply && j.TurnID.Valid {
+		if s.version >= liveVersion {
+			pj.Attachments = brief.Files
+		}
 		pj.Turn = &proto.Turn{ID: uuidString(j.TurnID), Ask: brief.Ask, Repeat: brief.Repeat}
 		for _, d := range brief.Docs {
 			pj.Turn.Conversation = append(pj.Turn.Conversation, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})

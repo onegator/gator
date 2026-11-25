@@ -241,3 +241,24 @@ func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// An image a person sent is shown to the agent as an image, in the first message of the session;
+// a file that is not one is left to its path in the prompt.
+func TestSessionShowsImages(t *testing.T) {
+	b, _, stdin := liveFake(t, "synthetic-session-steer.ndjson")
+	dir := t.TempDir()
+	png := filepath.Join(dir, "crash.png")
+	_ = os.WriteFile(png, []byte("\x89PNG\r\n\x1a\nfake"), 0o600)
+	notes := filepath.Join(dir, "notes.txt")
+	_ = os.WriteFile(notes, []byte("not an image"), 0o600)
+	steer := make(chan string, 1)
+	steer <- "only the API layer, please"
+	b.Run(context.Background(), backend.Spec{Dir: t.TempDir(), Prompt: "what is this?", Live: &backend.Live{Steer: steer},
+		Attachments: []backend.Attachment{{Path: png, Name: "crash.png", MediaType: "image/png", Image: true}, {Path: notes, Name: "notes.txt", MediaType: "text/plain"}}},
+		func(string, any) {})
+	lines := readLines(t, stdin)
+	first := mustJSON(lines[0])
+	if !strings.Contains(first, `"type":"image"`) || !strings.Contains(first, `"media_type":"image/png"`) || strings.Count(first, `"type":"image"`) != 1 {
+		t.Fatalf("first message: %s", first)
+	}
+}

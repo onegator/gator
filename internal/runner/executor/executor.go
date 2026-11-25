@@ -134,6 +134,11 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	env = append(env, signing...)
 	servers := e.mcpServers(job)
 	opening := promptFor(job, ws)
+	files, dropFiles := e.attachments(ctx, job, io.Emit)
+	defer dropFiles()
+	if len(files) > 0 {
+		opening += "\n\n" + AttachmentsPrompt(files)
+	}
 	// Skills go to a backend that loads them by itself; any other is told of them in its prompt
 	// and reads them through Gator's skill_read.
 	skills := skillsOf(job)
@@ -143,7 +148,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	}
 	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
 		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
-			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
+			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills, Attachments: files}
 	}
 
 	cps := newCheckpoints(job, ws, io, e.DenyRead, e.Log)

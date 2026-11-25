@@ -34,6 +34,21 @@ type Spec struct {
 	// Live is what a backend that keeps its session open (ActiveSteering) is given while the run
 	// goes on; nil for a backend that runs one prompt per process.
 	Live *Live
+	// Attachments are the files people sent, on disk outside the worktree. Every backend is told
+	// their paths in the prompt; one that takes images (Capabilities.Attachments) is shown the
+	// images among them as well.
+	Attachments []Attachment
+}
+
+// Attachment is one file a job was handed, fetched by the runner.
+type Attachment struct {
+	Path      string
+	Name      string
+	MediaType string // what its bytes say it is
+	Size      int64
+	// Image says it may be shown as an image: an image type by its bytes, small enough, and not a
+	// program by its name or its bytes.
+	Image bool
 }
 
 // Live is the running side of a live session: what a person adds while a turn runs, who answers

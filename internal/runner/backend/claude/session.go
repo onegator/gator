@@ -4,9 +4,11 @@ package claude
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,7 +88,7 @@ func (b Backend) runSession(ctx context.Context, spec backend.Spec, emit backend
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	s := &session{p: p, spec: spec, emit: emit, parser: &Parser{}, turnEnded: make(chan struct{}, 1), closing: make(chan struct{})}
-	if err := s.say(spec.Prompt); err != nil {
+	if err := s.say(spec.Prompt, images(spec.Attachments)...); err != nil {
 		cancel(err)
 	}
 
@@ -278,11 +280,30 @@ func (s *session) replayed(message json.RawMessage) bool {
 	return false
 }
 
-// say writes a user message into the session.
-func (s *session) say(text string) error {
+// images are the attachments shown to the agent as images: content blocks of the first message.
+// One that cannot be read is left to its path in the prompt.
+func images(files []backend.Attachment) []map[string]any {
+	var out []map[string]any
+	for _, f := range files {
+		if !f.Image {
+			continue
+		}
+		data, err := os.ReadFile(f.Path)
+		if err != nil {
+			continue
+		}
+		out = append(out, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": f.MediaType,
+			"data": base64.StdEncoding.EncodeToString(data)}})
+	}
+	return out
+}
+
+// say writes a user message into the session: its text, and blocks after it (images).
+func (s *session) say(text string, more ...map[string]any) error {
+	content := append([]map[string]any{{"type": "text", "text": text}}, more...)
 	s.mu.Lock()
 	msg := map[string]any{"type": "user", "session_id": s.sessionID, "parent_tool_use_id": nil,
-		"message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": text}}}}
+		"message": map[string]any{"role": "user", "content": content}}
 	s.pending = append(s.pending, text)
 	s.mu.Unlock()
 	if err := s.write(msg); err != nil {

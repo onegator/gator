@@ -111,6 +111,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	catalogue, bundled := catalogueDir(t)
 	// Conversations, and what the team and its agents know, read under the same rules.
 	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
+		Blobs:       conversations.DiskStore{Root: t.TempDir()},
 		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool)), approvals.NewCards(db.New(pool))}})
 	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
 	svc.UseBrain(knows.Packer, knows.Legacy)

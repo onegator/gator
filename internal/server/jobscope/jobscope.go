@@ -23,6 +23,8 @@ const (
 	// MCPProxy reaches the remote MCP servers the job's agent was given, through Gator's proxy,
 	// with the tools the server's allowlist and the agent's grant both hold (phase 4).
 	MCPProxy Command = "mcp proxy"
+	// AttachmentRead fetches a file sent in the conversation a reply answers in (phase 7).
+	AttachmentRead Command = "attachment read"
 )
 
 // Set is a set of commands.
@@ -51,7 +53,7 @@ const (
 var (
 	phase = Of(TaskShow, TaskBlocked, Ask, ArtifactPut, ProductPropose, CatalogueShow, Knowledge, Say, ThreadShow, TaskCreate,
 		SkillRead, MCPProxy)
-	reply = Of(Say, ThreadShow, TaskCreate, Knowledge, CatalogueShow, ProductPropose, SkillRead, MCPProxy)
+	reply = Of(Say, ThreadShow, TaskCreate, Knowledge, CatalogueShow, ProductPropose, SkillRead, MCPProxy, AttachmentRead)
 )
 
 // For is what a job of kind may call; anything unknown may call nothing.

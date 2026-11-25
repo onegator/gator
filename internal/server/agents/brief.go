@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/runners"
@@ -82,6 +83,9 @@ func (b *Briefer) Brief(ctx context.Context, job db.Job) (runners.TurnBrief, err
 	}
 	brief := Render(agent, pack)
 	brief.Private = pack.Private
+	for _, f := range pack.Files {
+		brief.Files = append(brief.Files, proto.Attachment{ID: conversations.UUIDString(f.ID), Name: f.Name, ContentType: f.ContentType, Size: f.SizeBytes})
+	}
 	return brief, nil
 }
 

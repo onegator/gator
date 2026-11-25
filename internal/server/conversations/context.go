@@ -70,7 +70,13 @@ type Pack struct {
 	// Notes are the review comments people sent with the ask or the latest messages: comments on
 	// lines of the agent's changes, with the code they are about.
 	Notes []Note
+	// Files are the files people sent with the ask and the latest messages, the ask's first and
+	// then the newest, at most MaxPackFiles: what the agent is handed besides the words.
+	Files []db.MessageAttachment
 }
+
+// MaxPackFiles bounds the files one turn is handed.
+const MaxPackFiles = 10
 
 // Note is one review comment as an agent is told it: the file, the lines (on the side of the diff
 // they number: old before the change, new after), the code there as the diff showed it, and what
@@ -105,6 +111,7 @@ type packStore interface {
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
 	GetExternalIdentity(ctx context.Context, id pgtype.UUID) (db.ExternalIdentity, error)
 	ListReviewNotes(ctx context.Context, messageIds []pgtype.UUID) ([]db.ListReviewNotesRow, error)
+	ListAttachmentsOfMessages(ctx context.Context, messageIds []pgtype.UUID) ([]db.MessageAttachment, error)
 }
 
 // Packer builds the conversation package of a turn. It only reads: keeping the summary fresh is
@@ -162,7 +169,39 @@ func (p *Packer) Pack(ctx context.Context, conv db.Conversation, ask db.Message)
 	if out.Notes, err = p.notes(ctx, ask, history[cut:]); err != nil {
 		return Pack{}, err
 	}
+	if out.Files, err = p.files(ctx, ask, history[cut:]); err != nil {
+		return Pack{}, err
+	}
 	return out, p.background(ctx, conv, &out)
+}
+
+// files are the files sent with the ask and with the messages carried word for word: the ask's,
+// then the newest message's first.
+func (p *Packer) files(ctx context.Context, ask db.Message, recent []db.Message) ([]db.MessageAttachment, error) {
+	order := []pgtype.UUID{ask.ID}
+	for i := len(recent) - 1; i >= 0; i-- {
+		if recent[i].AuthorKind == AuthorUser {
+			order = append(order, recent[i].ID)
+		}
+	}
+	rows, err := p.store.ListAttachmentsOfMessages(ctx, order)
+	if err != nil {
+		return nil, err
+	}
+	byMessage := map[[16]byte][]db.MessageAttachment{}
+	for _, r := range rows {
+		byMessage[r.MessageID.Bytes] = append(byMessage[r.MessageID.Bytes], r)
+	}
+	var out []db.MessageAttachment
+	for _, id := range order {
+		for _, f := range byMessage[id.Bytes] {
+			if len(out) == MaxPackFiles {
+				return out, nil
+			}
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }
 
 // maxNotes bounds the review comments one pack carries.

@@ -19,6 +19,7 @@ const (
 	cmdSay            = jobscope.Say
 	cmdThreadShow     = jobscope.ThreadShow
 	cmdTaskCreate     = jobscope.TaskCreate
+	cmdAttachmentRead = jobscope.AttachmentRead
 )
 
 // scopeOf is what a job's own identity may call, by the job's kind (jobscope.For, which the MCP

@@ -142,6 +142,29 @@ func (a *Attachments) Open(ctx context.Context, p auth.Principal, id pgtype.UUID
 	return att, r, err
 }
 
+// OpenIn answers a file sent in conv (or with the message conv is the thread of), for an agent
+// answering there: its job reads the conversation it answers in, files included. A file not sent,
+// sent elsewhere, or whose message was deleted is not found.
+func (a *Attachments) OpenIn(ctx context.Context, conv db.Conversation, id pgtype.UUID) (db.MessageAttachment, io.ReadCloser, error) {
+	q := db.New(a.pool)
+	att, err := q.GetAttachment(ctx, id)
+	if err != nil {
+		return att, nil, found(err)
+	}
+	if !att.MessageID.Valid {
+		return att, nil, ErrNotFound
+	}
+	msg, err := q.GetMessage(ctx, att.MessageID)
+	if err != nil {
+		return att, nil, found(err)
+	}
+	if msg.DeletedAt.Valid || (msg.ConversationID != conv.ID && msg.ID != conv.ParentMessageID) {
+		return att, nil, ErrNotFound
+	}
+	r, err := a.blobs.Open(ctx, att.StorageKey)
+	return att, r, err
+}
+
 // Sweep deletes the files nobody will read: uploads never sent within UnsentFor, and the files
 // of deleted messages, bytes first. It answers how many went.
 func (a *Attachments) Sweep(ctx context.Context, now time.Time) (int, error) {

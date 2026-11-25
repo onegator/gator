@@ -330,6 +330,27 @@ type Job struct {
 	// Approvals are the tools of a work job that wait for a person (v4), for a backend that can
 	// ask (ToolApprovals). Nil: nothing is asked, as before.
 	Approvals *Approvals `json:"approvals,omitempty"`
+	// Attachments are the files people sent in the conversation a reply answers in (v4), at most
+	// MaxAttachments. The runner fetches each from AttachmentPath with the job's own token, into a
+	// directory outside the worktree.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment limits: files a job is handed, and the bytes of one.
+const (
+	MaxAttachments     = 10
+	MaxAttachmentBytes = 25 << 20
+)
+
+// AttachmentPath is where a job fetches one of its attachments, under the server's API.
+const AttachmentPath = "/api/v1/agent/attachments/"
+
+// Attachment is one file a job is handed.
+type Attachment struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
 }
 
 // Approvals is the project's approvals policy as a runner holds a job to it: rules to ask a person
