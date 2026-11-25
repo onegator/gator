@@ -347,8 +347,12 @@ WHERE id IN (
            OR $7::uuid IS NULL OR j.created_by = $7::uuid)
       -- A runner older than protocol v3 runs every job as a phase; it gets only those.
       AND (NOT $8::boolean OR j.kind = 'phase')
+      -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
+      -- with no tools: a runner would refuse it anywhere else.
+      AND (j.tier <> 'chat' OR j.backend = ANY($9::text[]))
+      AND (j.kind <> 'summary' OR j.backend = ANY($10::text[]))
     ORDER BY j.created_at
-    LIMIT $9
+    LIMIT $11
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
@@ -363,6 +367,8 @@ type LeaseJobsParams struct {
 	OnlyJob    pgtype.UUID        `json:"only_job"`
 	Owner      pgtype.UUID        `json:"owner"`
 	PhaseOnly  bool               `json:"phase_only"`
+	ReadOnly   []string           `json:"read_only"`
+	NoTools    []string           `json:"no_tools"`
 	Slots      int32              `json:"slots"`
 }
 
@@ -383,6 +389,8 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 		arg.OnlyJob,
 		arg.Owner,
 		arg.PhaseOnly,
+		arg.ReadOnly,
+		arg.NoTools,
 		arg.Slots,
 	)
 	if err != nil {

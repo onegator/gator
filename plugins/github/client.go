@@ -19,6 +19,9 @@ type Client struct {
 	Token string
 	Repo  string // owner/name
 	HTTP  *http.Client
+	// Err is why Base cannot be used (an API address the operator did not allow); every call
+	// answers it.
+	Err error
 }
 
 // APIError is a non-2xx answer from GitHub.
@@ -85,6 +88,9 @@ type CheckRun struct {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	if c.Err != nil {
+		return c.Err
+	}
 	if c.Token == "" {
 		return errors.New("github: no token configured")
 	}

@@ -92,13 +92,17 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	if err != nil {
 		return err
 	}
+	outside, err := d.outside(ctx, parent)
+	if err != nil {
+		return err
+	}
 	var fromJob pgtype.UUID
 	if msg.AuthorKind == conversations.AuthorAgent && parent == nil {
 		_ = fromJob.Scan(conversations.OriginOf(msg).Job)
 	}
 	for _, agent := range asked {
 		r := Request{Agent: agent, Trigger: msg, Conversation: conv, Project: conv.ProjectID,
-			RequestedByKind: msg.AuthorKind, RequestedBy: msg.AuthorID, Parent: parent, FromJob: fromJob}
+			RequestedByKind: msg.AuthorKind, RequestedBy: msg.AuthorID, Parent: parent, FromJob: fromJob, FromOutside: outside}
 		no, err := d.guards.Check(ctx, r)
 		if err != nil {
 			return err
@@ -115,11 +119,13 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	return nil
 }
 
-// asks says whether a message can ask an agent anything: words a person or an agent wrote, still
-// there. Cards, Gator's own lines, plugins and the outside world do not call agents.
+// asks says whether a message can ask an agent anything: words a person, an agent or somebody
+// outside on a bridge wrote, still there. Cards, Gator's own lines and plugins do not call agents;
+// what an outside author asks is answered in chat (GrantFor), never with work.
 func asks(m db.Message) bool {
 	return !m.DeletedAt.Valid && m.Kind == "text" && m.Status == conversations.StatusFinal &&
-		(m.AuthorKind == conversations.AuthorUser || m.AuthorKind == conversations.AuthorAgent)
+		(m.AuthorKind == conversations.AuthorUser || m.AuthorKind == conversations.AuthorAgent ||
+			m.AuthorKind == conversations.AuthorExternal)
 }
 
 // asked are the agents a message asks: those it mentions and, for a person's message in a DM,
@@ -178,6 +184,31 @@ func (d *Dispatcher) parent(ctx context.Context, msg db.Message) (*db.AgentTurn,
 		return nil, err
 	}
 	return &t, nil
+}
+
+// outside says whether the chain a delegation comes from began with an outsider: its turns are
+// walked up to the first (a chain has at most MaxHops of them).
+func (d *Dispatcher) outside(ctx context.Context, t *db.AgentTurn) (bool, error) {
+	for range MaxHops + 1 {
+		if t == nil {
+			return false, nil
+		}
+		if t.RequestedByKind == RequestedByExternal {
+			return true, nil
+		}
+		if !t.ParentTurnID.Valid {
+			return false, nil
+		}
+		up, err := d.store.GetTurn(ctx, t.ParentTurnID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		t = &up
+	}
+	return true, nil // deeper than a chain can be: treat as outside, the safer answer
 }
 
 func ignoreGone(err error) error {

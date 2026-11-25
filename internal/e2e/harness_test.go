@@ -31,6 +31,7 @@ import (
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/brain/curator"
+	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/marketplace"
@@ -118,8 +119,13 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 			// The operator allowed the echo app at auth.echo.test only.
 			return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret, Hosts: []string{"auth.echo.test"}}, ok
 		}})
+	// Messaging bridges, with the core's rules, as the server wires them.
+	bridge := bridges.New(pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access,
+		Roles: auth.Authorizer{Pool: pool}, Approver: svc, Linkers: plugins.Linkers{Pool: pool}})
 	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{Brain: knows.Plugins, CallTimeout: 2 * time.Second,
 		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
+		Extensions: []plugins.Extension{{Capability: bridge.Capability(), Methods: bridge.Methods()}},
+		EventHooks: []plugins.EventHook{bridge}, AllowPrivateOutbound: testNet.AllowPrivate, APIHosts: "127.0.0.1",
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
 		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
 		CatalogueDir: catalogue, PublicURL: fakePublicURL, HooksURL: fakeHooksURL,
@@ -161,7 +167,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows,
 		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
 		Marketplace: market,
-		Remote:      remote}
+		Remote:      remote,
+		Bridges:     bridge}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())

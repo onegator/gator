@@ -2,6 +2,8 @@ package process
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -31,6 +33,47 @@ type Policy struct {
 	// started the task, or any shared one) or "cloud". Empty is local. A person starting a
 	// job by hand chooses for themselves.
 	Placement string `json:"placement,omitempty"`
+}
+
+// backendName is what names a backend: a runner's built-in one (claude) or an agent speaking
+// ACP through a runner (acp:codex), as GATOR_ACP_AGENTS names it.
+var backendName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}(:[a-z][a-z0-9-]{0,31})?$`)
+
+// ValidBackend says whether s can name a backend in a policy. Which runners have it is not the
+// policy's business: a job waits for a runner with its backend logged in.
+func ValidBackend(s string) bool { return backendName.MatchString(s) }
+
+// CheckBackends refuses a configuration that names a backend no runner could ever advertise, at
+// the moment it is written: a typo would otherwise leave every job of the role waiting for good.
+func (c ProjectConfig) CheckBackends() error {
+	check := func(where, b string) error {
+		if b != "" && !ValidBackend(b) {
+			return fmt.Errorf("process_config: %s backend %q is not a backend name (claude, acp:<agent>)", where, b)
+		}
+		return nil
+	}
+	if c.Autopilot != nil {
+		if err := check("autopilot", c.Autopilot.Backend); err != nil {
+			return err
+		}
+	}
+	if c.Policy == nil {
+		return nil
+	}
+	if err := check("policy.default", c.Policy.Default.Backend); err != nil {
+		return err
+	}
+	for role, p := range c.Policy.Roles {
+		if err := check("policy.roles."+role, p.Backend); err != nil {
+			return err
+		}
+	}
+	for tier, p := range c.Policy.Tiers {
+		if err := check("policy.tiers."+tier, p.Backend); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Placement is where the project's autopilot jobs run: "local" unless its policy says "cloud".

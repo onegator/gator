@@ -4,3 +4,6 @@ generate:
   chi-server: true
   models: true
   embedded-spec: true
+output-options:
+  # The A2A endpoints are served at /a2a by the a2a package, outside /api/v1; the spec documents them.
+  exclude-operation-ids: [getA2AAgentCard, callA2AAgent]

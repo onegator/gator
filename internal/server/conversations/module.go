@@ -44,6 +44,8 @@ type Module struct {
 	Proposals *Proposals
 	// Attachments is nil without Deps.Blobs.
 	Attachments *Attachments
+	// Bridged writes what messaging bridges carry in.
+	Bridged *Bridged
 
 	pool *pgxpool.Pool
 	deps Deps
@@ -62,6 +64,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Cards:     NewProjector(pool, threads),
 		Search:    NewSearch(pool, access),
 		Packer:    NewPacker(db.New(pool), 0),
+		Bridged:   NewBridged(pool),
 		pool:      pool,
 		deps:      deps,
 	}

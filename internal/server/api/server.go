@@ -2,13 +2,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 
@@ -21,11 +24,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/server/a2a"
 	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
@@ -85,6 +90,11 @@ type Server struct {
 	// Remote is the remote MCP servers agents reach through Gator's proxy (/mcp/proxy/<name>);
 	// nil: no proxy, and their endpoints answer 503.
 	Remote *mcpremote.Module
+	// Bridges are the messaging plugins' side of the core (account links); nil: their endpoints
+	// answer 503.
+	Bridges *bridges.Service
+	// A2A is agents outside Gator, both ways; nil: their endpoints answer 503.
+	A2A *a2a.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -689,13 +699,57 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), "invalid")
+		return false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error(), "invalid")
 		return false
 	}
+	if missing := missingRequired(raw, v); missing != "" {
+		writeError(w, http.StatusBadRequest, "invalid body: "+missing+" is required", "invalid")
+		return false
+	}
 	return true
+}
+
+// missingRequired names the first field the spec requires that the body left out or sent null.
+// The generated types say which: a required field is a value with a json tag without omitempty
+// (an optional one is a pointer with omitempty). Without this, {} would set a required boolean to
+// false and a required object to null — "config is required" stored as no config at all.
+func missingRequired(raw []byte, v any) string {
+	t := reflect.TypeOf(v)
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return ""
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil {
+		return ""
+	}
+	// encoding/json matches keys without regard to case ({"Enabled": true} sets enabled), so this
+	// does too: a key the decoder took is a key that was sent.
+	sent := make(map[string]json.RawMessage, len(body))
+	for k, v := range body {
+		sent[strings.ToLower(k)] = v
+	}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" || name == "-" || strings.Contains(opts, "omitempty") {
+			continue
+		}
+		if val, ok := sent[strings.ToLower(name)]; !ok || string(val) == "null" {
+			return name
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

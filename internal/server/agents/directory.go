@@ -17,6 +17,7 @@ import (
 
 	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -191,6 +192,10 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 	}
 	if err := validate(next.Handle, next.DisplayName, next.Description, next.Tier, next.Status); err != nil {
 		return db.Agent{}, err
+	}
+	// An agent outside Gator answers in chat and plays no role: what it says is another system's.
+	if a.Kind == KindRemote && (next.Tier != TierChat || next.RoleKey != nil) {
+		return db.Agent{}, fmt.Errorf("%w: an agent outside Gator chats and plays no role", ErrInvalid)
 	}
 	out, err := d.store.UpdateAgent(ctx, next)
 	if isUniqueViolation(err) {
@@ -367,6 +372,9 @@ func policyJSON(p *Policy) ([]byte, error) {
 	}
 	if p.MaxCostUSD < 0 || p.DailyBudgetUSD < 0 {
 		return nil, fmt.Errorf("%w: a cost cap is not negative", ErrInvalid)
+	}
+	if p.Backend != "" && !process.ValidBackend(p.Backend) {
+		return nil, fmt.Errorf("%w: %q is not a backend name (claude, acp:<agent>)", ErrInvalid, p.Backend)
 	}
 	return json.Marshal(p)
 }

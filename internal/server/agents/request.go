@@ -11,6 +11,9 @@ import (
 const (
 	RequestedByUser  = "user"
 	RequestedByAgent = "agent"
+	// RequestedByExternal is somebody outside the workspace: on a bridge (Slack, a comment on a
+	// pull request) or an A2A client. They are heard, in chat; they never let an agent work.
+	RequestedByExternal = "external"
 )
 
 // Request is one call for an agent's turn: who is asked, by which message, by whom, and the turn
@@ -35,6 +38,9 @@ type Request struct {
 	EscalatedFrom *db.AgentTurn
 	// Ask is the message the turn answers when its trigger is not it (an escalation's).
 	Ask *db.Message
+	// FromOutside says the chain this turn is in began with somebody outside the workspace: an
+	// agent delegating what an outsider asked is still answering the outsider.
+	FromOutside bool
 }
 
 // Question is the message the turn answers.
@@ -44,6 +50,10 @@ func (r Request) Question() db.Message {
 	}
 	return r.Trigger
 }
+
+// External says the turn was asked for from outside the workspace.
+// It holds for every turn of a chain an outsider began.
+func (r Request) External() bool { return r.RequestedByKind == RequestedByExternal || r.FromOutside }
 
 // Hop is how far down a chain of delegations the turn is: 0 when a person asks, one more than
 // the turn that delegated otherwise.

@@ -73,3 +73,19 @@ func TestProjectsMustBeIDs(t *testing.T) {
 		t.Fatalf("%v %v", c.Projects, err)
 	}
 }
+
+// Every ACP agent the runner is given is a backend of its own, and a list that does not read is
+// refused at start rather than half used.
+func TestACPAgents(t *testing.T) {
+	t.Setenv("GATOR_RUNNER_SERVER_URL", "https://gator.example")
+	t.Setenv("GATOR_RUNNER_TOKEN", "gtr_runner_x")
+	t.Setenv("GATOR_ACP_AGENTS", "codex:/usr/local/bin/codex-acp")
+	c, err := Load()
+	if err != nil || len(c.ACPAgents) != 1 || c.ACPAgents[0].BackendName() != "acp:codex" {
+		t.Fatalf("%+v %v", c.ACPAgents, err)
+	}
+	t.Setenv("GATOR_ACP_AGENTS", "codex")
+	if _, err := Load(); err == nil {
+		t.Error("an agent without a command is refused")
+	}
+}

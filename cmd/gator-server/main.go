@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/onegator/gator/internal/server/a2a"
 	"github.com/onegator/gator/internal/server/admin"
 	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
@@ -25,6 +26,7 @@ import (
 	"github.com/onegator/gator/internal/server/backup"
 	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/brain/curator"
+	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
@@ -176,8 +178,15 @@ func serve(ctx context.Context) error {
 	// private addresses unless the operator says otherwise.
 	outbound := netguard.FromEnv(os.Getenv)
 	remote := mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log, PublicURL: cfg.PublicURL, Apps: oauthApps, Net: outbound})
+	// Messaging plugins (Slack, GitHub comments) bring outside conversations in and mirror ours out,
+	// through the core's rules: their own project, what they connected, untrusted words, no echo.
+	bridge := bridges.New(db.Pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access,
+		Roles: auth.Authorizer{Pool: db.Pool}, Approver: svc, Linkers: plugins.Linkers{Pool: db.Pool}})
+	go bridge.Run(ctx, time.Hour)
 	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins,
-		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth}}
+		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
+		Extensions: []plugins.Extension{{Capability: bridge.Capability(), Methods: bridge.Methods()}},
+		EventHooks: []plugins.EventHook{bridge}, AllowPrivateOutbound: outbound.AllowPrivate}
 	pluginCfg.LoadEnv()
 	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
@@ -242,6 +251,14 @@ func serve(ctx context.Context) error {
 	// within the limits of a chain of delegations and the project's budget.
 	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Roles: auth.Authorizer{Pool: db.Pool}, Log: log})
 	runnerMgr.UseBriefer(team.Briefer)
+	// Agents outside Gator, through A2A: a remote agent's turn is a task sent to its card's
+	// endpoint (through netguard), and the project's clients call the agents it exposes at /a2a.
+	farAgents := a2a.NewRemote(a2a.RemoteDeps{Queries: dbq.New(db.Pool), Keys: keyring, Client: a2a.Client{HTTP: outbound.Client(2 * time.Minute)},
+		Roles: auth.Authorizer{Pool: db.Pool}, Voice: team.Voice, Open: chat.Access, Packer: chat.Packer, Log: log})
+	team.AnswerElsewhere(agents.KindRemote, farAgents)
+	go farAgents.Run(ctx, 2*time.Second)
+	a2aIn := a2a.NewInbound(a2a.InboundDeps{Pool: db.Pool, Bridge: bridge, Tokens: auth.Tokens{Pool: db.Pool},
+		Roles: auth.Authorizer{Pool: db.Pool}, PublicURL: cfg.PublicURL})
 	go team.Consumer(hub, log, 0).Run(ctx)
 	go team.Streamer(hub, log, 0).Run(ctx)
 	go team.Sweeper(log).Run(ctx, time.Minute)
@@ -293,6 +310,10 @@ func serve(ctx context.Context) error {
 		Marketplace: market,
 		// Remote MCP servers agents reach through the proxy; their credentials stay here.
 		Remote: remote,
+		// Links between people and their accounts on the bridges.
+		Bridges: bridge,
+		// Agents outside Gator, both ways.
+		A2A: &a2a.Module{Remote: farAgents, Inbound: a2aIn},
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),
@@ -320,6 +341,9 @@ func serve(ctx context.Context) error {
 	root.Mount("/", apiServer.Router())
 	// The only public endpoint: plugin webhooks. Plugins verify the sender's signature.
 	root.Mount("/hooks", pluginHost.Hooks())
+	// A2A: the cards of the agents projects expose, and their JSON-RPC endpoint for the projects'
+	// clients, whose tokens reach nothing else.
+	root.Mount(auth.A2APath, auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log)(a2aIn.Handler()))
 	// Where a provider sends the browser back after "Connect GitHub"; the state is the proof.
 	// A browser signed in to Gator must be the person who started the connection.
 	root.Mount("/connect", auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log)(pluginHost.ConnectHandler()))

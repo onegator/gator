@@ -689,6 +689,20 @@ func (q *Queries) ProjectCapabilities(ctx context.Context, projectID pgtype.UUID
 	return items, nil
 }
 
+const pruneWebhookDeliveries = `-- name: PruneWebhookDeliveries :execrows
+DELETE FROM webhook_deliveries WHERE received_at < $1
+`
+
+// Deliveries are remembered long enough that a sender's retries, and a replay of a signed request,
+// are known; senders that sign with a timestamp (Slack) refuse older ones anyway.
+func (q *Queries) PruneWebhookDeliveries(ctx context.Context, before pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneWebhookDeliveries, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const releaseWebhookDelivery = `-- name: ReleaseWebhookDelivery :exec
 DELETE FROM webhook_deliveries WHERE project_plugin_id = $1 AND delivery_id = $2
 `

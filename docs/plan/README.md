@@ -70,7 +70,7 @@ przychodzi jako karta w wątku taska i działa tym samym endpointem co dziś `/t
 | 2 | `00039_agents.sql`, `00040_agent_turns.sql`, `00041_agents_keep.sql` |
 | 3 | `00042_brain.sql`, `00043_brain_backfill.sql`, `00044_brain_curation.sql`, `00045_brain_embeddings.sql` (opcjonalna, pgvector; numer zarezerwowany, jeszcze nie napisana) |
 | 4 | `00046_marketplace.sql`, `00047_mcp_servers.sql` |
-| 5 | `00048_external_agents.sql`, `00049_messaging_bridges.sql` |
+| 5 | `00048_messaging_bridges.sql`, `00049_external_agents.sql` |
 
 Faza 1 dostała dwie migracje więcej niż w pierwszej wersji planu: backfill `#general` i backfill
 wątków otwartych tasków to osobne kroki (osobne PR-y), więc numery kolejnych faz przesunęły się o 2.
@@ -93,6 +93,11 @@ RFC 9728/8414 na swoim hoście i rejestrację RFC 7591 (inaczej potrzebna aplika
 `GATOR_<PROVIDER>_OAUTH_HOSTS`) i jak nazywają się ich narzędzia; Datadog
 (`https://mcp.datadoghq.com/api/unstable/mcp-server/mcp`) jest eksperymentalny (klucze API i aplikacji w
 dwóch nagłówkach, adres zależny od regionu), a Grafana jest samodzielnie hostowana (adres ustawia admin).
+
+Faza 5 zamieniła kolejność swoich dwóch numerów: mosty komunikatorów powstały przed A2A, więc
+`00048_messaging_bridges.sql` (tożsamości z zewnątrz, odwołania rozmów i wiadomości, kody powiązań,
+`requested_by_kind='external'`) i `00049_external_agents.sql` (agenci zdalni, klienci A2A, ich taski i
+wywołania).
 
 Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
 

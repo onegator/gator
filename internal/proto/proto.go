@@ -147,13 +147,19 @@ func ValidPlacement(p string) bool { return p == PlacementLocal || p == Placemen
 
 // Capabilities describes what a runner can execute.
 type Capabilities struct {
-	Backends    []string `json:"backends"`     // "claude", "codex", "pi"
+	Backends    []string `json:"backends"`     // "claude", "acp:codex", "acp:gemini"
 	MaxParallel int      `json:"max_parallel"` // concurrent jobs
 	Projects    []string `json:"projects"`     // project ids; empty = any project
 	// CanLogin says this runner can drive an interactive backend login and answer with a
 	// LoginPrompt. A runner that cannot must say so, rather than leaving a person clicking a
 	// button that writes one line into a log file nobody reads.
 	CanLogin bool `json:"can_login,omitempty"`
+	// ReadOnly are the backends that can hold an agent to read-only tools (chat), and NoTools those
+	// that can run one with none at all (summaries). A job is leased only to a runner whose backend
+	// can keep it, rather than to one that would refuse it. Nil, from a runner before these fields:
+	// every backend keeps both, as Claude Code, the only one there was, does.
+	ReadOnly []string `json:"read_only,omitempty"`
+	NoTools  []string `json:"no_tools,omitempty"`
 }
 
 // Registered acknowledges a registration.
@@ -349,7 +355,7 @@ type LoginPrompt struct {
 // Usage is what one job consumed. Every finish carries it; the server stores it per task
 // and phase so time and tokens can be reported for every task Gator runs.
 type Usage struct {
-	Backend          string    `json:"backend"` // "claude" | "codex" | "pi"
+	Backend          string    `json:"backend"` // "claude" | "acp:<agent>"
 	Model            string    `json:"model"`
 	InputTokens      int64     `json:"input_tokens"`
 	OutputTokens     int64     `json:"output_tokens"`

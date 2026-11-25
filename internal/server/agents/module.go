@@ -71,6 +71,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		FanOut{Turns: q, PerTurn: MaxDelegationsPerTurn, PerChain: MaxTurnsPerChain},
 		ChainBudget{Spent: q, Policies: deps.Process, Tasks: q, Factor: DefaultChainFactor},
 		AgentDailyBudget{Spent: q, Now: deps.Now},
+		OutsideBudget{Spent: q, Default: DefaultOutsideDailyBudget, Now: deps.Now},
 		DailyBudget{Budgets: deps.Process, Now: deps.Now},
 	}
 	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})
@@ -89,6 +90,13 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Curations:  CurationQueue{jobs: deps.Jobs},
 		pool:       pool,
 	}
+}
+
+// AnswerElsewhere has the turns of agents of kind answered by e instead of a runner's job: started
+// by the Starter, stopped by Control.
+func (m *Module) AnswerElsewhere(kind string, e Elsewhere) {
+	m.Starter.AnswerElsewhere(kind, e)
+	m.Control.answerElsewhere(kind, e)
 }
 
 // Consumer is the outbox consumer that has agents answer. Run it with go consumer.Run(ctx).

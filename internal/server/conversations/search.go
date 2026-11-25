@@ -49,8 +49,9 @@ type Query struct {
 
 // Hit is a message found and the conversation it is in.
 type Hit struct {
-	Message      View
-	Conversation db.Conversation
+	Message View
+	// Conversation is where it was said, with the caller's standing there (joined, read up to).
+	Conversation Listed
 }
 
 // Messages answers the messages that match, best first. Every hit passes the same access rules as
@@ -107,9 +108,28 @@ func (s *Search) Messages(ctx context.Context, p auth.Principal, scope Scope, in
 	if err != nil {
 		return nil, err
 	}
+	// The caller's standing in the page's conversations, in one query.
+	ids := make([]pgtype.UUID, 0, len(readable))
+	for id, c := range readable {
+		if c != nil {
+			ids = append(ids, pgtype.UUID{Bytes: id, Valid: true})
+		}
+	}
+	standing := map[[16]byte]db.ListMembershipsInRow{}
+	if me.ID.Valid && len(ids) > 0 {
+		rows, err := q.ListMembershipsIn(ctx, db.ListMembershipsInParams{UserID: me.ID, ConversationIds: ids})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			standing[r.ConversationID.Bytes] = r
+		}
+	}
 	out := make([]Hit, 0, len(views))
 	for _, v := range views {
-		out = append(out, Hit{Message: v, Conversation: *readable[v.Message.ConversationID.Bytes]})
+		c := *readable[v.Message.ConversationID.Bytes]
+		m, joined := standing[c.ID.Bytes]
+		out = append(out, Hit{Message: v, Conversation: listed(c, joined, m.LastReadSeq, m.Notify, m.UnreadMentions)})
 	}
 	return out, nil
 }

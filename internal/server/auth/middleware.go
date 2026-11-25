@@ -46,6 +46,12 @@ func Authenticate(tokens Tokens, devHeader bool, log *slog.Logger) func(http.Han
 					writeErr(w, http.StatusForbidden, "a job's identity may only use the agent commands")
 					return
 				}
+				// An A2A client is an outside agent: it calls the agents its project exposes, and
+				// reads nothing of the API.
+				if p.Kind == KindA2A && !strings.HasPrefix(r.URL.Path, A2APath+"/") {
+					writeErr(w, http.StatusForbidden, "an A2A client's token reaches only "+A2APath)
+					return
+				}
 				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
 				return
 			}
@@ -131,6 +137,9 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": http.StatusText(status)})
 }
+
+// A2APath is where A2A clients call a project's exposed agents.
+const A2APath = "/a2a"
 
 // MCPPath is where the gator-brain MCP server is served; a job's identity reaches it, and what
 // lies under it (phase 4: /mcp/proxy/<server>).

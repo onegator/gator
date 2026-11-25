@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/onegator/gator/plugin"
+	"github.com/onegator/gator/plugin/netguard"
 )
 
 // External references the plugin keeps on tasks.
@@ -42,15 +44,18 @@ const configSchema = `{"type":"object","properties":{
 	"base_branch":{"type":"string","title":"Base branch","description":"branch pull requests target; default: the repository's default branch"},
 	"trigger_label":{"type":"string","title":"Only issues labelled","description":"only issues with this label become tasks; empty: every open issue"},
 	"label_prefix":{"type":"string","title":"Phase label prefix","description":"prefix of phase labels; default gator:"},
-	"check_phase":{"type":"string","title":"CI phase","description":"phase whose gate gets CI checks; default implementation"}
+	"check_phase":{"type":"string","title":"CI phase","description":"phase whose gate gets CI checks; default implementation"},
+	"mention":{"type":"string","title":"Mention","description":"a comment with @<mention> <agent> asks that agent, e.g. @gator reviewer; default gator"},
+	"commenters":{"type":"string","title":"Who may ask","description":"the commenters' associations with the repository whose comments ask agents, comma separated; default OWNER,MEMBER,COLLABORATOR. Answers are public, with what the agent knows: on a public repository, widening this lets anyone have it"}
 	},"required":["repo"]}`
 
 var manifest = plugin.Manifest{
 	Name:    "github",
-	Version: "0.3.0",
+	Version: "0.4.0",
 	Description: "Issues become tasks and follow them both ways, finished work opens a pull request, " +
-		"CI results gate the phase, and pull requests people open can be reviewed by an agent.",
-	Capabilities: []string{"tracker", "vcs", "ci"},
+		"CI results gate the phase, pull requests people open can be reviewed by an agent, and " +
+		"\"@gator reviewer …\" in a comment asks an agent, whose answer comes back as a comment.",
+	Capabilities: []string{"tracker", "vcs", "ci", plugin.CapabilityMessaging},
 	UI:           []string{"tab", "chip"},
 	ConfigSchema: json.RawMessage(configSchema),
 	Webhook:      &plugin.WebhookSpec{DeliveryHeader: "X-GitHub-Delivery"},
@@ -62,7 +67,7 @@ var manifest = plugin.Manifest{
 }
 
 // webhookEvents are the deliveries this plugin reads.
-var webhookEvents = []string{"issues", "pull_request", "check_run", "push"}
+var webhookEvents = []string{"issues", "pull_request", "check_run", "push", "issue_comment", "pull_request_review_comment"}
 
 // maxImport bounds one import. A repository with thousands of open issues is a backlog, not a
 // queue of work, and a board flooded with it would be worse than one that asks to filter.
@@ -82,7 +87,7 @@ type gh struct{ http *http.Client }
 func (g *gh) handlers() plugin.Handlers {
 	return plugin.Handlers{Manifest: manifest, Init: g.init, Webhook: g.webhook, PhaseTransition: g.phaseTransition,
 		GateEvaluate: g.gateEvaluate, RenderUI: g.renderUI, JobFinish: g.jobFinish, Import: g.importIssues,
-		TaskClosed: g.taskClosed}
+		TaskClosed: g.taskClosed, MessagePosted: g.answered, MessageEdited: g.answered}
 }
 
 func setting(core *plugin.Core, key, def string) string {
@@ -93,8 +98,10 @@ func setting(core *plugin.Core, key, def string) string {
 }
 
 func (g *gh) client(core *plugin.Core) *Client {
-	return &Client{Base: strings.TrimRight(setting(core, "api_url", "https://api.github.com"), "/"),
-		Token: core.Secret("token"), Repo: core.Setting("repo"), HTTP: g.http}
+	// The token goes to the API address, which a project admin sets; the hosts it may name besides
+	// GitHub's are the operator's (GATOR_PLUGIN_API_HOSTS, for GitHub Enterprise).
+	base, err := netguard.APIBase(strings.TrimRight(core.Setting("api_url"), "/"), "https://api.github.com", os.Getenv)
+	return &Client{Base: base, Err: err, Token: core.Secret("token"), Repo: core.Setting("repo"), HTTP: g.http}
 }
 
 // asPluginErr turns GitHub's answers into plugin errors. A bad request is this repository's
@@ -184,6 +191,8 @@ func (g *gh) webhook(ctx context.Context, core *plugin.Core, p plugin.WebhookPar
 		return g.onCheckRun(ctx, core, repo, p.Body)
 	case "push":
 		return g.onPush(ctx, core, repo, p.Body)
+	case "issue_comment", "pull_request_review_comment":
+		return g.onComment(ctx, core, repo, event, env.Action, p.Body)
 	}
 	return nil
 }

@@ -28,7 +28,7 @@ INSERT INTO agents (project_id, handle, display_name, description, avatar, role_
 VALUES ($1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, $11, 'active', $12,
         $13)
-RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed
 `
 
 type CreateInstalledAgentParams struct {
@@ -84,6 +84,10 @@ func (q *Queries) CreateInstalledAgent(ctx context.Context, arg CreateInstalledA
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Kind,
+		&i.Remote,
+		&i.RemoteSecrets,
+		&i.A2aExposed,
 	)
 	return i, err
 }
@@ -923,7 +927,7 @@ SET display_name = $1, description = $2, avatar = $3, role_key = $4,
     instructions = $5, tier = $6, policy = $7, tools = $8, skills = $9,
     source = $10, updated_at = now()
 WHERE id = $11 AND deleted_at IS NULL
-RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at, kind, remote, remote_secrets, a2a_exposed
 `
 
 type UpdateInstalledAgentParams struct {
@@ -975,6 +979,10 @@ func (q *Queries) UpdateInstalledAgent(ctx context.Context, arg UpdateInstalledA
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Kind,
+		&i.Remote,
+		&i.RemoteSecrets,
+		&i.A2aExposed,
 	)
 	return i, err
 }

@@ -82,6 +82,38 @@ never the same agent twice in a row, the project's daily budget, and a paused ag
 person's reply while an agent answers steers it; Stop is `POST /turns/{id}/stop`. The rules live in
 `internal/server/agents`, the conversation an agent is told in `internal/server/conversations/context.go`.
 
+## Outside Gator: bridges and A2A
+
+**Bridges** are plugins with the `messaging` capability: the bundled `slack` (channels, threads,
+`/gator ask`, Approve on a decision card) and `github` (`@gator reviewer …` in a comment, the answer
+as a comment). The core keeps their rules in `internal/server/bridges`: a bridge acts in its own
+project, only on conversations it connected, never on a private one; what came through a bridge is
+never mirrored back to it; an outside account is an identity of that project and bridge
+(`external_identities`), heard by agents in chat and fenced as untrusted, approving nothing, until
+its person links it with a code made in Gator (`POST /projects/{id}/external-links`, ten minutes,
+once — never by email address); a linked member's Approve is `process.Approve` in their name. An
+agent's answer streams out at most every 2 s. An outside identity asks agents at most six times a
+minute and within a daily budget ($2, delegations included); a GitHub comment asks only from people
+the repository trusts (`commenters`). A plugin's `api_url` (where its secret goes) may name another
+host only if the operator lists it in `GATOR_PLUGIN_API_HOSTS`.
+
+**A2A**: a project's admin adds an agent outside Gator from its Agent Card (`POST
+/projects/{id}/remote-agents`, card fetched through `netguard`, its bearer token encrypted with the
+keyring). Mentioning it is a turn like any other, under the same hop, fan-out and budget guards; the
+turn is an A2A task (`message/send`, then `tasks/get` until it ends) made by a worker in the server,
+its answer written into the agent's message and carried to other agents as untrusted. It answers
+only in conversations open to the whole project, a person stops it like any turn, and the worker makes
+four calls at once (two per agent, three tries each, 100 a day per agent). Inbound, the admin exposes agents (`PUT
+/agents/{id}/a2a`) and lets clients in (`POST /projects/{id}/a2a-clients`: a `gtr_a2a_…` token that
+reaches only `/a2a/<project>/<agent>`, a daily budget, a rate). A client's ask is its message in
+`#a2a-<client>`, answered in chat; it reads the answer from `tasks/get`. Cards are at
+`/a2a/<project>/<agent>/.well-known/agent-card.json`.
+
+**To check live before relying on it:** the A2A version and card path of the peers a team uses
+(0.3, `/.well-known/agent-card.json`; older peers serve `agent.json`), whether they answer
+`message/send` with a task or a message, and how they report cost (nothing reads it yet: a remote
+turn costs $0 in Gator's records). Every test here talks to a fake peer.
+
 ## Brain
 
 What the team and its agents know lives in one store, `brain_entries` (`internal/server/brain`):
@@ -217,6 +249,36 @@ and `/stop`; live output streams on the WebSocket topic `job:<id>`.
 
 `internal/runner/backend/claude/testdata` holds sanitized recordings of real Claude Code 2.1.270
 sessions; the parser and backend tests replay them through a fake `claude`.
+
+### Agents speaking ACP
+
+Any agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) runs as the
+backend `acp:<name>`: `GATOR_ACP_AGENTS=codex:/usr/local/bin/codex-acp,gemini:/usr/local/bin/gemini
+--experimental-acp` (name, colon, the command and its arguments). The runner starts the command in
+the worktree for every run (`internal/runner/backend/acp`): `initialize`, `session/new` with Gator's
+MCP servers over HTTP (when the agent can reach them; the job's token travels in the session's
+headers, never on the command line), `session/prompt`, and `session/update` as the same job events
+as Claude's. A steer is `session/cancel`, then `session/load` of the same session and the correction
+(an agent that cannot load sessions starts over with the opening and the correction). The tool-call
+limit and a cost the agent reports (`usage_update`) are counted by the runner, which cancels the
+turn and ends the process group. The agent's permission requests are answered for the job's tier:
+a work job allows them once each; a chat job allows reading, searching, fetching, the job's own MCP
+servers and `gator-cli` alone, and refuses editing, deleting, moving and other commands, on a
+read-only worktree — and runs only on an agent whose profile names a read-only session mode, which
+the session must offer (not every tool of an agent asks first). A job with no tools (summaries)
+never goes to an ACP backend. Each supported agent has a profile (its login variables
+and files for `AuthState`, its read-only mode) and synthetic replays in `testdata/<agent>`: `codex`
+(via codex-acp) and `gemini`; anything else runs as experimental. A policy picks it per role, tier or
+agent (`"backend": "acp:codex"`). A runner tells the server which of its backends keep a job
+read-only and which run one with no tools, and a chat job or a summary is leased only to those;
+summaries run on the server's `GATOR_DEFAULT_BACKEND` whatever the role's policy says. An agent that
+leaves its read-only mode during a read-only job is stopped.
+
+**To check live before relying on it:** the adapters' current versions and flags (`codex-acp`,
+`gemini --experimental-acp`), whether they report usage (`usage` in the prompt's answer,
+`usage_update` with a cost), the ids of their session modes (codex-acp's `read-only`), and how they
+title MCP tool calls in permission requests. The recordings here are synthetic: no model session
+was started to make them.
 
 ## Autopilot, roles and artifacts
 

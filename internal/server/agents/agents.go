@@ -10,6 +10,9 @@ package agents
 
 // Tiers: what an agent may touch when it answers in a conversation.
 const (
+	// KindLocal agents run on a runner; KindRemote ones are outside Gator, asked over A2A.
+	KindLocal  = "local"
+	KindRemote = "remote"
 	// TierChat reads the repository, searches and answers, through tools that do not write.
 	TierChat = "chat"
 	// TierWork changes code on a gator/ branch and runs commands, like a phase job; it needs a

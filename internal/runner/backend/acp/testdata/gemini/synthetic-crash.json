@@ -1,0 +1,5 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {}},
+  "exit_after_init": "fatal: could not load settings.json",
+  "turns": []
+}

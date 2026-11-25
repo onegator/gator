@@ -83,6 +83,27 @@ type Starter struct {
 	voice   speaker
 	jobs    jobQueue
 	consent ConsentAsker // optional: without it a work agent without consent only chats
+	// elsewhere answer the turns of agents of other kinds than a runner's (a remote agent, over
+	// A2A), by agents.kind.
+	elsewhere map[string]Elsewhere
+}
+
+// Elsewhere answers the turns of an agent that no runner runs: a remote agent, whose turn is an
+// A2A task. Begin takes the turn over once its answer's message is there, and answers a refusal
+// when the turn cannot be given (it then ends failed, saying why). Begin is asked again when a
+// start is repeated, and must not begin twice.
+type Elsewhere interface {
+	Begin(ctx context.Context, turn db.AgentTurn, r Request, home db.Conversation) (*Refusal, error)
+	// Stopped says a person stopped a turn it began: nothing more is asked or waited for.
+	Stopped(ctx context.Context, turn db.AgentTurn) error
+}
+
+// AnswerElsewhere has the turns of agents of kind answered by e instead of a runner's job.
+func (s *Starter) AnswerElsewhere(kind string, e Elsewhere) {
+	if s.elsewhere == nil {
+		s.elsewhere = map[string]Elsewhere{}
+	}
+	s.elsewhere[kind] = e
 }
 
 // NewStarter builds it.
@@ -133,7 +154,7 @@ func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, tu
 	if err != nil {
 		return turn, err
 	}
-	grant := TierFor(r.Agent, task)
+	grant := GrantFor(r, task)
 	if !turn.ReplyMessageID.Valid {
 		msg, err := s.voice.Say(ctx, home, conversations.Speech{Agent: r.Agent.ID, Turn: turn.ID,
 			Body: Reading(r.Agent), Status: conversations.StatusStreaming, ClientID: "turn:" + conversations.UUIDString(turn.ID)})
@@ -143,6 +164,16 @@ func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, tu
 		if turn, err = s.turns.SetTurnReply(ctx, db.SetTurnReplyParams{ID: turn.ID, ReplyMessageID: msg.ID}); err != nil {
 			return turn, err
 		}
+	}
+	if e, ok := s.elsewhere[r.Agent.Kind]; ok {
+		no, err := e.Begin(ctx, turn, r, home)
+		if err != nil {
+			return turn, err
+		}
+		if no != nil {
+			return turn, s.end(ctx, turn, home, TurnFailed, no)
+		}
+		return s.turns.SetTurnStatus(ctx, db.SetTurnStatusParams{ID: turn.ID, Status: TurnRunning})
 	}
 	job, err := s.jobs.CreateJob(ctx, task.ID, runners.NewJob{
 		Agent: r.Agent.ID, Turn: turn.ID, Kind: runners.KindReply, Tier: grant.Tier, Role: roleOf(r.Agent),
@@ -174,7 +205,7 @@ func (s *Starter) finish(ctx context.Context, r Request, home db.Conversation, t
 	if err != nil {
 		return err
 	}
-	if !TierFor(r.Agent, task).NeedsConsent {
+	if !GrantFor(r, task).NeedsConsent {
 		return nil
 	}
 	return s.consent.AskConsent(ctx, turn, home, task)

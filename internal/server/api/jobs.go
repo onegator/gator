@@ -357,7 +357,7 @@ func toRunner(r db.Runner, connected bool) gen.RunnerInfo {
 		Id: toUUID(r.ID), Name: r.Name, Location: r.Location, Placement: gen.RunnerInfoPlacement(r.Placement),
 		OwnerId: toUUIDPtr(r.OwnerID), Status: gen.RunnerInfoStatus(r.Status), Connected: connected,
 		Capabilities: gen.RunnerCapabilities{Backends: caps.Backends, MaxParallel: caps.MaxParallel, Projects: caps.Projects,
-			CanLogin: &caps.CanLogin},
+			CanLogin: &caps.CanLogin, ReadOnly: optList(caps.ReadOnly), NoTools: optList(caps.NoTools)},
 		AuthState: authState, ProtocolVersion: int(r.ProtocolVersion), BinaryVersion: r.BinaryVersion,
 	}
 	if r.LastHeartbeatAt.Valid {
@@ -395,4 +395,12 @@ func runnerErrStatus(err error) (int, bool) {
 		return http.StatusConflict, true
 	}
 	return 0, false
+}
+
+// optList is a list a runner may not have said: nil stays absent.
+func optList(s []string) *[]string {
+	if s == nil {
+		return nil
+	}
+	return &s
 }

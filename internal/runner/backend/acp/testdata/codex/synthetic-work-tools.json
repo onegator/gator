@@ -1,0 +1,22 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true, "promptCapabilities": {"embeddedContext": true}, "mcpCapabilities": {"http": true, "sse": false}}, "authMethods": [{"id": "chatgpt", "name": "Login with ChatGPT"}, {"id": "openai-api-key", "name": "Use OPENAI_API_KEY"}], "agentInfo": {"name": "codex-acp", "version": "0.0.0-synthetic"}},
+  "new_session": {"sessionId": "019a5f3c-codex-session", "modes": {"currentModeId": "auto", "availableModes": [{"id": "read-only", "name": "Read Only"}, {"id": "auto", "name": "Auto"}, {"id": "full-access", "name": "Full Access"}]}, "models": {"currentModelId": "gpt-5-codex", "availableModels": [{"modelId": "gpt-5-codex", "name": "gpt-5-codex"}, {"modelId": "gpt-5", "name": "gpt-5"}]}},
+  "turns": [{
+    "steps": [
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "thinking about the task"}}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "I'll read the "}}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "README first."}}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "tool_call", "toolCallId": "call_1", "title": "Read README.md", "kind": "read", "status": "pending", "rawInput": {"path": "README.md"}}}},
+      {"permission": {"sessionId": "019a5f3c-codex-session", "toolCall": {"toolCallId": "call_1", "title": "Read README.md", "kind": "read"}, "options": [{"optionId": "approved", "name": "Yes", "kind": "allow_once"}, {"optionId": "approved-for-session", "name": "Always", "kind": "allow_always"}, {"optionId": "abort", "name": "No", "kind": "reject_once"}]}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "# Project\nhello"}}]}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "tool_call", "toolCallId": "call_2", "title": "Edit main.go", "kind": "edit", "status": "pending", "rawInput": {"path": "main.go"}}}},
+      {"permission": {"sessionId": "019a5f3c-codex-session", "toolCall": {"toolCallId": "call_2", "title": "Edit main.go", "kind": "edit"}, "options": [{"optionId": "approved", "name": "Yes", "kind": "allow_once"}, {"optionId": "abort", "name": "No", "kind": "reject_once"}]}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "tool_call_update", "toolCallId": "call_2", "status": "completed", "content": [{"type": "diff", "path": "main.go", "oldText": "a", "newText": "b"}]}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "plan", "entries": [{"content": "Read the README", "priority": "high", "status": "completed"}]}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done.\n\nThe answer"}}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " is 42."}}}},
+      {"update": {"sessionId": "019a5f3c-codex-session", "update": {"sessionUpdate": "usage_update", "used": 18234, "size": 272000, "cost": {"amount": 0.0123, "currency": "USD"}}}}
+    ],
+    "result": {"stopReason": "end_turn", "usage": {"inputTokens": 12000, "outputTokens": 340, "cachedReadTokens": 6000, "cachedWriteTokens": 0, "thoughtTokens": 60, "totalTokens": 18400}}
+  }]
+}

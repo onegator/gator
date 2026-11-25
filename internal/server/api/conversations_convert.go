@@ -31,7 +31,7 @@ func toConversation(l conversations.Listed) gen.Conversation {
 func toConversationDetail(d conversations.Detail) gen.ConversationDetail {
 	l := conversations.Listed{Conversation: d.Conversation}
 	if d.Me != nil {
-		l.Joined, l.LastReadSeq, l.Notify = true, d.Me.LastReadSeq, d.Me.Notify
+		l.Joined, l.LastReadSeq, l.Notify, l.UnreadMentions = true, d.Me.LastReadSeq, d.Me.Notify, d.UnreadMentions
 		if d.Conversation.LastSeq > d.Me.LastReadSeq {
 			l.Unread = d.Conversation.LastSeq - d.Me.LastReadSeq
 		}
@@ -72,7 +72,7 @@ func toMessage(v conversations.View) gen.Message {
 	out := gen.Message{
 		Id: toUUID(m.ID), ConversationId: toUUID(m.ConversationID), Seq: m.Seq, AuthorKind: gen.MessageAuthorKind(m.AuthorKind),
 		AuthorId: toUUIDPtr(m.AuthorID), Kind: gen.MessageKind(m.Kind), Body: m.Body, CardType: m.CardType, Card: toCard(m),
-		ReplyCount: int(m.ReplyCount), ThreadId: toUUIDPtr(v.ThreadID), Status: gen.MessageStatus(m.Status), Origin: map[string]any{},
+		ReplyCount: int(m.ReplyCount), ThreadId: toUUIDPtr(v.ThreadID), Status: gen.MessageStatus(m.Status),
 		ClientId: m.ClientID, EditedAt: timePtr(m.EditedAt), DeletedAt: timePtr(m.DeletedAt), CreatedAt: m.CreatedAt.Time,
 		Mentions: make([]gen.MemberRef, 0, len(v.Mentions)), Reactions: make([]gen.Reaction, 0, len(v.Reactions)),
 		Attachments: make([]gen.Attachment, 0, len(v.Attachments)),

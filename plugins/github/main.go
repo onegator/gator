@@ -5,15 +5,17 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
 	"github.com/onegator/gator/plugin"
+	"github.com/onegator/gator/plugin/netguard"
 )
 
 func main() {
-	g := &gh{http: &http.Client{Timeout: 20 * time.Second}}
+	// The API address is a setting; its requests stay off private addresses unless the server
+	// allows them (GATOR_OUTBOUND_ALLOW_PRIVATE, passed on by the host).
+	g := &gh{http: netguard.FromEnv(os.Getenv).Client(20 * time.Second)}
 	if err := plugin.Serve(g.handlers()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
