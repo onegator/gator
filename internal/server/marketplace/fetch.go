@@ -87,7 +87,17 @@ func (g Git) Fetch(ctx context.Context, u string) (Snapshot, error) {
 		done()
 		return Snapshot{}, fmt.Errorf("cloning the registry: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return Snapshot{FS: os.DirFS(dir), Close: done}, nil
+	return rooted(dir, done)
+}
+
+// rooted is a snapshot of dir read through os.Root: no path, and no link, leads out of it.
+func rooted(dir string, done func()) (Snapshot, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		done()
+		return Snapshot{}, err
+	}
+	return Snapshot{FS: root.FS(), Close: func() { _ = root.Close(); done() }}, nil
 }
 
 func allowHTTP(p netguard.Policy) string {
@@ -118,7 +128,7 @@ func (Dir) Fetch(_ context.Context, u string) (Snapshot, error) {
 	if err != nil || !info.IsDir() {
 		return Snapshot{}, invalid("%s is not a directory", p)
 	}
-	return Snapshot{FS: os.DirFS(p), Close: func() {}}, nil
+	return rooted(p, func() {})
 }
 
 // ByScheme picks a fetcher by the registry's address: a directory for file:// and absolute paths,

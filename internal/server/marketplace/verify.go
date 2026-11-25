@@ -107,8 +107,9 @@ func (c Checksums) VerifyPackage(it Item, files Files) error {
 	if err := CheckFiles(files, c.Limits); err != nil {
 		return fmt.Errorf("%s %s: %w", it.Key(), it.Version, err)
 	}
-	if sum := files.Checksum(); sum != it.Checksum {
-		return fmt.Errorf("%w: %s %s promises %s, its files hash to %s", ErrChecksum, it.Key(), it.Version, it.Checksum, sum)
+	if files.Checksum() != it.Checksum {
+		// Not the hash itself: of a directory registry, that would be a fingerprint of files on the server.
+		return fmt.Errorf("%w: the files of %s %s do not hash to what its index promises", ErrChecksum, it.Key(), it.Version)
 	}
 	return nil
 }

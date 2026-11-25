@@ -17,6 +17,7 @@ type Registry struct {
 	// Dir is where it is, URL how a server reaches it and PublicKey what verifies it.
 	Dir, URL, PublicKey string
 	private             string
+	serial              int64
 }
 
 // New makes an empty registry with a key of its own.
@@ -58,6 +59,8 @@ func (r *Registry) Publish() {
 	if err != nil {
 		r.t.Fatal(err)
 	}
+	r.serial++
+	idx.Serial = r.serial
 	r.WriteIndex(marketplace.MarshalIndex(idx))
 }
 

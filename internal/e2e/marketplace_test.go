@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -132,7 +133,7 @@ func TestAPackageChangedAfterPublishingIsTurnedAway(t *testing.T) {
 	r.Publish()
 	r.Write("skills/adr-writing/SKILL.md", "---\nname: adr-writing\ndescription: Write an ADR.\nversion: 1.0.0\n---\nNever mind.\n")
 	res = h.fetch(reg.Id.String(), 200)
-	if len(res.Rejected) != 2 || !strings.Contains(fmt.Sprint(res.Rejected), "its files hash to") {
+	if len(res.Rejected) != 2 || !strings.Contains(fmt.Sprint(res.Rejected), "do not hash to what its index promises") {
 		t.Fatalf("a file changed after the index: %+v", res.Rejected)
 	}
 	if items := h.catalogue("q=adr"); len(items) != 0 {
@@ -354,4 +355,64 @@ func TestAnInstallIsPinnedToWhatWasAccepted(t *testing.T) {
 	if inst := h.install(p.Id.String(), in); inst.RegistryId == other.Id || inst.Version != "1.0.0" {
 		t.Fatalf("installed: %+v", inst)
 	}
+}
+
+// An index is newer than the last one taken, or it is not taken: an older serial (a replay), the
+// same serial with other bytes (a fork) or an expired index (a freeze) takes nothing. A registry
+// without a key is fetched over https or ssh only, and what it offers is shown as untrusted.
+func TestARegistryCannotBeRolledBackOrFrozen(t *testing.T) {
+	h := newHarness(t)
+	r := marketplacetest.New(t)
+	r.Package("skills/adr-writing", map[string]string{"SKILL.md": "---\nname: adr-writing\ndescription: Write an ADR.\nversion: 1.0.0\n---\nContext, decision.\n"})
+	r.Publish()
+	old := r.Index()
+	r.Publish() // serial 2, the same packages
+	reg, _ := h.registry(r)
+	r.WriteIndex(old)
+	if res := h.fetchRefused(reg.Id.String()); !strings.Contains(res, "older than") {
+		t.Fatalf("a replayed index: %s", res)
+	}
+	r.WriteIndex([]byte(strings.Replace(string(old), `"serial": 1`, `"serial": 2`, 1) + " "))
+	if res := h.fetchRefused(reg.Id.String()); !strings.Contains(res, "published before with another index") {
+		t.Fatalf("a forked serial: %s", res)
+	}
+	r.WriteIndex([]byte(strings.Replace(string(old), `"serial": 1`, `"serial": 3, "expires": "2020-01-01T00:00:00Z"`, 1)))
+	if res := h.fetchRefused(reg.Id.String()); !strings.Contains(res, "expired") {
+		t.Fatalf("an expired index: %s", res)
+	}
+	r.Package("skills/adr-writing", map[string]string{"SKILL.md": "---\nname: adr-writing\ndescription: Write an ADR, briefly.\nversion: 1.1.0\n---\nContext, decision.\n"})
+	r.Publish()
+	r.Publish() // serial past every refused one
+	h.fetch(reg.Id.String(), 200)
+
+	for _, u := range []string{"file://" + r.Dir, "http://example.com/registry.git", r.Dir} {
+		if code := h.do("POST", "/registries", gen.NewRegistry{Name: fmt.Sprintf("u-%d", time.Now().UnixNano()), Url: u}, nil); code != 400 {
+			t.Fatalf("an unsigned registry at %s: %d", u, code)
+		}
+	}
+	if code := h.do("POST", "/registries", gen.NewRegistry{Name: fmt.Sprintf("u-%d", time.Now().UnixNano()), Url: "https://example.com/registry.git"}, nil); code != 201 {
+		t.Fatalf("an unsigned registry over https: %d", code)
+	}
+	// One that is there already (made before the rule), read from a directory: its packages are
+	// untrusted, and say so in what a person accepts.
+	name := fmt.Sprintf("legacy-%d", time.Now().UnixNano())
+	var id string
+	if err := h.pool.QueryRow(context.Background(), `INSERT INTO marketplace_registries (name, url) VALUES ($1, $2) RETURNING id::text`, name, r.URL).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	h.fetch(id, 200)
+	var d gen.MarketplaceDetail
+	h.do("GET", "/marketplace/skill/adr-writing?registryId="+id, nil, &d)
+	if d.Trusted || !slices.Contains(d.Manifest.Permissions, "comes from the unsigned registry "+name+": nothing but its checksum vouches for it") {
+		t.Fatalf("an unsigned registry's package: trusted %v, %v", d.Trusted, d.Manifest.Permissions)
+	}
+}
+
+func (h *harness) fetchRefused(registry string) string {
+	h.t.Helper()
+	var e gen.Error
+	if code := h.do("POST", "/registries/"+registry+"/fetch", nil, &e); code != 400 {
+		h.t.Fatalf("fetch: %d, want 400", code)
+	}
+	return e.Error
 }

@@ -1,6 +1,8 @@
 package marketplace
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +18,9 @@ type Rejection struct {
 // Contents are what one fetch of a registry yielded: the packages that verified, and those that
 // did not. An index that does not verify yields nothing at all.
 type Contents struct {
+	Index    Index
+	Digest   string // sha256 of the index's bytes
+	Signed   bool
 	Packages []Package
 	Rejected []Rejection
 }
@@ -40,6 +45,9 @@ func Read(fsys fs.FS, v Verifier, kinds Kinds, lim Limits) (Contents, error) {
 	if err != nil {
 		return out, err
 	}
+	sum := sha256.Sum256(index)
+	out.Index, out.Digest = idx, hex.EncodeToString(sum[:])
+	out.Signed = !isUnsigned(v)
 	for _, it := range idx.Items {
 		pkg, err := readPackage(fsys, it, v, kinds, lim)
 		if err != nil {
@@ -83,4 +91,14 @@ func readLimited(fsys fs.FS, name string, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("%s is larger than %d bytes", name, max)
 	}
 	return b, nil
+}
+
+// isUnsigned says whether a verifier takes indexes on their checksums alone.
+func isUnsigned(v Verifier) bool {
+	vv, ok := v.(verifier)
+	if !ok {
+		return false
+	}
+	_, unsigned := vv.IndexVerifier.(Unsigned)
+	return unsigned
 }

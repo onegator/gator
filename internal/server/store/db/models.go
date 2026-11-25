@@ -445,15 +445,17 @@ type MarketplaceItem struct {
 }
 
 type MarketplaceRegistry struct {
-	ID         pgtype.UUID        `json:"id"`
-	Name       string             `json:"name"`
-	Url        string             `json:"url"`
-	PublicKey  string             `json:"public_key"`
-	Builtin    bool               `json:"builtin"`
-	FetchedAt  pgtype.Timestamptz `json:"fetched_at"`
-	FetchError string             `json:"fetch_error"`
-	CreatedBy  pgtype.UUID        `json:"created_by"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Url         string             `json:"url"`
+	PublicKey   string             `json:"public_key"`
+	Builtin     bool               `json:"builtin"`
+	FetchedAt   pgtype.Timestamptz `json:"fetched_at"`
+	Serial      int64              `json:"serial"`
+	IndexDigest string             `json:"index_digest"`
+	FetchError  string             `json:"fetch_error"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type McpCall struct {

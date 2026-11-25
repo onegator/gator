@@ -66,7 +66,11 @@ func Scan(fsys fs.FS, kinds Kinds, lim Limits) (Index, error) {
 // package is one line of the diff.
 func MarshalIndex(idx Index) []byte {
 	var b strings.Builder
-	b.WriteString("{\"items\": [\n")
+	fmt.Fprintf(&b, "{\"serial\": %d,\n", idx.Serial)
+	if idx.Expires != "" {
+		fmt.Fprintf(&b, " \"expires\": %q,\n", idx.Expires)
+	}
+	b.WriteString(" \"items\": [\n")
 	for i, it := range idx.Items {
 		line, _ := json.Marshal(it)
 		b.WriteString("  ")

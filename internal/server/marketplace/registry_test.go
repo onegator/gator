@@ -2,6 +2,7 @@ package marketplace_test
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +99,7 @@ func TestAPackageChangedAfterPublishingIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got.Packages) != 3 || len(got.Rejected) != 1 || got.Rejected[0].Item.Name != "qa-engineer" ||
-		!strings.Contains(got.Rejected[0].Reason, "its files hash to") {
+		!strings.Contains(got.Rejected[0].Reason, "do not hash to what its index promises") {
 		t.Fatalf("packages %d, rejected %+v", len(got.Packages), got.Rejected)
 	}
 	// A file added is a change too.
@@ -270,5 +271,41 @@ func TestScanWritesTheIndexTheServerReads(t *testing.T) {
 	}
 	if string(marketplace.MarshalIndex(idx)) != string(r.Index()) {
 		t.Fatal("the index reads back as written")
+	}
+}
+
+// A package folder that is a link, or lies below one, is refused, read from a directory or
+// through os.Root; and a refusal never names what the files hash to.
+func TestALinkedPackageRootIsRefused(t *testing.T) {
+	r := marketplacetest.New(t)
+	r.Starter()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "SKILL.md"), []byte(marketplacetest.GoTesting["SKILL.md"]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(r.Dir, "skills/go-testing")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(r.Dir, "skills/go-testing")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(r.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	v, _ := marketplace.NewVerifier(r.PublicKey, marketplace.DefaultLimits)
+	for name, fsys := range map[string]fs.FS{"dir": os.DirFS(r.Dir), "root": root.FS()} {
+		got, err := marketplace.Read(fsys, v, marketplace.DefaultKinds(), marketplace.DefaultLimits)
+		if err != nil || len(got.Rejected) != 1 || !strings.Contains(got.Rejected[0].Reason, "symbolic link") {
+			t.Fatalf("%s: %v %+v", name, err, got.Rejected)
+		}
+	}
+	r.Write("agents/qa-engineer/instructions.md", "changed")
+	got, _ := read(t, r, r.PublicKey)
+	for _, rej := range got.Rejected {
+		if strings.Contains(rej.Reason, "sha256:") {
+			t.Fatalf("a refusal names a hash: %s", rej.Reason)
+		}
 	}
 }

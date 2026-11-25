@@ -3499,8 +3499,8 @@ components:
       required: [name, url]
       properties:
         name: { type: string, description: "lowercase letters, digits and dashes" }
-        url: { type: string, description: "a git repository, or file:// a directory on the server" }
-        publicKey: { type: string, description: "ed25519:<base64>; empty: an unsigned registry" }
+        url: { type: string, description: "a git repository (https or ssh), or file:// a directory on the server (signed registries only)" }
+        publicKey: { type: string, description: "ed25519:<base64>; empty: an unsigned registry, which must be fetched over https or ssh and is shown as untrusted" }
     RegistryFetch:
       type: object
       required: [registry, fetched, rejected]
@@ -3548,10 +3548,11 @@ components:
         skills: { type: array, items: { type: string }, description: "skills it uses and does not bring" }
     MarketplaceItem:
       type: object
-      required: [registryId, registryName, manifest, checksum, versions]
+      required: [registryId, registryName, trusted, manifest, checksum, versions]
       properties:
         registryId: { type: string, format: uuid }
         registryName: { type: string }
+        trusted: { type: boolean, description: "false: from an unsigned registry, which nothing but its checksums vouches for; show it as untrusted" }
         manifest: { $ref: "#/components/schemas/PackageManifest" }
         checksum: { type: string }
         versions: { type: array, items: { type: string }, description: "every version offered, newest first" }
@@ -3568,10 +3569,11 @@ components:
         workspace: { type: boolean, description: "installed for the whole workspace rather than this project" }
     MarketplaceDetail:
       type: object
-      required: [registryId, registryName, manifest, checksum, files, versions]
+      required: [registryId, registryName, trusted, manifest, checksum, files, versions]
       properties:
         registryId: { type: string, format: uuid }
         registryName: { type: string }
+        trusted: { type: boolean, description: "false: from an unsigned registry" }
         manifest: { $ref: "#/components/schemas/PackageManifest" }
         checksum: { type: string }
         files: { type: array, items: { type: string }, description: "the package's files, by path" }

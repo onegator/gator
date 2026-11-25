@@ -33,7 +33,8 @@ func (s *Server) failMarketplace(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error(), "permissions_not_accepted")
 	case errors.Is(err, marketplace.ErrConflict):
 		writeError(w, http.StatusConflict, err.Error(), "conflict")
-	case errors.Is(err, marketplace.ErrInvalid), errors.Is(err, marketplace.ErrSignature), errors.Is(err, marketplace.ErrChecksum):
+	case errors.Is(err, marketplace.ErrInvalid), errors.Is(err, marketplace.ErrSignature), errors.Is(err, marketplace.ErrChecksum),
+		errors.Is(err, marketplace.ErrStale):
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 	default:
 		s.fail(w, err)
@@ -125,7 +126,7 @@ func (s *Server) ListMarketplace(w http.ResponseWriter, r *http.Request, params 
 	}
 	out := make([]gen.MarketplaceItem, 0, len(list))
 	for _, l := range list {
-		item := gen.MarketplaceItem{RegistryId: toUUID(l.RegistryID), RegistryName: l.RegistryName,
+		item := gen.MarketplaceItem{RegistryId: toUUID(l.RegistryID), RegistryName: l.RegistryName, Trusted: l.Signed,
 			Manifest: toManifest(l.Manifest, false), Checksum: l.Checksum, Versions: l.Versions}
 		s.withProjectState(r, p, project, l.Manifest, &item.Installed, &item.Missing)
 		out = append(out, item)
@@ -173,7 +174,7 @@ func (s *Server) GetMarketplacePackage(w http.ResponseWriter, r *http.Request, k
 		s.failMarketplace(w, err)
 		return
 	}
-	out := gen.MarketplaceDetail{RegistryId: toUUID(chosen.RegistryID), RegistryName: chosen.RegistryName,
+	out := gen.MarketplaceDetail{RegistryId: toUUID(chosen.RegistryID), RegistryName: chosen.RegistryName, Trusted: chosen.Signed,
 		Manifest: toManifest(pkg.Manifest, true), Checksum: chosen.Checksum, Files: []string{}, Versions: []gen.PackageVersion{}}
 	for _, f := range pkg.Files {
 		out.Files = append(out.Files, f.Path)

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -41,11 +43,12 @@ type Catalog struct {
 	fetcher Fetcher
 	kinds   Kinds
 	limits  Limits
+	now     func() time.Time
 }
 
 // NewCatalog builds it.
 func NewCatalog(store catalogStore, fetcher Fetcher, kinds Kinds, lim Limits) *Catalog {
-	return &Catalog{store: store, fetcher: fetcher, kinds: kinds, limits: lim}
+	return &Catalog{store: store, fetcher: fetcher, kinds: kinds, limits: lim, now: time.Now}
 }
 
 // Builtin is Gator's own registry, as the server is configured (GATOR_MARKETPLACE_URL and
@@ -86,6 +89,11 @@ func (c *Catalog) AddRegistry(ctx context.Context, p auth.Principal, name, url, 
 	}
 	if strings.TrimSpace(url) == "" {
 		return db.MarketplaceRegistry{}, invalid("a registry needs an address")
+	}
+	if publicKey == "" && !securedTransport(url) {
+		// Without a signature, the transport is all that vouches for the index: a directory or
+		// plain http vouches for nothing.
+		return db.MarketplaceRegistry{}, invalid("an unsigned registry is fetched over https or ssh")
 	}
 	if publicKey != "" {
 		if _, err := ParsePublicKeys(publicKey); err != nil {
@@ -151,6 +159,9 @@ func (c *Catalog) refresh(ctx context.Context, id pgtype.UUID) (FetchResult, err
 	}
 	res := FetchResult{Registry: r}
 	contents, err := c.read(ctx, r)
+	if err == nil {
+		err = fresh(r, contents, c.now())
+	}
 	if err != nil {
 		_ = c.store.SetRegistryFetchError(ctx, db.SetRegistryFetchErrorParams{ID: id, FetchError: err.Error()})
 		return res, err
@@ -158,6 +169,10 @@ func (c *Catalog) refresh(ctx context.Context, id pgtype.UUID) (FetchResult, err
 	res.Rejected = contents.Rejected
 	keep := []string{}
 	for _, pkg := range contents.Packages {
+		if !contents.Signed {
+			pkg.Manifest.Permissions = normalPermissions(append(pkg.Manifest.Permissions,
+				"comes from the unsigned registry "+r.Name+": nothing but its checksum vouches for it"))
+		}
 		if err := c.store1(ctx, r.ID, pkg); err != nil {
 			if !errors.Is(err, ErrChecksum) {
 				return res, err
@@ -175,11 +190,29 @@ func (c *Catalog) refresh(ctx context.Context, id pgtype.UUID) (FetchResult, err
 	for _, rej := range res.Rejected {
 		why = append(why, rej.Reason)
 	}
-	if err := c.store.SetRegistryFetched(ctx, db.SetRegistryFetchedParams{ID: r.ID, FetchError: strings.Join(why, "; ")}); err != nil {
+	if err := c.store.SetRegistryFetched(ctx, db.SetRegistryFetchedParams{ID: r.ID, FetchError: strings.Join(why, "; "),
+		Serial: contents.Index.Serial, IndexDigest: contents.Digest}); err != nil {
 		return res, err
 	}
 	res.Registry, err = c.store.GetRegistry(ctx, id)
 	return res, err
+}
+
+// ErrStale is an index older than one already taken, another with the same serial, or one past its
+// expiry.
+var ErrStale = errors.New("the registry's index is stale")
+
+// fresh holds an index to being newer than the last one taken from the registry, and unexpired.
+func fresh(r db.MarketplaceRegistry, c Contents, now time.Time) error {
+	switch {
+	case c.Index.Serial < r.Serial:
+		return fmt.Errorf("%w: its serial %d is older than the %d taken before", ErrStale, c.Index.Serial, r.Serial)
+	case c.Index.Serial == r.Serial && r.IndexDigest != "" && c.Digest != r.IndexDigest:
+		return fmt.Errorf("%w: serial %d was published before with another index", ErrStale, c.Index.Serial)
+	case !c.Index.ExpiresAt().IsZero() && now.After(c.Index.ExpiresAt()):
+		return fmt.Errorf("%w: it expired at %s; the registry has to be signed again", ErrStale, c.Index.Expires)
+	}
+	return nil
 }
 
 func (c *Catalog) read(ctx context.Context, r db.MarketplaceRegistry) (Contents, error) {
@@ -203,7 +236,7 @@ func (c *Catalog) store1(ctx context.Context, registry pgtype.UUID, pkg Package)
 	prev, err := c.store.GetItemChecksum(ctx, db.GetItemChecksumParams{RegistryID: registry, Kind: it.Kind, Name: it.Name, Version: it.Version})
 	switch {
 	case err == nil && prev != it.Checksum:
-		return fmt.Errorf("%w: %s %s was published with other files (%s); a published version does not change", ErrChecksum, it.Key(), it.Version, prev)
+		return fmt.Errorf("%w: %s %s was published before with other files; a published version does not change", ErrChecksum, it.Key(), it.Version)
 	case err != nil && !errors.Is(err, pgx.ErrNoRows):
 		return err
 	}
@@ -217,6 +250,7 @@ func (c *Catalog) store1(ctx context.Context, registry pgtype.UUID, pkg Package)
 type Listing struct {
 	RegistryID   pgtype.UUID
 	RegistryName string
+	Signed       bool
 	Manifest     Manifest
 	Checksum     string
 	Versions     []string // every listed version, newest first
@@ -252,7 +286,7 @@ func (c *Catalog) List(ctx context.Context, p auth.Principal, f Filter) ([]Listi
 		key := row.RegistryName + "/" + row.Kind + "/" + row.Name
 		l, ok := byKey[key]
 		if !ok {
-			l = &Listing{RegistryID: row.RegistryID, RegistryName: row.RegistryName}
+			l = &Listing{RegistryID: row.RegistryID, RegistryName: row.RegistryName, Signed: row.Signed}
 			byKey[key] = l
 			order = append(order, key)
 		}
@@ -294,6 +328,7 @@ type Version struct {
 	RegistryID   pgtype.UUID
 	RegistryName string
 	Builtin      bool
+	Signed       bool
 	Manifest     Manifest
 	Checksum     string
 	Listed       bool
@@ -315,7 +350,7 @@ func (c *Catalog) Versions(ctx context.Context, p auth.Principal, kind, name str
 		if err := json.Unmarshal(row.Manifest, &m); err != nil {
 			continue
 		}
-		out = append(out, Version{RegistryID: row.RegistryID, RegistryName: row.RegistryName, Builtin: row.Builtin, Manifest: m, Checksum: row.Checksum, Listed: row.Listed})
+		out = append(out, Version{RegistryID: row.RegistryID, RegistryName: row.RegistryName, Builtin: row.Builtin, Signed: row.Signed, Manifest: m, Checksum: row.Checksum, Listed: row.Listed})
 	}
 	if len(out) == 0 {
 		return nil, ErrNotFound
@@ -359,4 +394,14 @@ func (c *Catalog) Package(ctx context.Context, registry pgtype.UUID, kind, name,
 		return pkg, err
 	}
 	return pkg, nil
+}
+
+// securedTransport says whether a registry's address is fetched over a transport that checks the
+// other end: https, or ssh.
+func securedTransport(raw string) bool {
+	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
+		return u.Scheme == "https" || u.Scheme == "ssh"
+	}
+	at := strings.Index(raw, "@")
+	return at > 0 && strings.Contains(raw[at:], ":") && !strings.HasPrefix(raw, "/")
 }

@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/onegator/gator/internal/server/marketplace"
 )
@@ -17,6 +17,9 @@ const marketplaceUsage = `usage: gator-server marketplace <command>
   keygen <private key file>       make a signing key: the private key goes to the file (0600), the public key is printed
   sign <registry dir> <key file>  sign index.json into index.json.sig
   verify <registry dir> [key]     read the registry as the server would; exit 1 if anything is turned away`
+
+// indexLifetime is how long a published index is good for.
+const indexLifetime = 180 * 24 * time.Hour
 
 // marketplaceCmd works with registries on disk: what a registry's maintainer and its CI run.
 func marketplaceCmd(args []string) error {
@@ -37,18 +40,29 @@ func marketplaceCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		out := marketplace.MarshalIndex(idx)
 		path := filepath.Join(args[1], marketplace.IndexFile)
+		var prev marketplace.Index
+		if raw, err := os.ReadFile(path); err == nil {
+			if prev, err = marketplace.ParseIndex(raw, kinds.Names()); err != nil {
+				return err
+			}
+		}
 		if len(args) == 3 {
-			cur, _ := os.ReadFile(path)
-			if !bytes.Equal(cur, out) {
+			if !prev.SameItems(idx) {
 				return fmt.Errorf("%s is not current: run gator-server marketplace index %s", path, args[1])
 			}
-			fmt.Printf("%s is current (%d packages)\n", path, len(idx.Items))
+			fmt.Printf("%s is current (%d packages, serial %d)\n", path, len(idx.Items), prev.Serial)
 			return nil
 		}
-		fmt.Printf("%d packages\n", len(idx.Items))
-		return os.WriteFile(path, out, 0o644)
+		// A change publishes a new serial, valid for half a year: the registry is signed again
+		// at least that often, and a server never takes an older index than one it has seen.
+		idx.Serial, idx.Expires = prev.Serial, prev.Expires
+		if !prev.SameItems(idx) || prev.Serial == 0 {
+			idx.Serial = prev.Serial + 1
+			idx.Expires = time.Now().UTC().Add(indexLifetime).Truncate(time.Second).Format(time.RFC3339)
+		}
+		fmt.Printf("%d packages, serial %d, expires %s\n", len(idx.Items), idx.Serial, idx.Expires)
+		return os.WriteFile(path, marketplace.MarshalIndex(idx), 0o644)
 	case args[0] == "keygen" && len(args) == 2:
 		pub, priv, err := marketplace.GenerateKey()
 		if err != nil {

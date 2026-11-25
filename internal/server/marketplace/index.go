@@ -3,6 +3,7 @@ package marketplace
 import (
 	"encoding/json"
 	"slices"
+	"time"
 )
 
 // IndexFile and SignatureFile are where a registry keeps its index and the signature over it.
@@ -17,8 +18,22 @@ const MaxIndexBytes = 1 << 20
 // Index is a registry's index.json: every package it offers, where its folder is and what its
 // files hash to.
 type Index struct {
-	Items []Item `json:"items"`
+	// Serial grows with every publication, and Expires (RFC 3339, optional) ends one: both are
+	// signed with the rest, so a registry (or whoever sits between it and the server) cannot serve
+	// an older index again, or keep serving one forever, to hold a fixed package back.
+	Serial  int64  `json:"serial"`
+	Expires string `json:"expires,omitempty"`
+	Items   []Item `json:"items"`
 }
+
+// ExpiresAt is when the index stops being good; zero: it does not say.
+func (idx Index) ExpiresAt() time.Time {
+	t, _ := time.Parse(time.RFC3339, idx.Expires)
+	return t
+}
+
+// SameItems says whether two indexes offer the same packages.
+func (idx Index) SameItems(other Index) bool { return slices.Equal(idx.Items, other.Items) }
 
 // Item is one package of an index.
 type Item struct {
@@ -41,6 +56,12 @@ func ParseIndex(raw []byte, kinds []string) (Index, error) {
 	}
 	if err := json.Unmarshal(raw, &idx); err != nil {
 		return idx, invalid("the index is not JSON: %v", err)
+	}
+	if idx.Serial < 0 {
+		return idx, invalid("the index's serial is negative")
+	}
+	if idx.Expires != "" && idx.ExpiresAt().IsZero() {
+		return idx, invalid("the index's expires %q is not RFC 3339", idx.Expires)
 	}
 	seen := map[string]bool{}
 	for _, it := range idx.Items {

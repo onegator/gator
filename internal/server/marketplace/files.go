@@ -101,6 +101,9 @@ func SafePath(p string) error {
 // a plain file or directory, an unsafe name or a file over the limits refuses the whole package:
 // a link could point anywhere on the machine that fetched it.
 func ReadFiles(fsys fs.FS, dir string, lim Limits) (Files, error) {
+	if err := noLinksTo(fsys, dir); err != nil {
+		return nil, err
+	}
 	var out Files
 	total := 0
 	err := fs.WalkDir(fsys, dir, func(p string, d fs.DirEntry, err error) error {
@@ -175,6 +178,33 @@ func CheckFiles(files Files, lim Limits) error {
 	}
 	if total > lim.MaxBytes {
 		return invalid("the files are larger than %d bytes together", lim.MaxBytes)
+	}
+	return nil
+}
+
+// noLinksTo refuses a package folder that is, or lies below, a symbolic link: WalkDir follows the
+// folder it starts at, and a registry could point a package at any directory of the machine that
+// fetched it. (Registries are read through os.Root as well, which keeps links inside.)
+func noLinksTo(fsys fs.FS, dir string) error {
+	if dir == "." {
+		return nil
+	}
+	parts := strings.Split(dir, "/")
+	for i := range parts {
+		p := strings.Join(parts[:i+1], "/")
+		info, err := fs.Lstat(fsys, p)
+		if errors.Is(err, errors.ErrUnsupported) {
+			return nil
+		}
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return invalid("%s is not there", dir)
+			}
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return invalid("%s is a symbolic link", p)
+		}
 	}
 	return nil
 }

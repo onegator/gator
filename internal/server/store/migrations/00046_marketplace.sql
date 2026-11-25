@@ -12,6 +12,10 @@ CREATE TABLE marketplace_registries (
     public_key  text NOT NULL DEFAULT '',
     builtin     boolean NOT NULL DEFAULT false,
     fetched_at  timestamptz,
+    -- The last index taken: its serial and its digest. An older serial, or the same serial with
+    -- other bytes, is a replay or a fork, and is refused.
+    serial       bigint NOT NULL DEFAULT 0,
+    index_digest text NOT NULL DEFAULT '',
     -- Why the last fetch failed, or which packages it turned away; empty when all was well.
     fetch_error text NOT NULL DEFAULT '',
     created_by  uuid REFERENCES users(id) ON DELETE SET NULL,

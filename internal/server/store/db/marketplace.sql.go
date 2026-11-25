@@ -91,7 +91,7 @@ func (q *Queries) CreateInstalledAgent(ctx context.Context, arg CreateInstalledA
 const createRegistry = `-- name: CreateRegistry :one
 INSERT INTO marketplace_registries (name, url, public_key, created_by)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, url, public_key, builtin, fetched_at, fetch_error, created_by, created_at
+RETURNING id, name, url, public_key, builtin, fetched_at, serial, index_digest, fetch_error, created_by, created_at
 `
 
 type CreateRegistryParams struct {
@@ -116,6 +116,8 @@ func (q *Queries) CreateRegistry(ctx context.Context, arg CreateRegistryParams) 
 		&i.PublicKey,
 		&i.Builtin,
 		&i.FetchedAt,
+		&i.Serial,
+		&i.IndexDigest,
 		&i.FetchError,
 		&i.CreatedBy,
 		&i.CreatedAt,
@@ -179,8 +181,13 @@ func (q *Queries) DeleteSkill(ctx context.Context, id pgtype.UUID) (int64, error
 const ensureBuiltinRegistry = `-- name: EnsureBuiltinRegistry :one
 INSERT INTO marketplace_registries (name, url, public_key, builtin)
 VALUES ($1, $2, $3, true)
-ON CONFLICT (builtin) WHERE builtin DO UPDATE SET url = EXCLUDED.url, public_key = EXCLUDED.public_key, name = EXCLUDED.name
-RETURNING id, name, url, public_key, builtin, fetched_at, fetch_error, created_by, created_at
+ON CONFLICT (builtin) WHERE builtin DO UPDATE SET url = EXCLUDED.url, public_key = EXCLUDED.public_key, name = EXCLUDED.name,
+    -- another registry (or another key) starts its serials afresh
+    serial = CASE WHEN marketplace_registries.url = EXCLUDED.url AND marketplace_registries.public_key = EXCLUDED.public_key
+                  THEN marketplace_registries.serial ELSE 0 END,
+    index_digest = CASE WHEN marketplace_registries.url = EXCLUDED.url AND marketplace_registries.public_key = EXCLUDED.public_key
+                  THEN marketplace_registries.index_digest ELSE '' END
+RETURNING id, name, url, public_key, builtin, fetched_at, serial, index_digest, fetch_error, created_by, created_at
 `
 
 type EnsureBuiltinRegistryParams struct {
@@ -201,6 +208,8 @@ func (q *Queries) EnsureBuiltinRegistry(ctx context.Context, arg EnsureBuiltinRe
 		&i.PublicKey,
 		&i.Builtin,
 		&i.FetchedAt,
+		&i.Serial,
+		&i.IndexDigest,
 		&i.FetchError,
 		&i.CreatedBy,
 		&i.CreatedAt,
@@ -378,7 +387,7 @@ func (q *Queries) GetItemChecksum(ctx context.Context, arg GetItemChecksumParams
 }
 
 const getRegistry = `-- name: GetRegistry :one
-SELECT id, name, url, public_key, builtin, fetched_at, fetch_error, created_by, created_at FROM marketplace_registries WHERE id = $1
+SELECT id, name, url, public_key, builtin, fetched_at, serial, index_digest, fetch_error, created_by, created_at FROM marketplace_registries WHERE id = $1
 `
 
 func (q *Queries) GetRegistry(ctx context.Context, id pgtype.UUID) (MarketplaceRegistry, error) {
@@ -391,6 +400,8 @@ func (q *Queries) GetRegistry(ctx context.Context, id pgtype.UUID) (MarketplaceR
 		&i.PublicKey,
 		&i.Builtin,
 		&i.FetchedAt,
+		&i.Serial,
+		&i.IndexDigest,
 		&i.FetchError,
 		&i.CreatedBy,
 		&i.CreatedAt,
@@ -539,7 +550,7 @@ func (q *Queries) ListInstallations(ctx context.Context, projectID pgtype.UUID) 
 }
 
 const listItemVersions = `-- name: ListItemVersions :many
-SELECT i.registry_id, r.name AS registry_name, r.builtin, i.kind, i.name, i.version, i.manifest, i.checksum, i.listed, i.fetched_at
+SELECT i.registry_id, r.name AS registry_name, r.builtin, (r.public_key <> '')::boolean AS signed, i.kind, i.name, i.version, i.manifest, i.checksum, i.listed, i.fetched_at
 FROM marketplace_items i JOIN marketplace_registries r ON r.id = i.registry_id
 WHERE i.kind = $1 AND i.name = $2
   AND ($3::uuid IS NULL OR i.registry_id = $3)
@@ -556,6 +567,7 @@ type ListItemVersionsRow struct {
 	RegistryID   pgtype.UUID        `json:"registry_id"`
 	RegistryName string             `json:"registry_name"`
 	Builtin      bool               `json:"builtin"`
+	Signed       bool               `json:"signed"`
 	Kind         string             `json:"kind"`
 	Name         string             `json:"name"`
 	Version      string             `json:"version"`
@@ -578,6 +590,7 @@ func (q *Queries) ListItemVersions(ctx context.Context, arg ListItemVersionsPara
 			&i.RegistryID,
 			&i.RegistryName,
 			&i.Builtin,
+			&i.Signed,
 			&i.Kind,
 			&i.Name,
 			&i.Version,
@@ -597,7 +610,7 @@ func (q *Queries) ListItemVersions(ctx context.Context, arg ListItemVersionsPara
 }
 
 const listItems = `-- name: ListItems :many
-SELECT i.registry_id, r.name AS registry_name, i.kind, i.name, i.version, i.manifest, i.checksum, i.fetched_at
+SELECT i.registry_id, r.name AS registry_name, (r.public_key <> '')::boolean AS signed, i.kind, i.name, i.version, i.manifest, i.checksum, i.fetched_at
 FROM marketplace_items i JOIN marketplace_registries r ON r.id = i.registry_id
 WHERE i.listed AND ($1::text IS NULL OR i.kind = $1)
 ORDER BY r.builtin DESC, r.name, i.kind, i.name
@@ -606,6 +619,7 @@ ORDER BY r.builtin DESC, r.name, i.kind, i.name
 type ListItemsRow struct {
 	RegistryID   pgtype.UUID        `json:"registry_id"`
 	RegistryName string             `json:"registry_name"`
+	Signed       bool               `json:"signed"`
 	Kind         string             `json:"kind"`
 	Name         string             `json:"name"`
 	Version      string             `json:"version"`
@@ -628,6 +642,7 @@ func (q *Queries) ListItems(ctx context.Context, kind *string) ([]ListItemsRow, 
 		if err := rows.Scan(
 			&i.RegistryID,
 			&i.RegistryName,
+			&i.Signed,
 			&i.Kind,
 			&i.Name,
 			&i.Version,
@@ -646,7 +661,7 @@ func (q *Queries) ListItems(ctx context.Context, kind *string) ([]ListItemsRow, 
 }
 
 const listRegistries = `-- name: ListRegistries :many
-SELECT id, name, url, public_key, builtin, fetched_at, fetch_error, created_by, created_at FROM marketplace_registries ORDER BY builtin DESC, name
+SELECT id, name, url, public_key, builtin, fetched_at, serial, index_digest, fetch_error, created_by, created_at FROM marketplace_registries ORDER BY builtin DESC, name
 `
 
 func (q *Queries) ListRegistries(ctx context.Context) ([]MarketplaceRegistry, error) {
@@ -665,6 +680,8 @@ func (q *Queries) ListRegistries(ctx context.Context) ([]MarketplaceRegistry, er
 			&i.PublicKey,
 			&i.Builtin,
 			&i.FetchedAt,
+			&i.Serial,
+			&i.IndexDigest,
 			&i.FetchError,
 			&i.CreatedBy,
 			&i.CreatedAt,
@@ -775,16 +792,25 @@ func (q *Queries) SetRegistryFetchError(ctx context.Context, arg SetRegistryFetc
 }
 
 const setRegistryFetched = `-- name: SetRegistryFetched :exec
-UPDATE marketplace_registries SET fetched_at = now(), fetch_error = $1 WHERE id = $2
+UPDATE marketplace_registries SET fetched_at = now(), fetch_error = $1, serial = $2,
+    index_digest = $3
+WHERE id = $4
 `
 
 type SetRegistryFetchedParams struct {
-	FetchError string      `json:"fetch_error"`
-	ID         pgtype.UUID `json:"id"`
+	FetchError  string      `json:"fetch_error"`
+	Serial      int64       `json:"serial"`
+	IndexDigest string      `json:"index_digest"`
+	ID          pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) SetRegistryFetched(ctx context.Context, arg SetRegistryFetchedParams) error {
-	_, err := q.db.Exec(ctx, setRegistryFetched, arg.FetchError, arg.ID)
+	_, err := q.db.Exec(ctx, setRegistryFetched,
+		arg.FetchError,
+		arg.Serial,
+		arg.IndexDigest,
+		arg.ID,
+	)
 	return err
 }
 
