@@ -21,6 +21,9 @@ type Options struct {
 	Stderr      io.Writer         // the plugin's log; default os.Stderr
 	Timeout     time.Duration     // per call; default 30s
 	WebhookURL  string            // sent in initialize, as the server does when it knows its address
+	// AllowPrivateOutbound passes GATOR_OUTBOUND_ALLOW_PRIVATE=1, as a server that allows private
+	// addresses does: a plugin holding its requests to netguard may then reach a test's fake API.
+	AllowPrivateOutbound bool
 }
 
 // Process is a running plugin connected to a Core.
@@ -50,6 +53,9 @@ func Start(ctx context.Context, command []string, core *Core, o Options) (*Proce
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TMPDIR=" + os.TempDir(), "LANG=C.UTF-8",
 		"GATOR_PLUGIN_PROJECT=" + o.ProjectSlug}
+	if o.AllowPrivateOutbound {
+		cmd.Env = append(cmd.Env, "GATOR_OUTBOUND_ALLOW_PRIVATE=1")
+	}
 	for k, v := range o.Secrets {
 		cmd.Env = append(cmd.Env, plugin.SecretEnv(k)+"="+v)
 	}

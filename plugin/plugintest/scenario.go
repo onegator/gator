@@ -29,6 +29,8 @@ type Scenario struct {
 	Secrets map[string]string `json:"secrets"`
 	Tasks   []plugin.TaskRef  `json:"tasks"`
 	Steps   []Step            `json:"steps"`
+	// AllowPrivateOutbound lets the plugin reach a fake API on this machine (see Options).
+	AllowPrivateOutbound bool `json:"allow_private_outbound,omitempty"`
 }
 
 // Step is one hook call. Fields apply to the hooks that use them.
@@ -144,7 +146,8 @@ func Run(ctx context.Context, command []string, s Scenario, stderr io.Writer, ti
 	if slug == "" {
 		slug = "demo"
 	}
-	p, err := Start(ctx, command, core, Options{ProjectSlug: slug, Config: s.Config, Secrets: s.Secrets, Stderr: stderr, Timeout: timeout})
+	p, err := Start(ctx, command, core, Options{ProjectSlug: slug, Config: s.Config, Secrets: s.Secrets, Stderr: stderr, Timeout: timeout,
+		AllowPrivateOutbound: s.AllowPrivateOutbound})
 	if err != nil {
 		return Report{}, err
 	}

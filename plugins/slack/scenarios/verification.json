@@ -1,0 +1,13 @@
+{
+  "project": {"slug": "demo"},
+  "config": {"channels": "C0123=eng"},
+  "secrets": {"bot_token": "xoxb-unused-in-this-scenario", "signing_secret": "dev-secret"},
+  "steps": [
+    {"hook": "webhook", "body": {"type": "url_verification", "challenge": "dev-challenge"},
+     "headers": {"Content-Type": "application/json"},
+     "sign": {"header": "X-Slack-Signature", "secret": "signing_secret", "scheme": "slack"}},
+    {"hook": "webhook", "body": {"type": "url_verification", "challenge": "forged"},
+     "headers": {"Content-Type": "application/json", "X-Slack-Signature": "v0=0000", "X-Slack-Request-Timestamp": "1700000000"},
+     "expect_error": true}
+  ]
+}
