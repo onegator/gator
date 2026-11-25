@@ -265,3 +265,24 @@ func TestInstallingQAEngineerPutsQAInTheProjectAtOnce(t *testing.T) {
 		t.Fatalf("installations: %+v", installs)
 	}
 }
+
+// A knowledge pack from the marketplace is what knowledge_packs always held: installed into a
+// project, it is switched on there; removed, switched off.
+func TestAKnowledgePackFromTheMarketplaceIsSwitchedOn(t *testing.T) {
+	h := newHarness(t)
+	p := h.oneProject("kn")
+	project := p.Id.String()
+	inst := h.install(project, gen.NewInstallation{Kind: "knowledge", Name: "go-service", AcceptedPermissions: h.accept("knowledge", "go-service", "")})
+	var packs []gen.KnowledgePack
+	h.do("GET", "/projects/"+project+"/packs", nil, &packs)
+	if len(packs) != 1 || packs[0].Name != "go-service" || packs[0].Enabled == nil || !*packs[0].Enabled {
+		t.Fatalf("packs: %+v", packs)
+	}
+	if code := h.do("DELETE", "/installations/"+inst.Id.String(), nil, nil); code != 204 {
+		t.Fatalf("remove: %d", code)
+	}
+	h.do("GET", "/projects/"+project+"/packs", nil, &packs)
+	if len(packs) != 0 {
+		t.Fatalf("switched off: %+v", packs)
+	}
+}

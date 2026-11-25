@@ -79,6 +79,12 @@ zajmowany przed startem), więc fazy 3–5 przesunęły się o kolejną. Faza 3 
 (`00044_brain_curation.sql`: dokąd curator przeczytał każdą rozmowę), więc embeddingi mają 00045, a
 fazy 4–5 przesunęły się o jeszcze jedną.
 
+Faza 4 zmieściła się w dwóch zaplanowanych numerach: `00046_marketplace.sql` (rejestry, cache
+paczek, instalacje, skille) i `00047_mcp_servers.sql` (serwery MCP, `mcp_calls` i `target` w
+`plugin_connect_states` dla OAuth serwerów MCP). 00045 wciąż czeka na embeddingi; kto ją napisze,
+uruchamia `goose` z `allow-missing` na bazach, które mają już 00046 (goose odrzuca brakującą
+migrację starszą niż ostatnia wykonana).
+
 Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
 
 ## Co celowo NIE wchodzi

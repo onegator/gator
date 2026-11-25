@@ -73,7 +73,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	return &Module{
 		Catalog: catalog,
 		Installations: NewInstallations(q, catalog, deps.Roles, deps.Capabilities, tx,
-			NewAgentInstaller(skills), skills, NewIntegrationInstaller(MCPTrack{}, native), ProcessInstaller{}),
+			NewAgentInstaller(skills), skills, NewIntegrationInstaller(MCPTrack{}, native), ProcessInstaller{}, KnowledgeInstaller{}),
 	}
 }
 

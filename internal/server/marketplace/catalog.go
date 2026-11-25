@@ -345,18 +345,3 @@ func (c *Catalog) Package(ctx context.Context, registry pgtype.UUID, kind, name,
 	}
 	return pkg, nil
 }
-
-// Newest is the newest listed version of a package in a registry (zero: any registry, Gator's
-// first).
-func (c *Catalog) Newest(ctx context.Context, p auth.Principal, kind, name string, registry pgtype.UUID) (Version, error) {
-	vs, err := c.Versions(ctx, p, kind, name, registry)
-	if err != nil {
-		return Version{}, err
-	}
-	for _, v := range vs {
-		if v.Listed {
-			return v, nil
-		}
-	}
-	return Version{}, ErrNotFound
-}
