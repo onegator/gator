@@ -108,6 +108,8 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q is not available on this runner", job.Backend)}
 	}
 	access := AccessFor(job)
+	approve, deny := approvals(job, be, io)
+	access.Deny = deny
 	if !backend.Supports(be, access) {
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q cannot hold an agent to what this job may touch", job.Backend)}
 	}
@@ -151,7 +153,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	var last backend.Outcome
 	prompt, session, tools := opening, "", 0
 	steers, objections := 0, 0
-	steer := steeringFor(be, io, cps, nil)
+	steer := steeringFor(be, io, cps, approve)
 	for {
 		budget := 0
 		if job.Bounds.MaxToolCalls > 0 {

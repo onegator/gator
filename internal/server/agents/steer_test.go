@@ -83,3 +83,37 @@ func TestACorrectionThatCannotArriveSaysSo(t *testing.T) {
 		t.Fatalf("said: %q", last.Body)
 	}
 }
+
+// waitsRecorder records what a steer refused of what its agent waited on.
+type waitsRecorder struct {
+	mu   sync.Mutex
+	jobs []pgtype.UUID
+	body []string
+}
+
+func (w *waitsRecorder) DenyByMessage(_ context.Context, job, _ pgtype.UUID, body string) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.jobs, w.body = append(w.jobs, job), append(w.body, body)
+	return 1, nil
+}
+
+// A person's message to an agent that waits for a decision answers it (a refusal with the message
+// as the reason) and steers it; an agent's words answer nothing.
+func TestASteerAnswersWhatTheAgentWaitsOn(t *testing.T) {
+	w := newWorld(t)
+	rec, waits := &steers{}, &waitsRecorder{}
+	steerer := NewSteerer(w.q, rec, w.mod.Voice, nil)
+	steerer.waits = waits
+	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, steerer)
+	reviewer, worker := w.agent("reviewer"), w.agent("worker")
+	turn := w.turnOf(reviewer, w.post(w.admin, w.general.ID, "@reviewer look", reviewer))
+	w.post(w.admin, turn.ConversationID, "no network, use the vendored copy")
+	if len(waits.jobs) != 1 || waits.jobs[0] != turn.JobID || waits.body[0] != "no network, use the vendored copy" || len(rec.got[turn.JobID.Bytes]) != 1 {
+		t.Fatalf("waits %+v, steers %v", waits, rec.got)
+	}
+	w.delegate(turn, "@worker over to you", worker)
+	if len(waits.jobs) != 1 {
+		t.Fatal("an agent's words answered a wait")
+	}
+}

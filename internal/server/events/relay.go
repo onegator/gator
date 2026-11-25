@@ -78,6 +78,9 @@ var inboxEvents = map[string]bool{
 	"brain.proposed":     true, "brain.approved": true, "brain.rejected": true, "brain.archived": true,
 	"plugin.disabled": true, "plugin.connected": true,
 	"runner.auth_changed": true,
+	// What an agent waits for a person on: "Needs you" follows it from any device.
+	"runtime_request.created": true, "runtime_request.decided": true, "runtime_request.expired": true,
+	"runtime_request.cancelled": true,
 }
 
 // Publish delivers e to every subscriber of its topics. Slow subscribers drop events

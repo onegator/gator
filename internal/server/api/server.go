@@ -27,6 +27,7 @@ import (
 	"github.com/onegator/gator/internal/server/a2a"
 	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/approvals"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/brain"
@@ -99,6 +100,8 @@ type Server struct {
 	// Review is what each turn of a job changed and what people say about it; nil: its endpoints
 	// answer 503.
 	Review *review.Module
+	// Approvals are what agents wait for a person on mid-turn; nil: their endpoints answer 503.
+	Approvals *approvals.Service
 }
 
 var _ gen.ServerInterface = (*Server)(nil)

@@ -274,6 +274,8 @@ func (s *session) handle(env proto.RawEnvelope) {
 		}
 	case proto.TypeCheckpoint:
 		report(s, env, "checkpoint", s.checkpoint)
+	case proto.TypeRuntimeRequest:
+		report(s, env, "runtime_request", s.runtimeRequest)
 	case proto.TypeTurnEnding:
 		report(s, env, "turn_ending", func(te proto.TurnEnding) error {
 			s.turnEnding(te)
@@ -479,6 +481,7 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	}
 	if s.version >= liveVersion && j.Tier != TierChat {
 		pj.NoCheckpoints = !s.m.process.CheckpointsOn(ctx, j.ProjectID)
+		pj.Approvals = s.approvals(ctx, q, j)
 	}
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
@@ -502,6 +505,23 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
 		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context) + len(brief.Docs))})
 	return pj
+}
+
+// approvals are the tools of a work job that wait for a person: the project's policy, tightened by
+// the job's agent's own. A policy that cannot be read is the default one, never none.
+func (s *session) approvals(ctx context.Context, q *db.Queries, j db.Job) *proto.Approvals {
+	var agentPolicy []byte
+	if j.AgentID.Valid {
+		if a, err := q.GetAgent(ctx, j.AgentID); err == nil {
+			agentPolicy = a.Policy
+		}
+	}
+	a, err := s.m.process.JobApprovals(ctx, j.ProjectID, agentPolicy)
+	if err != nil {
+		s.m.log.Warn("reading the approvals policy", "job", uuidString(j.ID), "err", err)
+		a = process.DefaultApprovals
+	}
+	return &proto.Approvals{Ask: a.Ask, Deny: a.Deny, TimeoutSeconds: int(a.TimeoutOrDefault().Seconds())}
 }
 
 // guide is the prompt of the job's agent: its own instructions when a person wrote them, else
@@ -723,6 +743,35 @@ func (s *session) checkpoint(cp proto.Checkpoint) error {
 		}
 		s.m.log.Warn("keeping a checkpoint", "job", cp.JobID, "seq", cp.Seq, "err", err)
 		return errRetry
+	}
+	return nil
+}
+
+// runtimeRequest keeps what the agent of a job this runner holds waits for a person on, and answers
+// at once one that was decided already (the runner sends a request again after a reconnect).
+// Without anyone to take requests, the agent is told no: a request nobody can see is never a yes.
+func (s *session) runtimeRequest(r proto.RuntimeRequest) error {
+	ctx := s.ctx
+	job, err := s.ownJob(ctx, db.New(s.m.pool), r.JobID)
+	if err != nil {
+		return err
+	}
+	rt := s.m.cfg.Runtime
+	if rt == nil {
+		return s.send(proto.TypeRuntimeDecision, proto.RuntimeDecision{ID: r.ID, JobID: r.JobID, Decision: proto.DecisionCancelled,
+			Feedback: "this server takes no approvals"})
+	}
+	decided, err := rt.Request(ctx, job, r)
+	if err != nil {
+		if refused(err) {
+			_ = s.send(proto.TypeRuntimeDecision, proto.RuntimeDecision{ID: r.ID, JobID: r.JobID, Decision: proto.DecisionCancelled, Feedback: err.Error()})
+			return err
+		}
+		s.m.log.Warn("keeping a runtime request", "job", r.JobID, "err", err)
+		return errRetry
+	}
+	if decided != nil {
+		return s.send(proto.TypeRuntimeDecision, *decided)
 	}
 	return nil
 }

@@ -108,6 +108,15 @@ type Config struct {
 	// Checkpoints keeps what runners say each turn changed (review.Checkpoints); nil: a
 	// checkpoint is acknowledged and dropped.
 	Checkpoints CheckpointRecorder
+	// Runtime takes the requests agents wait for a person on (approvals.Service); nil: a request
+	// is refused, and the agent told no.
+	Runtime RuntimeRequests
+}
+
+// RuntimeRequests keeps what a job's agent waits for a person on. approvals.Service is one. A
+// request it already decided answers the decision, for the runner to hear again.
+type RuntimeRequests interface {
+	Request(ctx context.Context, job db.Job, r proto.RuntimeRequest) (*proto.RuntimeDecision, error)
 }
 
 // CheckpointRecorder keeps a checkpoint of a job's worktree. review.Checkpoints is one.
@@ -237,6 +246,10 @@ func New(pool *pgxpool.Pool, proc *process.Service, hub *events.Hub, log *slog.L
 	return &Manager{pool: pool, process: proc, hub: hub, log: log, cfg: cfg, now: time.Now, sessions: map[[16]byte]*session{},
 		machines: map[[16]byte]*machine{}, provisions: map[[16]byte]int{}}
 }
+
+// UseRuntime has r take the requests agents wait for a person on. It is wiring, for a service that
+// needs the manager itself to send its decisions: call it before the manager serves runners.
+func (m *Manager) UseRuntime(r RuntimeRequests) { m.cfg.Runtime = r }
 
 // UseBriefer has b tell replies' agents their conversations. It is wiring, for a briefer that
 // needs the manager itself to queue its summaries: call it before the manager serves runners.
@@ -640,6 +653,16 @@ func (m *Manager) SteerJob(ctx context.Context, jobID pgtype.UUID, message strin
 		return ErrRunnerOffline
 	}
 	return s.send(proto.TypeSteer, proto.Steer{JobID: uuidString(jobID), Message: message})
+}
+
+// SendDecision tells the runner working on a job how a person decided its agent's request. A runner
+// that is away hears it when it sends the request again after reconnecting.
+func (m *Manager) SendDecision(ctx context.Context, job db.Job, d proto.RuntimeDecision) error {
+	s := m.session(job.RunnerID)
+	if s == nil {
+		return ErrRunnerOffline
+	}
+	return s.send(proto.TypeRuntimeDecision, d)
 }
 
 // RequestLogin asks a runner to start an interactive backend login.

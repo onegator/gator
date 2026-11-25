@@ -382,6 +382,11 @@ func sessionPermissionArgs(spec backend.Spec, mcp []string, skills bool) []strin
 		return append(args, "--permission-prompts", "none")
 	}
 	// A job with an approver asks about everything its mode does not allow, and the runner
-	// settles all but what the project's approvals policy names (see executor.Approvals).
-	return []string{"--permission-mode", "manual", "--permission-prompts", "host"}
+	// settles all but what the project's approvals policy names (executor's approver); what the
+	// policy denies is denied by the CLI too.
+	args = []string{"--permission-mode", "manual", "--permission-prompts", "host"}
+	if len(spec.Access.Deny) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(spec.Access.Deny, ","))
+	}
+	return args
 }

@@ -38,7 +38,12 @@ func permissionArgs(a backend.Access, mcp []string, skills bool) []string {
 		return []string{"--permission-mode", "dontAsk", "--tools", "", "--disallowedTools", strings.Join(writingTools, ",")}
 	}
 	if !a.ReadOnly {
-		return []string{"--permission-mode", "bypassPermissions"}
+		args := []string{"--permission-mode", "bypassPermissions"}
+		if len(a.Deny) > 0 {
+			// Deny rules hold in every permission mode, bypass included.
+			args = append(args, "--disallowedTools", strings.Join(a.Deny, ","))
+		}
+		return args
 	}
 	tools := append([]string{}, readOnlyTools...)
 	allowed := append([]string{}, readOnlyTools...)

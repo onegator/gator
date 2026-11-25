@@ -35,6 +35,10 @@ type JobIO struct {
 	// Checkpoint delivers a checkpoint of the worktree, reliably, in order with the events.
 	// Nil: the server does not take them.
 	Checkpoint func(proto.Checkpoint)
+	// Request asks a person, through the server, before a tool, and waits for the decision: until
+	// it comes, ctx ends (cancelled) or the request's own timeout passes (expired). Nil: nobody can
+	// be asked from this runner's connection.
+	Request func(ctx context.Context, r proto.RuntimeRequest) proto.RuntimeDecision
 }
 
 // Executor runs one job and returns its receipt. It must stop when ctx is cancelled
@@ -121,6 +125,8 @@ type runningJob struct {
 	steer  chan string
 	// cont carries the server's answer to a turn_ending question, one per question.
 	cont chan proto.Continue
+	// decisions are the runtime requests waiting for a person, by request id.
+	decisions map[string]chan proto.RuntimeDecision
 }
 
 // Client is one runner.
@@ -431,7 +437,7 @@ func (c *Client) speaks(v int) bool {
 
 // reliable are the messages kept until the server acks them and resent after a reconnect.
 func reliable(t proto.MessageType) bool {
-	return t == proto.TypeEvents || t == proto.TypeFinish || t == proto.TypeCheckpoint
+	return t == proto.TypeEvents || t == proto.TypeFinish || t == proto.TypeCheckpoint || t == proto.TypeRuntimeRequest
 }
 
 func (c *Client) sendReliable(m *outMsg) {
@@ -556,6 +562,20 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				}
 				c.mu.Unlock()
 			}
+		case proto.TypeRuntimeDecision:
+			var d proto.RuntimeDecision
+			if env.Into(&d) == nil {
+				c.mu.Lock()
+				if rj := c.jobs[d.JobID]; rj != nil {
+					if ch := rj.decisions[d.ID]; ch != nil {
+						select {
+						case ch <- d:
+						default: // answered already
+						}
+					}
+				}
+				c.mu.Unlock()
+			}
 		case proto.TypeStop:
 			var sp proto.Stop
 			if env.Into(&sp) == nil {
@@ -636,7 +656,8 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 		prev := cancel
 		cancel = func(err error) { prev(err); tcancel() }
 	}
-	rj := &runningJob{cancel: cancel, steer: make(chan string, 8), cont: make(chan proto.Continue, 1)}
+	rj := &runningJob{cancel: cancel, steer: make(chan string, 8), cont: make(chan proto.Continue, 1),
+		decisions: map[string]chan proto.RuntimeDecision{}}
 	c.jobs[job.JobID] = rj
 	c.mu.Unlock()
 
@@ -661,7 +682,10 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 			cp.JobID = job.JobID
 			c.sendReliable(&outMsg{typ: proto.TypeCheckpoint, payload: cp})
 		}
-		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer, Checkpoint: checkpoint,
+		request := func(ctx context.Context, r proto.RuntimeRequest) proto.RuntimeDecision {
+			return c.request(ctx, job.JobID, rj, r)
+		}
+		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer, Checkpoint: checkpoint, Request: request,
 			TurnEnding: func(te proto.TurnEnding) []proto.Objection { return c.askTurnEnding(jctx, rj, te) }})
 		cause := context.Cause(jctx)
 		cancel(nil)
@@ -738,6 +762,43 @@ func (c *Client) askTurnEnding(ctx context.Context, rj *runningJob, te proto.Tur
 		return nil
 	case <-ctx.Done():
 		return nil
+	}
+}
+
+// requestGrace is how long past a request's own timeout the runner waits for the server's
+// decision: the server expires it and says so, and that answer should be the one that counts.
+const requestGrace = 30 * time.Second
+
+// request sends a runtime request and waits for its decision. It is reliable like events: a
+// reconnect sends it again and the server answers with the decision it already made. Every way of
+// not getting one — no server that asks, a stop, the timeout — is a refusal, never a yes.
+func (c *Client) request(ctx context.Context, jobID string, rj *runningJob, r proto.RuntimeRequest) proto.RuntimeDecision {
+	r.JobID = jobID
+	no := proto.RuntimeDecision{ID: r.ID, JobID: jobID, Decision: proto.DecisionCancelled}
+	if !c.speaks(liveVersion) {
+		no.Feedback = "this server cannot ask anyone"
+		return no
+	}
+	ch := make(chan proto.RuntimeDecision, 1)
+	c.mu.Lock()
+	rj.decisions[r.ID] = ch
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(rj.decisions, r.ID)
+		c.mu.Unlock()
+	}()
+	c.sendReliable(&outMsg{typ: proto.TypeRuntimeRequest, payload: r})
+	timer := time.NewTimer(time.Duration(r.TimeoutSeconds)*time.Second + requestGrace)
+	defer timer.Stop()
+	select {
+	case d := <-ch:
+		return d
+	case <-ctx.Done():
+		return no
+	case <-timer.C:
+		no.Decision, no.Feedback = proto.DecisionExpired, "nobody answered in time"
+		return no
 	}
 }
 

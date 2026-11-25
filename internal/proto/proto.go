@@ -55,6 +55,9 @@ const (
 	TypeLoginPrompt  MessageType = "login_prompt"
 	TypeTurnEnding   MessageType = "turn_ending" // v2
 	TypeCheckpoint   MessageType = "checkpoint"  // v4, kept until acked like events
+	// TypeRuntimeRequest asks a person, mid-turn, before a tool (v4). Kept until acked, and sent
+	// again after a reconnect: the server answers a request it already decided with its decision.
+	TypeRuntimeRequest MessageType = "runtime_request"
 )
 
 // Server → runner.
@@ -67,6 +70,8 @@ const (
 	TypeLoginBackend MessageType = "login_backend"
 	TypeError        MessageType = "error"
 	TypeContinue     MessageType = "continue" // v2, the answer to turn_ending
+	// TypeRuntimeDecision answers a runtime_request (v4), once it is decided or expired.
+	TypeRuntimeDecision MessageType = "runtime_decision"
 )
 
 // Envelope wraps every message. Seq is monotonic per sender per connection.
@@ -322,6 +327,66 @@ type Job struct {
 	// NoCheckpoints says the project turned checkpoints off (v4): on a large repository adding
 	// every file after every turn can cost more than the diff is worth.
 	NoCheckpoints bool `json:"no_checkpoints,omitempty"`
+	// Approvals are the tools of a work job that wait for a person (v4), for a backend that can
+	// ask (ToolApprovals). Nil: nothing is asked, as before.
+	Approvals *Approvals `json:"approvals,omitempty"`
+}
+
+// Approvals is the project's approvals policy as a runner holds a job to it: rules to ask a person
+// about, rules never allowed, and how long a request waits before it is refused.
+type Approvals struct {
+	Ask            []string `json:"ask,omitempty"`
+	Deny           []string `json:"deny,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+}
+
+// Kinds of a runtime request.
+const (
+	RequestToolApproval = "tool_approval"
+	RequestQuestion     = "question"
+)
+
+// MaxRequestInput bounds the input of a tool a runtime request carries.
+const MaxRequestInput = 64 << 10
+
+// RuntimeRequest is an agent waiting for a person mid-turn (v4): a tool the approvals policy asks
+// about, or a question. ID is the runner's, a UUID: a request sent again is the same request.
+type RuntimeRequest struct {
+	ID    string          `json:"id"`
+	JobID string          `json:"job_id"`
+	Kind  string          `json:"kind"`
+	Tool  string          `json:"tool,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+	// Rule is the rule of the policy that asks; empty for a question.
+	Rule      string `json:"rule,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// TimeoutSeconds is how long the runner waits for the answer.
+	TimeoutSeconds int `json:"timeout_seconds"`
+}
+
+// Runtime decisions.
+const (
+	DecisionAllow           = "allow"
+	DecisionAllowForSession = "allow_for_session"
+	DecisionDeny            = "deny"
+	DecisionStop            = "stop"
+	DecisionExpired         = "expired"
+	DecisionCancelled       = "cancelled"
+)
+
+// RuntimeDecision answers a RuntimeRequest. Feedback is why it was denied (the agent reads it) or,
+// for a question, the person's answer.
+type RuntimeDecision struct {
+	ID       string `json:"id"`
+	JobID    string `json:"job_id"`
+	Decision string `json:"decision"`
+	Feedback string `json:"feedback,omitempty"`
+	By       string `json:"by,omitempty"`
+}
+
+// Allows says whether the decision lets the tool run.
+func (d RuntimeDecision) Allows() bool {
+	return d.Decision == DecisionAllow || d.Decision == DecisionAllowForSession
 }
 
 // Skill is one skill of a job's agent: its SKILL.md and whatever else the folder holds

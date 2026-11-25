@@ -27,6 +27,7 @@ import (
 	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/approvals"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/brain"
@@ -58,6 +59,7 @@ type harness struct {
 	srv     *httptest.Server
 	pool    *pgxpool.Pool
 	mgr     *runners.Manager
+	waits   *approvals.Service
 	hub     *events.Hub
 	plugins *plugins.Host
 	quality *quality.Service
@@ -109,7 +111,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	catalogue, bundled := catalogueDir(t)
 	// Conversations, and what the team and its agents know, read under the same rules.
 	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
-		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool))}})
+		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool)), approvals.NewCards(db.New(pool))}})
 	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
 	svc.UseBrain(knows.Packer, knows.Legacy)
 	// Remote MCP servers; one that signs in with OAuth signs in at the fake provider, and comes back
@@ -143,14 +145,21 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		c(&rcfg)
 	}
 	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
+	waits := approvals.New(pool, approvals.Deps{Rights: chat.Access, Roles: auth.Authorizer{Pool: pool}, Threads: chat.Threads, Policies: svc})
+	waits.UseRuntime(mgr)
+	mgr.UseRuntime(waits)
 	// Conversations and the agents who answer in them, each following the outbox on its own.
-	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default()})
+	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default(),
+		Waits: waits})
 	mgr.UseBriefer(team.Briefer)
 	consumers, stopConsumers := context.WithCancel(context.Background())
 	t.Cleanup(stopConsumers)
 	go chat.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
+	cancelWaits := conversations.NewCursorConsumer("approvals", pool, hub, slog.Default(), 50*time.Millisecond)
+	cancelWaits.On(waits.Handler(), "job.finished")
+	go cancelWaits.Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	// The curator follows the outbox on its own; sweeping for quiet threads is a test's to ask.
 	curate := curator.New(db.New(pool), curator.PoolTx(pool), team.Curations, chat.Packer, chat.Access, knows.Service, slog.Default())
@@ -172,7 +181,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		Marketplace: market,
 		Remote:      remote,
 		Bridges:     bridge,
-		Review:      reviews}
+		Review:      reviews,
+		Approvals:   waits}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
@@ -188,7 +198,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, waits: waits, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.

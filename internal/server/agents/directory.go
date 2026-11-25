@@ -376,6 +376,11 @@ func policyJSON(p *Policy) ([]byte, error) {
 	if p.Backend != "" && !process.ValidBackend(p.Backend) {
 		return nil, fmt.Errorf("%w: %q is not a backend name (claude, acp:<agent>)", ErrInvalid, p.Backend)
 	}
+	if a := p.Approvals; a != nil {
+		if err := a.Check(); err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), "process_config: policy."))
+		}
+	}
 	return json.Marshal(p)
 }
 

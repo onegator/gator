@@ -122,6 +122,9 @@ type Access struct {
 	NoTools bool
 	// Commands are the only commands a read-only agent may run, by name: gator-cli, to talk back.
 	Commands []string
+	// Deny are rules (Rule) of tools the agent is refused, whatever else it may do: the project's
+	// approvals policy, held where nobody can be asked.
+	Deny []string
 }
 
 // Emit streams one event.

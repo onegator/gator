@@ -96,7 +96,9 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	for _, e := range evs {
 		kinds = append(kinds, e.Type)
 	}
-	if got := strings.Join(kinds, ","); got != "workspace,rate_limit,session,tool_call,tool_result,text,result,checkpoint,digest_requested,session,result,git" {
+	// Claude Code in print mode cannot ask before a tool: what the default approvals policy asks
+	// about is refused instead (--disallowedTools), and the job says so.
+	if got := strings.Join(kinds, ","); got != "approvals_held_as_denials,workspace,rate_limit,session,tool_call,tool_result,text,result,checkpoint,digest_requested,session,result,git" {
 		t.Fatalf("event stream: %s", got)
 	}
 	// The turn was checkpointed on the runner and its diff kept here: the commit the agent made.

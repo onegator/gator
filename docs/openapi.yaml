@@ -1324,6 +1324,56 @@ paths:
         "204": { description: taken back }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /runtime-requests:
+    get:
+      operationId: listWaitingRuntimeRequests
+      description: |
+        What agents wait for the caller to decide, newest first ("Needs you"): tool approvals and
+        questions of turns in conversations where the caller, a member of the project, may write.
+        A request leaves the list when someone decides it (from any device: runtime_request.decided
+        reaches the job's and the inbox's WebSocket topics), when it expires, or when its turn ends.
+      parameters:
+        - { name: projectId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RuntimeRequest" } } } } }
+  /runtime-requests/{requestId}:
+    get:
+      operationId: getRuntimeRequest
+      description: One request, for whoever may read where its agent works.
+      parameters: [ { $ref: "#/components/parameters/requestId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeRequest" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /runtime-requests/{requestId}/decide:
+    post:
+      operationId: decideRuntimeRequest
+      description: |
+        The tool_approval card's buttons: allow, allow until the session ends (the same rule is let
+        through from then on), deny (feedback is the reason the agent reads) or stop (deny and stop
+        the turn). A question is answered with allow and the answer as feedback. A member of the
+        job's project who may write where the agent works (its turn's conversation, else the task's
+        thread), like Allow on a consent card; nobody from outside the workspace. The request is
+        decided once: 409 when it is no longer waiting (decided, expired, its turn ended). Text a
+        member writes in the conversation while the agent waits is a denial with that text as the
+        reason, and steers the agent too.
+      parameters: [ { $ref: "#/components/parameters/requestId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeDecision" } } }
+      responses:
+        "200": { description: decided, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeRequest" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/runtime-requests:
+    get:
+      operationId: listJobRuntimeRequests
+      description: Everything the job's agent asked a person, oldest first, for whoever may read the job.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RuntimeRequest" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /runners:
     get:
       operationId: listRunners
@@ -2214,6 +2264,7 @@ components:
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
     checkpointId: { name: checkpointId, in: path, required: true, schema: { type: string, format: uuid } }
     commentId: { name: commentId, in: path, required: true, schema: { type: string, format: uuid } }
+    requestId: { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
     turnId: { name: turnId, in: path, required: true, schema: { type: string, format: uuid } }
     agentId: { name: agentId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2471,6 +2522,31 @@ components:
         wholeTruncated: { type: boolean }
         tookMs: { type: integer, description: "how long the runner took to checkpoint (checkpoint_ms)" }
         createdAt: { type: string, format: date-time }
+    RuntimeRequest:
+      type: object
+      description: An agent waiting for a person mid-turn. The card is tool_approval (or question), keyed approval:<id>, in the task's thread.
+      required: [id, jobId, kind, input, rule, status, expiresAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        jobId: { type: string, format: uuid }
+        turnId: { type: string, format: uuid }
+        kind: { type: string, enum: [tool_approval, question] }
+        tool: { type: string }
+        input: { type: object, additionalProperties: true, description: "the tool's input, redacted like logs" }
+        rule: { type: string, description: "the rule of the approvals policy that asks; empty for a question" }
+        status: { type: string, enum: [pending, allowed, allowed_for_session, denied, expired, cancelled], x-enum-varnames: [RequestPending, RequestAllowed, RequestAllowedForSession, RequestDenied, RequestExpired, RequestCancelled] }
+        stopped: { type: boolean, description: "denied by stopping the turn" }
+        feedback: { type: string, description: "why it was denied, or the answer to a question" }
+        decidedBy: { type: string, format: uuid }
+        decidedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    RuntimeDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [allow, allow_for_session, deny, stop], x-enum-varnames: [DecideAllow, DecideAllowForSession, DecideDeny, DecideStop] }
+        feedback: { type: string, maxLength: 4000, description: "the reason of a denial, which the agent reads; the answer to a question" }
     NewReviewComment:
       type: object
       required: [path, side, lineStart, body]
@@ -3829,6 +3905,21 @@ components:
         model: { type: string }
         maxCostUsd: { type: number, format: double }
         dailyBudgetUsd: { type: number, format: double, description: "what the agent may spend in a UTC day, jobs still running counted at their cap; absent: only the project's budget" }
+        approvals: { $ref: "#/components/schemas/ApprovalsPolicy" }
+    ApprovalsPolicy:
+      type: object
+      description: |
+        Tools of a work turn that wait for a person (process_config.policy.approvals; an agent's own
+        policy only tightens the project's: its rules are added, its timeout counts when shorter). A
+        rule is Tool, Tool(pattern) — Bash(curl:*) is any command starting with the word curl,
+        anywhere in a pipeline or a chain; a pattern ending in * is a prefix — or mcp:<server>/<tool>
+        with * for every tool of a server. A project that says nothing asks about Bash(curl:*),
+        Bash(wget:*) and Bash(git push:*), with 30m to answer. A request nobody answers is refused.
+      properties:
+        ask: { type: array, items: { type: string } }
+        deny: { type: array, items: { type: string } }
+        timeout: { type: string, description: "a duration, 1m to 24h; default 30m" }
+        onTimeout: { type: string, enum: [deny] }
     NewAgent:
       type: object
       required: [handle, displayName]

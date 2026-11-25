@@ -876,6 +876,24 @@ type Runner struct {
 	OwnerID         pgtype.UUID        `json:"owner_id"`
 }
 
+type RuntimeRequest struct {
+	ID        pgtype.UUID        `json:"id"`
+	JobID     pgtype.UUID        `json:"job_id"`
+	TurnID    pgtype.UUID        `json:"turn_id"`
+	Kind      string             `json:"kind"`
+	Tool      *string            `json:"tool"`
+	Input     []byte             `json:"input"`
+	Rule      string             `json:"rule"`
+	ToolUseID string             `json:"tool_use_id"`
+	Status    string             `json:"status"`
+	Stopped   bool               `json:"stopped"`
+	Feedback  *string            `json:"feedback"`
+	DecidedBy pgtype.UUID        `json:"decided_by"`
+	DecidedAt pgtype.Timestamptz `json:"decided_at"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Skill struct {
 	ID          pgtype.UUID        `json:"id"`
 	ProjectID   pgtype.UUID        `json:"project_id"`

@@ -26,6 +26,12 @@ type jobSteerer interface {
 	SteerJob(ctx context.Context, jobID pgtype.UUID, message string) error
 }
 
+// waitAnswerer refuses, with a person's message as the reason, what an agent waits for them on.
+// approvals.Service is one.
+type waitAnswerer interface {
+	DenyByMessage(ctx context.Context, job pgtype.UUID, author pgtype.UUID, body string) (int, error)
+}
+
 // Steerer takes a person's message in a conversation where an agent is still answering as a
 // correction of that answer (the job's steer, resumed in the same session) rather than as a new
 // question: a message that asks no agent steers every agent answering there, one that names the
@@ -36,6 +42,10 @@ type Steerer struct {
 	jobs  jobSteerer
 	voice announcer
 	log   *slog.Logger
+	// waits, when set, has the message refuse what the steered agent waits for a person on (a tool
+	// approval, a question), with the message as the reason: what a person writes while the agent
+	// waits is their answer, and it steers too.
+	waits waitAnswerer
 }
 
 // announcer says something as Gator in a conversation. conversations.Voice is one.
@@ -74,6 +84,11 @@ func (s *Steerer) Intercept(ctx context.Context, msg db.Message, conv db.Convers
 			continue
 		}
 		steered[t.AgentID.Bytes] = true
+		if s.waits != nil {
+			if _, err := s.waits.DenyByMessage(ctx, t.JobID, msg.AuthorID, msg.Body); err != nil {
+				return nil, err
+			}
+		}
 		err := s.jobs.SteerJob(ctx, t.JobID, fmt.Sprintf("%s says in the conversation:\n\n%s", who, msg.Body))
 		switch {
 		case err == nil, errors.Is(err, runners.ErrJobNotActive), errors.Is(err, pgx.ErrNoRows):
