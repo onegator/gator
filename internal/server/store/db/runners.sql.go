@@ -756,7 +756,10 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 }
 
 const listQueuedCloudJobs = `-- name: ListQueuedCloudJobs :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE status = 'queued' AND placement = 'cloud' ORDER BY created_at LIMIT $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE status = 'queued' AND placement = 'cloud'
+  -- A job waiting for its payer's login gets no machine: it would sit there with nothing to run.
+  AND waiting_reason = ''
+ORDER BY created_at LIMIT $1
 `
 
 // Cloud jobs waiting for a runner, oldest first: what a provisioner may start machines for.
@@ -1075,11 +1078,11 @@ type MarkUnassignableJobsRow struct {
 	Placement string      `json:"placement"`
 }
 
-// A queued job no connected runner can take. Matching mirrors LeaseJobs and the session's own
+// A queued job no connected runner can take. Matching mirrors LeaseCandidates and the session's own
 // filter: the backend must be offered, the project allowed, and the backend's login must work,
 // because a runner with an expired login is online and still takes nothing. Jobs already marked
 // are skipped, so the event fires once per episode rather than on every sweep. Placement and
-// ownership match as in LeaseJobs. A cloud job a provisioner will start a runner for is left
+// ownership match as in LeaseCandidates. A cloud job a provisioner will start a runner for is left
 // alone (skip_cloud): nobody is missing, the runner is on its way.
 func (q *Queries) MarkUnassignableJobs(ctx context.Context, arg MarkUnassignableJobsParams) ([]MarkUnassignableJobsRow, error) {
 	rows, err := q.db.Query(ctx, markUnassignableJobs, arg.Before, arg.SkipCloud)

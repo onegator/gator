@@ -143,11 +143,11 @@ WHERE status IN ('leased', 'running', 'stalled') AND lease_expires_at < sqlc.arg
 RETURNING id, task_id, status;
 
 -- name: MarkUnassignableJobs :many
--- A queued job no connected runner can take. Matching mirrors LeaseJobs and the session's own
+-- A queued job no connected runner can take. Matching mirrors LeaseCandidates and the session's own
 -- filter: the backend must be offered, the project allowed, and the backend's login must work,
 -- because a runner with an expired login is online and still takes nothing. Jobs already marked
 -- are skipped, so the event fires once per episode rather than on every sweep. Placement and
--- ownership match as in LeaseJobs. A cloud job a provisioner will start a runner for is left
+-- ownership match as in LeaseCandidates. A cloud job a provisioner will start a runner for is left
 -- alone (skip_cloud): nobody is missing, the runner is on its way.
 UPDATE jobs SET unassignable_since = now(), updated_at = now()
 WHERE id IN (
@@ -234,4 +234,7 @@ UPDATE jobs SET objections = objections + 1, updated_at = now() WHERE id = $1 RE
 
 -- name: ListQueuedCloudJobs :many
 -- Cloud jobs waiting for a runner, oldest first: what a provisioner may start machines for.
-SELECT * FROM jobs WHERE status = 'queued' AND placement = 'cloud' ORDER BY created_at LIMIT sqlc.arg(max);
+SELECT * FROM jobs WHERE status = 'queued' AND placement = 'cloud'
+  -- A job waiting for its payer's login gets no machine: it would sit there with nothing to run.
+  AND waiting_reason = ''
+ORDER BY created_at LIMIT sqlc.arg(max);

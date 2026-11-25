@@ -176,3 +176,21 @@ func TestReportsOfAJobOnItsPayersLogin(t *testing.T) {
 		t.Fatal("the usage does not say whose login paid")
 	}
 }
+
+// A cloud job waiting for its payer's login gets no machine started for it.
+func TestNoMachineForAJobThatWaitsForALogin(t *testing.T) {
+	f := newFixture(t)
+	job, _, _ := f.payersJob(t)
+	if _, err := f.pool.Exec(context.Background(), "UPDATE jobs SET placement = 'cloud', waiting_reason = 'w' WHERE id = $1", job.ID); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := f.q.ListQueuedCloudJobs(context.Background(), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range queued {
+		if j.ID == job.ID {
+			t.Fatal("a machine would start for a job nobody can pay for")
+		}
+	}
+}
