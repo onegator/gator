@@ -34,13 +34,15 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force \
- && useradd --create-home --uid 10001 gator \
+ && groupadd --gid 10001 gator \
+ && useradd --create-home --uid 10001 --gid 10001 gator \
  && git config --system user.name "Gator agent" \
  && git config --system user.email "agent@gator.invalid" \
  && git config --system credential.https://github.com.helper \
       '!f() { test -n "$GITHUB_TOKEN" || exit 0; echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
 COPY --from=build /out/gator-runner /out/gator-cli /usr/local/bin/
-USER gator
+# By number: a platform that refuses to run as root can tell from the image alone.
+USER 10001:10001
 WORKDIR /home/gator
 # The runner looks for gator-cli next to itself; claude is on PATH from npm. The rest comes
 # from the provisioner: server URL, the one-job token, backend credentials.

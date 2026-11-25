@@ -30,12 +30,14 @@ ARG PG_CLIENT=postgresql17-client
 # /var/lib/gator/attachments is the gator user's, so a named volume mounted there starts out
 # writable by it: Docker copies the directory's owner into an empty volume.
 RUN apk add --no-cache ca-certificates tzdata git "${PG_CLIENT}" \
- && adduser -D -H -u 10001 gator \
+ && addgroup -g 10001 gator \
+ && adduser -D -H -u 10001 -G gator gator \
  && mkdir -p /var/lib/gator/attachments && chown -R 10001:10001 /var/lib/gator
 COPY --from=build /out/gator-server /usr/local/bin/gator-server
 # The plugins the server offers by name: switching one on is a click, not a command line.
 COPY --from=build /out/plugins/ /usr/local/lib/gator/plugins/
-USER gator
+# By number: a platform that refuses to run as root can tell from the image alone.
+USER 10001:10001
 ENV GATOR_LISTEN_ADDR=:8080 GATOR_PLUGIN_DIR=/usr/local/lib/gator/plugins
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
