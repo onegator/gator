@@ -64,62 +64,90 @@ type Item struct {
 // A section is one part of a package: which live entries it takes, and how it names them. The
 // order of sections is the order a job reads them; a new kind of context is one more section.
 type section struct {
-	takes func(e db.BrainEntry, req Request) bool
-	label func(e db.BrainEntry) (kind, phase, title string)
+	takes func(e db.BrainEntry, pk packing) bool
+	label func(e db.BrainEntry, pk packing) (kind, phase, title string)
+	// perAuthor, when set, bounds how many entries of one person the section takes.
+	perAuthor func(user pgtype.UUID, pk packing) int
+}
+
+// packing is what a package is being made for, as the sections ask it.
+type packing struct {
+	Request
+	// people are the job's project's members, and the person its turn acts for, by name: whose
+	// context a package may carry at all.
+	people map[[16]byte]string
 }
 
 // sections are the parts of a package. The conventions on the knowledge shelves (with a topic)
 // are not among them: they reach a job with the knowledge packs they can shadow.
 var sections = []section{
 	{ // what the task's part of the product is like, and its neighbours'
-		takes: func(e db.BrainEntry, req Request) bool {
+		takes: func(e db.BrainEntry, req packing) bool {
 			return e.Scope == ScopeComponent && e.ComponentKey != nil && slices.Contains(req.Components, *e.ComponentKey)
 		},
-		label: func(e db.BrainEntry) (string, string, string) {
+		label: func(e db.BrainEntry, _ packing) (string, string, string) {
 			return "brain", ScopeComponent, fmt.Sprintf("%s %s: %s", *e.ComponentKey, e.Kind, e.Title)
 		},
 	},
 	{ // what the product decided about itself, for the roles that weigh direction
-		takes: func(e db.BrainEntry, req Request) bool {
+		takes: func(e db.BrainEntry, req packing) bool {
 			return req.Product && e.Scope == ScopeProject && slices.Contains(ProductKinds, e.Kind)
 		},
-		label: func(e db.BrainEntry) (string, string, string) {
+		label: func(e db.BrainEntry, _ packing) (string, string, string) {
 			return "product", ProductKind(e.Kind), fmt.Sprintf("%s: %s", ProductKind(e.Kind), e.Title)
 		},
 	},
 	{ // how this project runs: runbooks, facts, its own conventions
-		takes: func(e db.BrainEntry, _ Request) bool {
+		takes: func(e db.BrainEntry, _ packing) bool {
 			return e.Scope == ScopeProject && !slices.Contains(ProductKinds, e.Kind) && e.Topic == nil
 		},
-		label: func(e db.BrainEntry) (string, string, string) {
+		label: func(e db.BrainEntry, _ packing) (string, string, string) {
 			return "brain", ScopeProject, fmt.Sprintf("%s: %s", e.Kind, e.Title)
 		},
 	},
 	{ // what this agent learned here
-		takes: func(e db.BrainEntry, req Request) bool {
+		takes: func(e db.BrainEntry, req packing) bool {
 			return e.Scope == ScopeAgent && req.Agent.Valid && e.AgentID.Bytes == req.Agent.Bytes
 		},
-		label: func(e db.BrainEntry) (string, string, string) {
+		label: func(e db.BrainEntry, _ packing) (string, string, string) {
 			return "brain", ScopeAgent, fmt.Sprintf("your %s: %s", e.Kind, e.Title)
 		},
 	},
-	{ // the people: what they share, and the context of the one who asked
-		takes: func(e db.BrainEntry, _ Request) bool { return e.Scope == ScopeUser },
-		label: func(e db.BrainEntry) (string, string, string) {
-			return "brain", ScopeUser, fmt.Sprintf("a person's %s: %s", e.Kind, e.Title)
+	{ // the people: what the project's people share, and the context of the one who asked — never
+		// a stranger's, and only a few entries of each, so nobody's notes crowd out the work
+		takes: func(e db.BrainEntry, pk packing) bool {
+			_, known := pk.people[e.UserID.Bytes]
+			return e.Scope == ScopeUser && known
+		},
+		label: func(e db.BrainEntry, pk packing) (string, string, string) {
+			return "brain", ScopeUser, fmt.Sprintf("%s's %s: %s", pk.people[e.UserID.Bytes], e.Kind, e.Title)
+		},
+		perAuthor: func(user pgtype.UUID, pk packing) int {
+			if pk.Reader.User.Valid && user == pk.Reader.User {
+				return maxOwnEntries
+			}
+			return maxSharedEntries
 		},
 	},
 	{ // the workspace's own, beyond its knowledge shelves
-		takes: func(e db.BrainEntry, _ Request) bool { return e.Scope == ScopeWorkspace && e.Topic == nil },
-		label: func(e db.BrainEntry) (string, string, string) {
+		takes: func(e db.BrainEntry, _ packing) bool { return e.Scope == ScopeWorkspace && e.Topic == nil },
+		label: func(e db.BrainEntry, _ packing) (string, string, string) {
 			return "brain", ScopeWorkspace, fmt.Sprintf("%s: %s", e.Kind, e.Title)
 		},
 	},
 }
 
+// How much of one person's context a package carries.
+const (
+	maxOwnEntries    = 10 // the person who asked
+	maxSharedEntries = 3  // anyone else of the project, of what they share
+)
+
 // packStore is what the packer reads. *db.Queries is one.
 type packStore interface {
 	LiveBrainEntries(ctx context.Context, arg db.LiveBrainEntriesParams) ([]db.BrainEntry, error)
+	ListProjectMembersWithUsers(ctx context.Context, projectID pgtype.UUID) ([]db.ListProjectMembersWithUsersRow, error)
+	GetUser(ctx context.Context, id pgtype.UUID) (db.User, error)
 }
 
 // Packer makes the package. It reads; searching is the Finder's and recording what was handed
@@ -146,24 +174,67 @@ func (p Packer) Pack(ctx context.Context, req Request) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
+	pk, err := p.packing(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	budget := cmp.Or(req.Budget, DefaultPackBytes)
 	var out []Item
 	used := 0
 	for _, sec := range sections {
 		var taken []db.BrainEntry
 		for _, e := range readable {
-			if sec.takes(e, req) {
+			if sec.takes(e, pk) {
 				taken = append(taken, e)
 			}
 		}
 		order(taken, req.Components)
+		taken = capPerAuthor(sec, taken, pk)
 		for _, e := range taken {
-			item := render(sec, e, req.Reader)
+			item := render(sec, e, pk)
 			used = fit(&item, used, budget)
 			out = append(out, item)
 		}
 	}
 	return out, nil
+}
+
+// packing is req with the people whose context the package may carry.
+func (p Packer) packing(ctx context.Context, req Request) (packing, error) {
+	pk := packing{Request: req, people: map[[16]byte]string{}}
+	members, err := p.store.ListProjectMembersWithUsers(ctx, req.Reader.Project)
+	if err != nil {
+		return pk, err
+	}
+	for _, m := range members {
+		pk.people[m.ID.Bytes] = m.Name
+	}
+	if u := req.Reader.User; u.Valid {
+		if _, member := pk.people[u.Bytes]; !member {
+			person, err := p.store.GetUser(ctx, u)
+			if err != nil {
+				return pk, err
+			}
+			pk.people[u.Bytes] = person.Name
+		}
+	}
+	return pk, nil
+}
+
+// capPerAuthor keeps, in order, as many of each person's entries as sec allows.
+func capPerAuthor(sec section, es []db.BrainEntry, pk packing) []db.BrainEntry {
+	if sec.perAuthor == nil {
+		return es
+	}
+	counted := map[[16]byte]int{}
+	out := es[:0]
+	for _, e := range es {
+		if counted[e.UserID.Bytes] < sec.perAuthor(e.UserID, pk) {
+			counted[e.UserID.Bytes]++
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (p Packer) readable(ctx context.Context, r Reader, es []db.BrainEntry) ([]db.BrainEntry, error) {
@@ -195,8 +266,8 @@ func order(es []db.BrainEntry, components []string) {
 	})
 }
 
-func render(sec section, e db.BrainEntry, r Reader) Item {
-	kind, phase, title := sec.label(e)
+func render(sec section, e db.BrainEntry, pk packing) Item {
+	kind, phase, title := sec.label(e, pk)
 	return Item{Entry: e, Kind: kind, Phase: phase, Title: fmt.Sprintf("%s (v%d) %s", title, e.Version, Tag(e.ID)),
 		Body: e.Content, FullBytes: len(e.Content), Private: e.Scope == ScopeUser && !sharedWith(e)}
 }

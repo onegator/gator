@@ -274,3 +274,12 @@ WHERE t.owner_kind = 'user' AND t.owner_id IS NOT NULL AND t.updated_at > sqlc.a
 SELECT DISTINCT ON (lineage) * FROM brain_entries
 WHERE scope = 'user' AND user_id = $1 AND kind = 'focus' AND status = 'approved' AND valid_until IS NULL
 ORDER BY lineage, version DESC;
+
+-- name: NarrowLineageVisibility :exec
+-- When a version is shared less widely than the versions before it, so are they: taking an entry
+-- back takes back what it said before, too.
+UPDATE brain_entries SET visibility = sqlc.arg(visibility)::text, updated_at = now()
+WHERE lineage = sqlc.arg(lineage)
+  AND array_position(ARRAY['private', 'scope', 'project', 'workspace'], visibility)
+      > array_position(ARRAY['private', 'scope', 'project', 'workspace'], sqlc.arg(visibility)::text)
+  AND NOT (sqlc.arg(visibility)::text = 'private' AND scope <> 'user');

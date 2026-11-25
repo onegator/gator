@@ -132,6 +132,16 @@ func (p Policy) Rights(ctx context.Context, r Reader, e db.BrainEntry) (Rights, 
 	case ScopeUser:
 		own := r.User.Valid && e.UserID.Bytes == r.User.Bytes
 		out.Propose, out.Approve = own, own
+		switch e.Visibility {
+		case VisibilityProject:
+			// Shared only with a project the person is in: their words reach its jobs.
+			if !r.ReadsProject(e.ProjectID) {
+				out.Propose, out.Approve = false, false
+			}
+		case VisibilityWorkspace:
+			// Shared with everyone, it reaches every project's people: a workspace admin says so.
+			out.Approve = r.Admin
+		}
 	}
 	return out, nil
 }

@@ -35,6 +35,7 @@ type Store interface {
 	ListUserBrain(ctx context.Context, userID pgtype.UUID) ([]db.BrainEntry, error)
 	DeleteUserBrain(ctx context.Context, userID pgtype.UUID) (int64, error)
 	StaleBrainEntries(ctx context.Context, arg db.StaleBrainEntriesParams) ([]db.BrainEntry, error)
+	NarrowLineageVisibility(ctx context.Context, arg db.NarrowLineageVisibilityParams) error
 	targetStore
 }
 
@@ -227,6 +228,16 @@ func (s *Service) Revise(ctx context.Context, r Reader, id pgtype.UUID, c Change
 	if d, err = s.prepare(d); err != nil {
 		return db.BrainEntry{}, err
 	}
+	// The new version is asked about as it will be: shared somewhere else, it needs the rights
+	// there too.
+	next, err := s.policy.Rights(ctx, r, d.probe())
+	if err != nil {
+		return db.BrainEntry{}, err
+	}
+	if !next.Propose && !next.Approve {
+		return db.BrainEntry{}, ErrForbidden
+	}
+	rights.Approve = rights.Approve && next.Approve
 	status := StatusProposed
 	if rights.Approve && !c.Propose && !r.IsJob() {
 		status = StatusApproved
@@ -427,6 +438,9 @@ func (s *Service) put(ctx context.Context, tx Tx, d Draft, by Author, status str
 			params.Lineage, params.Version, params.Supersedes = prev.Lineage, prev.Version+1, prev.ID
 		}
 		if out, err = st.InsertBrainEntry(ctx, params); err != nil {
+			return err
+		}
+		if err := st.NarrowLineageVisibility(ctx, db.NarrowLineageVisibilityParams{Lineage: out.Lineage, Visibility: out.Visibility}); err != nil {
 			return err
 		}
 		for _, l := range d.Links {

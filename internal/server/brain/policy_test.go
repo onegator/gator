@@ -107,6 +107,10 @@ func TestPolicyDecidesWhoWritesAndApproves(t *testing.T) {
 	other := db.BrainEntry{Scope: ScopeProject, ProjectID: beta, Status: StatusApproved}
 	workspace := db.BrainEntry{Scope: ScopeWorkspace, Status: StatusApproved}
 	adas := db.BrainEntry{Scope: ScopeUser, UserID: ada, Status: StatusApproved, Visibility: VisibilityPrivate}
+	sharedHere := db.BrainEntry{Scope: ScopeUser, UserID: ada, ProjectID: alpha, Status: StatusApproved, Visibility: VisibilityProject}
+	sharedThere := db.BrainEntry{Scope: ScopeUser, UserID: ada, ProjectID: beta, Status: StatusApproved, Visibility: VisibilityProject}
+	sharedEverywhere := db.BrainEntry{Scope: ScopeUser, UserID: ada, Status: StatusApproved, Visibility: VisibilityWorkspace}
+	adminsEverywhere := db.BrainEntry{Scope: ScopeUser, UserID: bob, Status: StatusApproved, Visibility: VisibilityWorkspace}
 	cases := []struct {
 		name             string
 		reader           Reader
@@ -124,6 +128,11 @@ func TestPolicyDecidesWhoWritesAndApproves(t *testing.T) {
 		{"never for the workspace", agent, workspace, false, false},
 		{"never as the person it acts for", agent, adas, false, false},
 		{"an agent writes down its own lessons", agent, ownLesson, true, false},
+		{"a person shares with a project they are in", member, sharedHere, true, true},
+		{"never with one they are not in", member, sharedThere, false, false},
+		{"sharing with everyone waits for a workspace admin", member, sharedEverywhere, true, false},
+		{"who approves it", admin, sharedEverywhere, false, true},
+		{"and shares their own straight away", admin, adminsEverywhere, true, true},
 		{"not another agent's", agent, othersLesson, false, false},
 	}
 	for _, c := range cases {

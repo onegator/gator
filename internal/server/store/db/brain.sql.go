@@ -1316,6 +1316,26 @@ func (q *Queries) MessageAtSeq(ctx context.Context, arg MessageAtSeqParams) (Mes
 	return i, err
 }
 
+const narrowLineageVisibility = `-- name: NarrowLineageVisibility :exec
+UPDATE brain_entries SET visibility = $1::text, updated_at = now()
+WHERE lineage = $2
+  AND array_position(ARRAY['private', 'scope', 'project', 'workspace'], visibility)
+      > array_position(ARRAY['private', 'scope', 'project', 'workspace'], $1::text)
+  AND NOT ($1::text = 'private' AND scope <> 'user')
+`
+
+type NarrowLineageVisibilityParams struct {
+	Visibility string      `json:"visibility"`
+	Lineage    pgtype.UUID `json:"lineage"`
+}
+
+// When a version is shared less widely than the versions before it, so are they: taking an entry
+// back takes back what it said before, too.
+func (q *Queries) NarrowLineageVisibility(ctx context.Context, arg NarrowLineageVisibilityParams) error {
+	_, err := q.db.Exec(ctx, narrowLineageVisibility, arg.Visibility, arg.Lineage)
+	return err
+}
+
 const peopleActiveSince = `-- name: PeopleActiveSince :many
 SELECT DISTINCT m.author_id::uuid AS user_id FROM messages m
 WHERE m.author_kind = 'user' AND m.author_id IS NOT NULL AND m.created_at > $1::timestamptz
