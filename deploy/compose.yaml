@@ -38,6 +38,11 @@ services:
       GATOR_LISTEN_ADDR: :8080
       # The host's proxies reach the container through Docker's bridge, not loopback.
       GATOR_TRUSTED_PROXIES: 127.0.0.0/8,::1,172.16.0.0/12
+      # Files people attach to messages. Without a directory (or GATOR_ATTACHMENTS_S3_*) uploads
+      # answer 503. The image owns this path as uid 10001, so the empty volume starts writable.
+      GATOR_ATTACHMENTS_DIR: /var/lib/gator/attachments
+    volumes:
+      - attachments:/var/lib/gator/attachments
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -47,3 +52,4 @@ services:
 
 volumes:
   pgdata:
+  attachments:

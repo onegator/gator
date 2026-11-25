@@ -27,8 +27,11 @@ FROM alpine:3 AS server
 # as the server, so the major version is a build argument.
 ARG PG_CLIENT=postgresql17-client
 # git is here for the knowledge registry: packs are fetched with a shallow clone.
+# /var/lib/gator/attachments is the gator user's, so a named volume mounted there starts out
+# writable by it: Docker copies the directory's owner into an empty volume.
 RUN apk add --no-cache ca-certificates tzdata git "${PG_CLIENT}" \
- && adduser -D -H -u 10001 gator
+ && adduser -D -H -u 10001 gator \
+ && mkdir -p /var/lib/gator/attachments && chown -R 10001:10001 /var/lib/gator
 COPY --from=build /out/gator-server /usr/local/bin/gator-server
 # The plugins the server offers by name: switching one on is a click, not a command line.
 COPY --from=build /out/plugins/ /usr/local/lib/gator/plugins/
