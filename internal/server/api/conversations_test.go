@@ -1328,3 +1328,37 @@ func TestSearchReadsPastUnreadableMatches(t *testing.T) {
 		t.Fatalf("hits: %+v", hits)
 	}
 }
+
+// A search hit says where the caller stands in its conversation: joined, read up to, unread — the
+// same as the conversation list, for the whole page at once.
+func TestSearchHitsCarryTheCallersStanding(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("standing")
+	word := fmt.Sprintf("standing%d", time.Now().UnixNano())
+	open := h.channel(c.admin, c.project.Id.String(), "talk", "").Id.String()
+	_, first := h.post(c.admin, open, gen.NewMessage{Body: ptr(word + " one")})
+	h.post(c.admin, open, gen.NewMessage{Body: ptr("two")})
+	h.post(c.admin, open, gen.NewMessage{Body: ptr("three")})
+	// The member joins and reads up to the first message; the viewer never joins.
+	h.as(c.member, func() {
+		h.do("POST", "/conversations/"+open+"/read", gen.ReadMarker{Seq: first.Seq}, nil)
+	})
+	hitFor := func(token string) gen.Conversation {
+		t.Helper()
+		var hits []gen.MessageHit
+		h.as(token, func() { h.do("GET", "/search/messages?q="+url.QueryEscape(word), nil, &hits) })
+		if len(hits) != 1 {
+			t.Fatalf("hits %+v", hits)
+		}
+		return hits[0].Conversation
+	}
+	if m := hitFor(c.member); !m.Joined || m.LastReadSeq != first.Seq || m.Unread != 2 {
+		t.Errorf("member: joined %v read %d unread %d", m.Joined, m.LastReadSeq, m.Unread)
+	}
+	if a := hitFor(c.admin); !a.Joined || a.Unread != 0 {
+		t.Errorf("author: joined %v unread %d", a.Joined, a.Unread)
+	}
+	if v := hitFor(c.viewer); v.Joined || v.Unread != 0 {
+		t.Errorf("viewer: joined %v unread %d", v.Joined, v.Unread)
+	}
+}

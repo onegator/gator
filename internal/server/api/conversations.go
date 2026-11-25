@@ -478,7 +478,7 @@ func (s *Server) SearchMessages(w http.ResponseWriter, r *http.Request, params g
 	}
 	out := make([]gen.MessageHit, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, gen.MessageHit{Message: toMessage(h.Message), Conversation: toConversation(conversations.Listed{Conversation: h.Conversation})})
+		out = append(out, gen.MessageHit{Message: toMessage(h.Message), Conversation: toConversation(h.Conversation)})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

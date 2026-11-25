@@ -185,3 +185,13 @@ SELECT 1 FROM projects WHERE id = $1 FOR KEY SHARE;
 
 -- name: KeyShareTask :exec
 SELECT 1 FROM tasks WHERE id = $1 FOR KEY SHARE;
+
+-- name: ListMembershipsIn :many
+-- A person's standing in several conversations at once — joined, read up to, unread mentions — for
+-- a page of results (search) without a query per row.
+SELECT cm.conversation_id, cm.last_read_seq, cm.notify,
+       (SELECT count(*) FROM message_mentions mm JOIN messages m ON m.id = mm.message_id
+        WHERE m.conversation_id = cm.conversation_id AND mm.member_kind = 'user' AND mm.member_id = sqlc.arg(user_id)
+          AND m.seq > cm.last_read_seq AND m.deleted_at IS NULL)::bigint AS unread_mentions
+FROM conversation_members cm
+WHERE cm.member_kind = 'user' AND cm.member_id = sqlc.arg(user_id) AND cm.conversation_id = ANY(sqlc.arg(conversation_ids)::uuid[]);
