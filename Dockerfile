@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # gator-server image. A runner on a Mac or a VPS ships as a binary for launchd or systemd;
 # cloud runners started per job use Dockerfile.runner.
 ARG GO_VERSION=1.27.1
@@ -6,13 +5,14 @@ ARG GO_VERSION=1.27.1
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# Plain RUN steps, no cache mounts: the image builds with the classic builder as well as with
+# BuildKit. The module download is its own layer, so a code change does not repeat it.
+RUN go mod download
 COPY . .
 ARG VERSION=dev
 ARG COMMIT=none
 ARG DATE=unknown
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w \
         -X github.com/onegator/gator/internal/version.Version=${VERSION} \
         -X github.com/onegator/gator/internal/version.Commit=${COMMIT} \
