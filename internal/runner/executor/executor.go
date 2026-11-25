@@ -151,33 +151,21 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	var last backend.Outcome
 	prompt, session, tools := opening, "", 0
 	steers, objections := 0, 0
+	steer := steeringFor(be, io, cps, nil)
 	for {
-		runCtx, cancelRun := context.WithCancelCause(ctx)
-		steer := make(chan string, 1)
-		done := make(chan struct{})
-		go func() {
-			select {
-			case m := <-io.Steer:
-				steer <- m
-				cancelRun(errSteered)
-			case <-done:
-			}
-		}()
 		budget := 0
 		if job.Bounds.MaxToolCalls > 0 {
 			budget = max(job.Bounds.MaxToolCalls-tools, 1)
 		}
-		last = be.Run(runCtx, spec(prompt, session, budget, costLeft(job, usage)), backend.Emit(io.Emit))
-		close(done)
-		cancelRun(nil)
-		cps.afterTurn(ctx)
+		var steered []string
+		last, steered = steer.run(ctx, spec(prompt, session, budget, costLeft(job, usage)), be, backend.Emit(io.Emit))
 		addUsage(&usage, last.Usage)
 		tools += last.ToolCalls
 		if last.SessionID != "" {
 			session = last.SessionID
 		}
-		if last.Interrupted && errors.Is(last.Cause, errSteered) && ctx.Err() == nil && steers < maxSteers {
-			msg := <-steer
+		if len(steered) > 0 && ctx.Err() == nil && steers < maxSteers {
+			msg := strings.Join(steered, "\n\n")
 			steers++
 			io.Emit("steer_applied", map[string]any{"message": msg, "resume": session != ""})
 			if session != "" {

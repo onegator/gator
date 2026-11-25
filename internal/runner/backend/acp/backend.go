@@ -71,7 +71,7 @@ func (b Backend) AuthState() string {
 // new process; the runner answers every permission request by the job's tier, so it is the
 // runner that holds the agent to it.
 func (b Backend) Capabilities() proto.BackendCapabilities {
-	return proto.BackendCapabilities{Enforcement: proto.EnforcementRunner}
+	return proto.BackendCapabilities{Checkpoints: true, Enforcement: proto.EnforcementRunner}
 }
 
 // Supports implements backend.Limited. A read-only job runs only on an agent whose profile names a

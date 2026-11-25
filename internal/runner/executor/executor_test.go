@@ -22,6 +22,7 @@ import (
 // scripted is an in-process backend whose behaviour each test chooses.
 type scripted struct {
 	noLimits bool
+	live     bool // keeps its session open: steers go into the run
 	mu       sync.Mutex
 	specs    []backend.Spec
 	run      func(ctx context.Context, n int, spec backend.Spec, emit backend.Emit) backend.Outcome
@@ -30,7 +31,7 @@ type scripted struct {
 func (s *scripted) Name() string      { return "fake" }
 func (s *scripted) AuthState() string { return "ok" }
 func (s *scripted) Capabilities() proto.BackendCapabilities {
-	return proto.BackendCapabilities{Enforcement: proto.EnforcementNative}
+	return proto.BackendCapabilities{ActiveSteering: s.live, NativeInterrupt: s.live, ToolApprovals: s.live, Enforcement: proto.EnforcementNative}
 }
 
 // Supports implements backend.Limited unless a test says the backend keeps no limits.

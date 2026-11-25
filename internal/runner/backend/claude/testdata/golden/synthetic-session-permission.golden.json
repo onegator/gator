@@ -1,0 +1,18 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.332","mcp_servers":[],"model":"claude-opus-5","session_id":"00000000-0000-4000-8000-0000000000f3"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"tool_approval","reason":"Ada: not from the internet, use the vendored copy","stop":false,"tool":"Bash","tool_use_id":"toolu_p1"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"question","reason":"","stop":false,"tool":"AskUserQuestion","tool_use_id":"toolu_p2"}},
+    {"type":"text","payload":{"text":"Postgres it is; no install script."}},
+    {"type":"result","payload":{"cost_usd":0.03,"is_error":false,"num_turns":2,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "cost_usd": 0.03,
+    "interrupted": false,
+    "reason": "",
+    "session_id": "00000000-0000-4000-8000-0000000000f3",
+    "status": "done",
+    "summary": "Used Postgres.",
+    "tool_calls": 0
+  }
+}
