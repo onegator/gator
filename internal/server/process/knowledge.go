@@ -49,7 +49,8 @@ func (s *Service) Knowledge(ctx context.Context, projectID pgtype.UUID, role, ph
 			return
 		}
 		taken[key] = where
-		docs = append(docs, ContextDoc{Kind: "knowledge", Phase: topic, Title: fmt.Sprintf("%s: %s", topic, e.Title), Body: e.Content})
+		docs = append(docs, ContextDoc{Kind: "knowledge", Phase: topic, Title: fmt.Sprintf("%s: %s %s", topic, e.Title, brain.Tag(e.ID)),
+			Body: e.Content, Entry: e.ID})
 	}
 	for _, e := range own {
 		add(e, "this project")

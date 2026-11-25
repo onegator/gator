@@ -1053,6 +1053,25 @@ func (q *Queries) RecordBrainCitations(ctx context.Context, arg RecordBrainCitat
 	return err
 }
 
+const recordCitedBrain = `-- name: RecordCitedBrain :exec
+INSERT INTO brain_citations (job_id, entry_id, how)
+SELECT $1::uuid, e, 'cited' FROM unnest($2::uuid[]) e
+WHERE EXISTS (SELECT 1 FROM brain_citations c WHERE c.job_id = $1::uuid AND c.entry_id = e AND c.how IN ('packed', 'searched'))
+ON CONFLICT DO NOTHING
+`
+
+type RecordCitedBrainParams struct {
+	JobID    pgtype.UUID   `json:"job_id"`
+	EntryIds []pgtype.UUID `json:"entry_ids"`
+}
+
+// What a job cites, of what it was handed or looked up: an agent cannot cite its way into an entry
+// it never read.
+func (q *Queries) RecordCitedBrain(ctx context.Context, arg RecordCitedBrainParams) error {
+	_, err := q.db.Exec(ctx, recordCitedBrain, arg.JobID, arg.EntryIds)
+	return err
+}
+
 const searchBrain = `-- name: SearchBrain :many
 SELECT e.id, e.scope, e.project_id, e.component_key, e.user_id, e.agent_id, e.kind, e.topic, e.title, e.content, e.visibility, e.status, e.lineage, e.version, e.supersedes, e.valid_from, e.valid_until, e.confidence, e.source, e.source_task_id, e.source_conversation_id, e.source_private, e.position, e.condensed_from, e.archived_at, e.created_by_kind, e.created_by, e.approved_by, e.approved_at, e.created_at, e.updated_at, (CASE WHEN $1::text = '' THEN 0
              ELSE ts_rank(to_tsvector('simple', e.title || ' ' || e.content), websearch_to_tsquery('simple', $1::text)) END)::real AS rank

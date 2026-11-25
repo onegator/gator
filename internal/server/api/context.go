@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/process"
@@ -48,21 +50,9 @@ func (s *Server) PreviewTaskContext(w http.ResponseWriter, r *http.Request, task
 	if _, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer); !ok {
 		return
 	}
-	role := ""
-	if params.Role != nil {
-		role = *params.Role
-	}
-	if role == "" {
-		d, err := s.Process.Detail(r.Context(), fromUUID(taskId))
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		role = d.Phase.Role
-		if role == "" {
-			writeError(w, http.StatusBadRequest, "this phase has no agent role; name one with ?role=", "invalid")
-			return
-		}
+	role, ok := s.contextRole(w, r, fromUUID(taskId), params.Role)
+	if !ok {
+		return
 	}
 	docs, err := s.Process.JobContext(r.Context(), fromUUID(taskId), role)
 	if err != nil {
@@ -70,6 +60,53 @@ func (s *Server) PreviewTaskContext(w http.ResponseWriter, r *http.Request, task
 		return
 	}
 	writeJSON(w, http.StatusOK, toContextPackage(docs))
+}
+
+// PreviewBrainPackage is the Brain's part of what a job of the task would carry, had the caller
+// asked for it: their own private context included, nobody else's.
+func (s *Server) PreviewBrainPackage(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, params gen.PreviewBrainPackageParams) {
+	p, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer)
+	if !ok {
+		return
+	}
+	task, err := db.New(s.Pool).GetTask(r.Context(), fromUUID(params.Task))
+	if err != nil || task.ProjectID.Bytes != projectId {
+		writeError(w, http.StatusNotFound, "no such task in this project", "not_found")
+		return
+	}
+	role, ok := s.contextRole(w, r, task.ID, params.Role)
+	if !ok {
+		return
+	}
+	docs, err := s.Process.ContextFor(r.Context(), process.ContextRequest{Task: task.ID, Role: role, OnBehalfOf: p.UserID})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	brainDocs := docs[:0]
+	for _, d := range docs {
+		if d.Origin == "brain" || d.Origin == "product" || d.Entry.Valid {
+			brainDocs = append(brainDocs, d)
+		}
+	}
+	writeJSON(w, http.StatusOK, toContextPackage(brainDocs))
+}
+
+// contextRole is the role asked for, or the one of the task's current phase.
+func (s *Server) contextRole(w http.ResponseWriter, r *http.Request, task pgtype.UUID, asked *string) (string, bool) {
+	if asked != nil && *asked != "" {
+		return *asked, true
+	}
+	d, err := s.Process.Detail(r.Context(), task)
+	if err != nil {
+		s.fail(w, err)
+		return "", false
+	}
+	if d.Phase.Role == "" {
+		writeError(w, http.StatusBadRequest, "this phase has no agent role; name one with ?role=", "invalid")
+		return "", false
+	}
+	return d.Phase.Role, true
 }
 
 func toContextPackage(docs []process.ContextDoc) gen.ContextPackage {

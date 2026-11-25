@@ -529,6 +529,35 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/brain/preview:
+    get:
+      operationId: previewBrainPackage
+      description: >
+        What a job of this task would be handed from the Brain if the caller asked for it (debug, like
+        /projects/{id}/knowledge/preview): its component's and neighbours' entries, the product context for the
+        roles that weigh direction, the project's runbooks and facts, the agent's lessons, what people share and
+        the caller's own private context. Each entry's title carries its [brain:<id>] tag.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: task, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: role, in: query, required: false, schema: { type: string, description: "defaults to the current phase's role" } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ContextPackage" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/brain/impact:
+    get:
+      operationId: getBrainImpact
+      description: >
+        Whether the Brain helps, measured: the median context a phase job was handed and the share of phases
+        sent back, in a window before a moment and one as long after it. The context should grow by at most 20%
+        and rollbacks should fall.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: pivot, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainImpact" } } } }
   /presets:
     get:
       operationId: listProjectPresets
@@ -2445,6 +2474,24 @@ components:
         content: { type: string }
         visibility: { $ref: "#/components/schemas/BrainVisibility" }
         propose: { type: boolean }
+    BrainSample:
+      type: object
+      required: [jobs, medianContextBytes, advances, rollbacks, rollbackRate]
+      properties:
+        jobs: { type: integer }
+        medianContextBytes: { type: integer }
+        advances: { type: integer }
+        rollbacks: { type: integer }
+        rollbackRate: { type: number, format: double }
+    BrainImpact:
+      type: object
+      required: [before, after, contextGrowth, contextHeld, rollbacksFell]
+      properties:
+        before: { $ref: "#/components/schemas/BrainSample" }
+        after: { $ref: "#/components/schemas/BrainSample" }
+        contextGrowth: { type: number, format: double, description: "how much the median context grew, as a fraction" }
+        contextHeld: { type: boolean, description: "it grew by at most 20%" }
+        rollbacksFell: { type: boolean }
     ProductEntry:
       type: object
       required: [id, kind, title, content, version, status, createdAt]

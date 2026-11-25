@@ -256,6 +256,9 @@ func (s *Server) AgentKnowledge(w http.ResponseWriter, r *http.Request, params g
 		s.failBrain(w, err)
 		return
 	}
+	if err := brain.NewCitations(db.New(s.Pool)).Used(r.Context(), job.ID, brain.HowSearched, brain.IDs(hits)); err != nil {
+		s.Log.Warn("recording what an agent looked up", "job", job.ID, "err", err)
+	}
 	out := make([]gen.AgentDocument, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, toAgentDocument(h.Entry))

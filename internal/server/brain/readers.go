@@ -66,7 +66,7 @@ func (rs Readers) person(ctx context.Context, user pgtype.UUID, admin bool) (Rea
 // ForJob is an agent reading from inside job: a member of the job's project, lent the private
 // context of the person its turn acts for and of nobody else.
 func (rs Readers) ForJob(ctx context.Context, job db.Job) (Reader, error) {
-	r := Reader{Job: job.ID, Project: job.ProjectID, Roles: map[[16]byte]auth.Role{job.ProjectID.Bytes: auth.RoleMember}}
+	r := AgentReader(job.ProjectID, pgtype.UUID{}, job.ID)
 	if !job.TurnID.Valid {
 		return r, nil
 	}

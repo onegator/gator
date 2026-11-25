@@ -183,3 +183,11 @@ SELECT * FROM brain_entries
 WHERE kind = 'convention' AND topic IS NOT NULL AND status = 'approved' AND scope IN ('workspace', 'project')
   AND project_id IS NOT DISTINCT FROM sqlc.narg(project_id)::uuid
 ORDER BY position, topic, title;
+
+-- name: RecordCitedBrain :exec
+-- What a job cites, of what it was handed or looked up: an agent cannot cite its way into an entry
+-- it never read.
+INSERT INTO brain_citations (job_id, entry_id, how)
+SELECT sqlc.arg(job_id)::uuid, e, 'cited' FROM unnest(sqlc.arg(entry_ids)::uuid[]) e
+WHERE EXISTS (SELECT 1 FROM brain_citations c WHERE c.job_id = sqlc.arg(job_id)::uuid AND c.entry_id = e AND c.how IN ('packed', 'searched'))
+ON CONFLICT DO NOTHING;

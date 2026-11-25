@@ -21,10 +21,11 @@ type Reader struct {
 	Admin bool
 	// Roles are the reader's roles by project. A job is a member of its own project only.
 	Roles map[[16]byte]auth.Role
-	// Job is set when an agent reads from inside a job; it reads only what is approved and true.
-	Job pgtype.UUID
-	// Project is the job's project, unset for a person.
+	// Project is set when an agent reads, from inside a job of that project (or a preview of
+	// one): it reads only what is approved and still true. Unset for a person.
 	Project pgtype.UUID
+	// Job is the job the agent reads from, when there is one.
+	Job pgtype.UUID
 }
 
 // ReadsProject says whether r may read what is open to project's members.
@@ -36,7 +37,13 @@ func (r Reader) ReadsProject(project pgtype.UUID) bool {
 }
 
 // IsJob says whether an agent reads.
-func (r Reader) IsJob() bool { return r.Job.Valid }
+func (r Reader) IsJob() bool { return r.Project.Valid }
+
+// AgentReader is an agent of project reading, lent the private context of onBehalfOf (unset for
+// a job nobody asked for); job is the job it reads from, if any.
+func AgentReader(project, onBehalfOf, job pgtype.UUID) Reader {
+	return Reader{Project: project, User: onBehalfOf, Job: job, Roles: map[[16]byte]auth.Role{project.Bytes: auth.RoleMember}}
+}
 
 // role is r's role in project.
 func (r Reader) role(project pgtype.UUID) auth.Role {

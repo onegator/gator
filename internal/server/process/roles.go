@@ -116,6 +116,11 @@ type ContextDoc struct {
 	Left string
 	// Dropped means it never reached the prompt at all.
 	Dropped bool
+	// Entry is the Brain entry it is, when it is one: what a job is recorded as having been handed.
+	Entry pgtype.UUID
+	// Private is a person's own context, lent to the agent of their turn: it reaches the prompt
+	// and never the job's record, which the project reads.
+	Private bool
 }
 
 // Reasons a document did not arrive whole. They are sentences because they are read by people.
@@ -129,10 +134,29 @@ const (
 	maxContextBytes = 60000
 )
 
-// JobContext collects what a new job in the task's current phase should know: the latest
-// version of every artifact produced so far, and why the task was last sent back to this
-// phase. Documents are truncated so the prompt stays bounded.
+// ContextRequest is what a job's documents are gathered for.
+type ContextRequest struct {
+	Task pgtype.UUID
+	Role string
+	// Job is the job they are for, if it exists yet; Agent is its agent, whose own lessons come
+	// with it; OnBehalfOf is the person its turn acts for, whose private context it is lent.
+	Job        pgtype.UUID
+	Agent      pgtype.UUID
+	OnBehalfOf pgtype.UUID
+}
+
+// JobContext collects what a new job of role in the task's current phase would know, for a job
+// nobody in particular asked for: see ContextFor.
 func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role string) ([]ContextDoc, error) {
+	return s.ContextFor(ctx, ContextRequest{Task: taskID, Role: role})
+}
+
+// ContextFor collects what a job should know: why its phase was sent back, the part of the
+// product it is about, what the Brain holds for it, how this workspace builds software, the
+// working state and the latest version of every artifact produced so far. Documents are
+// truncated so the prompt stays bounded.
+func (s *Service) ContextFor(ctx context.Context, req ContextRequest) ([]ContextDoc, error) {
+	taskID, role := req.Task, req.Role
 	q := db.New(s.pool)
 	t, err := q.GetTask(ctx, taskID)
 	if err != nil {
@@ -156,11 +180,14 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 	var docs []ContextDoc
 	total := 0
 	add := func(d ContextDoc) {
-		d.FullBytes = len(d.Body)
-		if total >= maxContextBytes {
+		d.FullBytes = max(d.FullBytes, len(d.Body))
+		if d.Dropped || total >= maxContextBytes {
 			// Kept in the list, with nothing in it: a person looking at what the agent was
 			// told should see what it was not told, and why.
-			d.Body, d.Dropped, d.Left = "", true, leftNoRoom
+			if !d.Dropped {
+				d.Left = leftNoRoom
+			}
+			d.Body, d.Dropped = "", true
 			docs = append(docs, d)
 			return
 		}
@@ -187,15 +214,15 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 		doc.Origin = "catalogue"
 		add(doc)
 	}
-	// What the product decided about itself, for the roles that reason about direction.
-	if readsProduct(role) {
-		entries, err := brain.NewLegacy(q).ApprovedProduct(ctx, t.ProjectID)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range entries {
-			add(ContextDoc{Kind: "product", Phase: brain.ProductKind(e.Kind), Title: productTitle(e), Body: e.Content, Origin: "product"})
-		}
+	// What the Brain holds for this job: its component and the neighbours, what the product
+	// decided (for the roles that weigh direction), how the project runs, the agent's lessons and
+	// the people's context — the asker's private context only for the asker's turn.
+	brainDocs, err := s.brainContext(ctx, t, req)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range brainDocs {
+		add(d)
 	}
 
 	// How this workspace builds software; the same for every project that enables it.
@@ -235,6 +262,63 @@ func (s *Service) JobContext(ctx context.Context, taskID pgtype.UUID, role strin
 	return docs, nil
 }
 
+// brainContext is the Brain's part of a job's documents, with a note on citing it first.
+func (s *Service) brainContext(ctx context.Context, t db.Task, req ContextRequest) ([]ContextDoc, error) {
+	if s.brain == nil {
+		return nil, nil
+	}
+	components, err := s.componentKeys(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	items, err := s.brain.Pack(ctx, brain.Request{Reader: brain.AgentReader(t.ProjectID, req.OnBehalfOf, req.Job),
+		Components: components, Agent: req.Agent, Product: readsProduct(req.Role)})
+	if err != nil || len(items) == 0 {
+		return nil, err
+	}
+	docs := []ContextDoc{{Kind: "brain_note", Phase: "brain", Title: "Citing the Brain", Body: brain.CiteNote, Origin: "brain"}}
+	for _, it := range items {
+		origin := "brain"
+		if it.Kind == "product" {
+			origin = "product"
+		}
+		docs = append(docs, ContextDoc{Kind: it.Kind, Phase: it.Phase, Title: it.Title, Body: it.Body, Origin: origin,
+			FullBytes: it.FullBytes, Left: it.Left, Dropped: it.Dropped, Entry: it.Entry.ID, Private: it.Private})
+	}
+	return docs, nil
+}
+
+// componentKeys are the task's component, then what it depends on and what depends on it: whose
+// Brain entries a job about it reads. Nothing for a task about no component, or one that is
+// only proposed.
+func (s *Service) componentKeys(ctx context.Context, t db.Task) ([]string, error) {
+	if !t.ComponentID.Valid {
+		return nil, nil
+	}
+	q := db.New(s.pool)
+	c, err := q.GetComponent(ctx, t.ComponentID)
+	if err != nil || c.Status != "approved" {
+		return nil, nil
+	}
+	ids := []pgtype.UUID{c.ID}
+	deps, err := q.ListComponentDeps(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	dependents, err := q.ListComponentDependents(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	keys := []string{c.Key}
+	for _, d := range deps {
+		keys = append(keys, d.Component.Key)
+	}
+	for _, d := range dependents {
+		keys = append(keys, d.Component.Key)
+	}
+	return keys, nil
+}
+
 // ArtifactTypeFor maps a runner role to the document it produces.
 func ArtifactTypeFor(role string) string {
 	switch role {
@@ -257,8 +341,4 @@ func readsProduct(role string) bool {
 		return true
 	}
 	return false
-}
-
-func productTitle(e db.BrainEntry) string {
-	return fmt.Sprintf("%s: %s (v%d)", brain.ProductKind(e.Kind), e.Title, e.Version)
 }

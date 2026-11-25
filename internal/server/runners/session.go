@@ -17,6 +17,7 @@ import (
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -524,6 +525,12 @@ func (s *session) agentToken(ctx context.Context, j db.Job) string {
 // privateLeft is what the record of a job says of a private conversation it was handed.
 const privateLeft = "said in a private conversation: handed to the agent, not kept in the job's record"
 
+// Of a person's own context the record keeps neither the words nor the title.
+const (
+	personalTitle = "Private context of the person who asked"
+	personalLeft  = "a person's own context: handed to the agent of their turn, not kept in the job's record"
+)
+
 // brief is the conversation a reply answers in, as its agent is told it; nothing for any other
 // job, or when it cannot be told.
 func (s *session) brief(ctx context.Context, j db.Job) TurnBrief {
@@ -561,15 +568,25 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, brie
 		}
 		record(d, "conversation")
 	}
-	if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
+	if docs, err := s.m.process.ContextFor(ctx, s.contextRequest(ctx, q, j)); err == nil {
+		var packed []pgtype.UUID
 		for _, d := range docs {
 			// A document that did not fit is kept in the record but not in the prompt:
 			// the agent never saw it, and the record should say so rather than imply
 			// it was never there.
 			if !d.Dropped {
 				out = append(out, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+				if d.Entry.Valid {
+					packed = append(packed, d.Entry)
+				}
+			}
+			if d.Private {
+				d.Title, d.Body, d.Left = personalTitle, "", personalLeft
 			}
 			record(d, d.Origin)
+		}
+		if err := brain.NewCitations(q).Used(ctx, j.ID, brain.HowPacked, packed); err != nil {
+			s.m.log.Warn("recording what a job was handed from the Brain", "job", uuidString(j.ID), "err", err)
 		}
 	}
 	if p := s.m.cfg.Preparer; p != nil {
@@ -580,6 +597,18 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, brie
 		}
 	}
 	return out
+}
+
+// contextRequest is what j's documents are gathered for: its role and agent, and the person its
+// turn acts for, whose private context it is lent.
+func (s *session) contextRequest(ctx context.Context, q *db.Queries, j db.Job) process.ContextRequest {
+	req := process.ContextRequest{Task: j.TaskID, Role: j.Role, Job: j.ID, Agent: j.AgentID}
+	if j.TurnID.Valid {
+		if turn, err := q.GetTurnByJob(ctx, j.ID); err == nil {
+			req.OnBehalfOf = turn.OnBehalfOf
+		}
+	}
+	return req
 }
 
 // ownJob loads the job a runner reports on, refusing one it does not hold. A database
@@ -746,6 +775,10 @@ func (s *session) closeJob(ctx context.Context, q *db.Queries, jobID pgtype.UUID
 	}
 	if status == proto.StatusDone {
 		if err := recordWork(ctx, q, j, fin); err != nil {
+			return err
+		}
+		// What the agent says it relied on, of what it was handed or looked up.
+		if err := brain.NewCitations(q).Cited(ctx, j.ID, fin.Summary); err != nil {
 			return err
 		}
 	}

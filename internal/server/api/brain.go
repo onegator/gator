@@ -3,12 +3,14 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -259,4 +261,30 @@ func optionalString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// GetBrainImpact answers whether the Brain helps this project, from its own numbers.
+func (s *Server) GetBrainImpact(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, params gen.GetBrainImpactParams) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+		return
+	}
+	if s.Quality == nil {
+		writeError(w, http.StatusServiceUnavailable, "measurements are not enabled on this server", "unavailable")
+		return
+	}
+	days := 30
+	if params.Days != nil {
+		days = *params.Days
+	}
+	impact, err := s.Quality.BrainImpact(r.Context(), fromUUID(projectId), params.Pivot, time.Duration(days)*24*time.Hour)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	sample := func(x quality.Sample) gen.BrainSample {
+		return gen.BrainSample{Jobs: x.Jobs, MedianContextBytes: x.MedianContextBytes, Advances: x.Advances,
+			Rollbacks: x.Rollbacks, RollbackRate: x.RollbackRate}
+	}
+	writeJSON(w, http.StatusOK, gen.BrainImpact{Before: sample(impact.Before), After: sample(impact.After),
+		ContextGrowth: impact.ContextGrowth, ContextHeld: impact.ContextHeld, RollbacksFell: impact.RollbacksFell})
 }

@@ -80,6 +80,66 @@ func (q *Queries) ListQualityChecks(ctx context.Context, projectID pgtype.UUID) 
 	return items, nil
 }
 
+const phaseJobContextBytes = `-- name: PhaseJobContextBytes :many
+SELECT context_bytes FROM jobs
+WHERE project_id = $1 AND kind = 'phase' AND context_bytes > 0
+  AND created_at >= $2::timestamptz AND created_at < $3::timestamptz
+ORDER BY context_bytes
+`
+
+type PhaseJobContextBytesParams struct {
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Since     pgtype.Timestamptz `json:"since"`
+	Until     pgtype.Timestamptz `json:"until"`
+}
+
+// How much context the phase jobs of a project were handed, in a window.
+func (q *Queries) PhaseJobContextBytes(ctx context.Context, arg PhaseJobContextBytesParams) ([]int32, error) {
+	rows, err := q.db.Query(ctx, phaseJobContextBytes, arg.ProjectID, arg.Since, arg.Until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int32
+	for rows.Next() {
+		var context_bytes int32
+		if err := rows.Scan(&context_bytes); err != nil {
+			return nil, err
+		}
+		items = append(items, context_bytes)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const phaseMoves = `-- name: PhaseMoves :one
+SELECT count(*) FILTER (WHERE pt.kind = 'advance')::bigint AS advances,
+       count(*) FILTER (WHERE pt.kind = 'rollback')::bigint AS rollbacks
+FROM phase_transitions pt JOIN tasks t ON t.id = pt.task_id
+WHERE t.project_id = $1 AND pt.created_at >= $2::timestamptz AND pt.created_at < $3::timestamptz
+`
+
+type PhaseMovesParams struct {
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Since     pgtype.Timestamptz `json:"since"`
+	Until     pgtype.Timestamptz `json:"until"`
+}
+
+type PhaseMovesRow struct {
+	Advances  int64 `json:"advances"`
+	Rollbacks int64 `json:"rollbacks"`
+}
+
+// How a project's tasks moved in a window: phases that went forward and phases sent back.
+func (q *Queries) PhaseMoves(ctx context.Context, arg PhaseMovesParams) (PhaseMovesRow, error) {
+	row := q.db.QueryRow(ctx, phaseMoves, arg.ProjectID, arg.Since, arg.Until)
+	var i PhaseMovesRow
+	err := row.Scan(&i.Advances, &i.Rollbacks)
+	return i, err
+}
+
 const projectsWithComponents = `-- name: ProjectsWithComponents :many
 SELECT DISTINCT p.id FROM projects p
 JOIN components c ON c.project_id = p.id
