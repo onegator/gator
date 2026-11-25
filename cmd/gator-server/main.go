@@ -290,7 +290,8 @@ func serve(ctx context.Context) error {
 		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
 	}
 	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
-	go notifier.WithChat(chat.Access).Run(ctx)
+	// And an agent waiting for a person's approval, or the answer they asked an agent for.
+	go notifier.WithChat(chat.Access).WithAgents().Run(ctx)
 
 	// What a thread settled is proposed to the Brain once it goes quiet or its task closes.
 	curate := curator.New(dbq.New(db.Pool), curator.PoolTx(db.Pool), team.Curations, chat.Packer, chat.Access, knows.Service, log)
