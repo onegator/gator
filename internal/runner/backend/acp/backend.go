@@ -98,7 +98,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = spec.Dir
 	// An allow-list, as for Claude: the agent's login variables pass, the runner's token never.
-	cmd.Env = append(agentenv.Filter(os.Environ(), append(append([]string{}, b.AllowEnv...), b.Profile.Env...)), spec.Env...)
+	cmd.Env = backend.AgentEnv(spec, append(append([]string{}, b.AllowEnv...), b.Profile.Env...))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

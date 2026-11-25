@@ -222,3 +222,56 @@ func TestReadOnlyCheckoutHasNoCheckpoints(t *testing.T) {
 		t.Fatalf("read-only checkpoint: %+v %v", cp, err)
 	}
 }
+
+// Git never reads a file of the worktree for a checkpoint, so no driver runs whenever it is
+// configured — before the checkpoint or while it runs — and a tracked directory swapped for a link
+// to somewhere else is not followed.
+func TestCheckpointReadsFilesItselfInsideTheWorktree(t *testing.T) {
+	w, m := checkpointWorkspace(t)
+	write(t, filepath.Join(w.Dir, "conf", "app.txt"), "v1\n")
+	git(t, w.Dir, "add", "conf/app.txt")
+	git(t, w.Dir, "commit", "-q", "-m", "conf")
+	checkpoint(t, w)
+
+	ran := filepath.Join(t.TempDir(), "ran")
+	// Every driver git could be told of, under every name, required: if git read a file it would run.
+	write(t, filepath.Join(w.gitDir, "info", "attributes"), "* filter=late diff=late\n")
+	write(t, filepath.Join(w.bare, "info", "attributes"), "* filter=late\n")
+	git(t, w.bare, "config", "filter.late.clean", "touch "+ran+"; cat")
+	git(t, w.bare, "config", "filter.late.required", "true")
+	git(t, w.bare, "config", "diff.late.textconv", "touch "+ran+"; cat")
+	git(t, w.bare, "config", "diff.late.command", "touch "+ran)
+
+	secret := filepath.Join(m.Root, "elsewhere")
+	write(t, filepath.Join(secret, "app.txt"), "TOP-SECRET\n")
+	if err := os.RemoveAll(filepath.Join(w.Dir, "conf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(w.Dir, "conf")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(w.Dir, "new.txt"), "new\n")
+	_ = os.Chmod(filepath.Join(w.Dir, "new.txt"), 0o755)
+
+	cp := checkpoint(t, w)
+	if _, err := os.Stat(ran); err == nil {
+		t.Fatal("a checkpoint ran a driver of the repository's")
+	}
+	if strings.Contains(string(cp.Diff), "TOP-SECRET") {
+		t.Fatalf("a link led outside the worktree:\n%s", cp.Diff)
+	}
+	byPath := map[string]proto.FileChange{}
+	for _, f := range cp.Files {
+		byPath[f.Path] = f
+	}
+	if byPath["new.txt"].Status != proto.FileAdded || byPath["conf"].Status != proto.FileAdded || byPath["conf/app.txt"].Status != proto.FileDeleted {
+		t.Fatalf("files: %+v", cp.Files)
+	}
+	if !strings.Contains(string(cp.Diff), "new file mode 100755") || !strings.Contains(string(cp.Diff), "new file mode 120000") {
+		t.Fatalf("modes:\n%s", cp.Diff)
+	}
+	// The blobs are git's own: the repository reads them.
+	if got := git(t, w.bare, "cat-file", "-p", cp.HeadCommit+":new.txt"); got != "new" {
+		t.Fatalf("blob: %q", got)
+	}
+}

@@ -16,7 +16,7 @@ type jobReader interface {
 	GetJob(ctx context.Context, id pgtype.UUID) (db.Job, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
 	JobProgress(ctx context.Context, jobID pgtype.UUID) (db.JobProgressRow, error)
-	JobChanges(ctx context.Context, jobID pgtype.UUID) ([]byte, error)
+	JobChanges(ctx context.Context, jobID pgtype.UUID) ([][]byte, error)
 	JobStartupPhase(ctx context.Context, jobID pgtype.UUID) (string, error)
 }
 
@@ -91,12 +91,21 @@ const EventJobCheckpoint = "job.checkpoint"
 
 // withChanges puts under a job's card what it changed so far ("3 files, +42 −7") and the diff
 // action that opens it — the same action an artifact's card has.
-func withChanges(c Card, files []byte) {
+func withChanges(c Card, repos [][]byte) {
 	var fs []struct {
 		Added   int `json:"added"`
 		Removed int `json:"removed"`
 	}
-	if json.Unmarshal(files, &fs) != nil || len(fs) == 0 {
+	for _, files := range repos { // one list per repository, each its whole job so far
+		var one []struct {
+			Added   int `json:"added"`
+			Removed int `json:"removed"`
+		}
+		if json.Unmarshal(files, &one) == nil {
+			fs = append(fs, one...)
+		}
+	}
+	if len(fs) == 0 {
 		return
 	}
 	added, removed := 0, 0

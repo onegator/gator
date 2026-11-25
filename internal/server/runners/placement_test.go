@@ -42,7 +42,7 @@ func (f *fixture) jobFor(t *testing.T, placement string, actor process.Actor) db
 // lease asks the database what s would be handed now, as dispatch does.
 func (f *fixture) lease(t *testing.T, s *session) []db.Job {
 	t.Helper()
-	jobs, err := f.q.LeaseJobs(context.Background(), db.LeaseJobsParams{RunnerID: s.runnerID, LeaseUntil: ts(time.Now().Add(time.Minute)),
+	jobs, err := f.q.LeaseJobs(context.Background(), db.LeaseJobsParams{Asks: true, RunnerID: s.runnerID, LeaseUntil: ts(time.Now().Add(time.Minute)),
 		Backends: []string{f.backend}, Projects: []pgtype.UUID{f.project}, Slots: 10,
 		Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner})
 	if err != nil {

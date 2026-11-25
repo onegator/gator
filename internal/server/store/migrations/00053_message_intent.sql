@@ -6,8 +6,11 @@
 
 ALTER TABLE messages ADD COLUMN input_intent text
     CHECK (input_intent IN ('turn_start', 'steer', 'queued', 'promoted_to_steer'));
+-- The agents a message was queued for: those answering when it was written.
+ALTER TABLE messages ADD COLUMN queued_for uuid[] NOT NULL DEFAULT '{}';
 CREATE INDEX messages_queued_idx ON messages (conversation_id, seq) WHERE input_intent = 'queued' AND deleted_at IS NULL;
 
 -- +goose Down
 DROP INDEX IF EXISTS messages_queued_idx;
+ALTER TABLE messages DROP COLUMN IF EXISTS queued_for;
 ALTER TABLE messages DROP COLUMN IF EXISTS input_intent;

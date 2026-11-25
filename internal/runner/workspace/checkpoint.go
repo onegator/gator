@@ -52,22 +52,10 @@ func (w *Workspace) Checkpoint(ctx context.Context, exclude []string) (*Checkpoi
 	started := time.Now()
 	g := w.checkpointGit()
 	index := w.checkpointIndex()
-	if len(w.checkpoints) == 0 {
-		// The agent's own index, copied, has the stat data that spares hashing every file; it is
-		// only read. Without it (a worktree with no index yet) git hashes everything once.
-		if err := seedIndex(filepath.Join(w.gitDir, "index"), index); err != nil {
-			return nil, err
-		}
-	}
-	filters, err := g.filterNames(ctx)
-	if err != nil {
+	if err := w.stage(ctx, g, index, exclude); err != nil {
 		return nil, err
 	}
-	add := append([]string{"add", "--all", "--", "."}, excludeSpecs(w.Dir, exclude)...)
-	if _, err := g.run(ctx, index, filters, add...); err != nil {
-		return nil, fmt.Errorf("checkpoint: %w", err)
-	}
-	tree, err := g.run(ctx, index, filters, "write-tree")
+	tree, err := g.run(ctx, index, "write-tree")
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint: %w", err)
 	}
@@ -76,22 +64,22 @@ func (w *Workspace) Checkpoint(ctx context.Context, exclude []string) (*Checkpoi
 	if n > 0 {
 		commitArgs = append(commitArgs, "-p", w.checkpoints[n-1])
 	}
-	head, err := g.run(ctx, index, filters, commitArgs...)
+	head, err := g.run(ctx, index, commitArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint: %w", err)
 	}
 	head = strings.TrimSpace(head)
-	if _, err := g.run(ctx, index, filters, "update-ref", checkpointRef(w.job, n), head); err != nil {
+	if _, err := g.run(ctx, index, "update-ref", checkpointRef(w.job, n), head); err != nil {
 		return nil, fmt.Errorf("checkpoint: %w", err)
 	}
 	w.checkpoints = append(w.checkpoints, head)
 	out := &CheckpointResult{Checkpoint: proto.Checkpoint{Seq: n, HeadCommit: head}}
 	if n > 0 {
 		out.BaseCommit = w.checkpoints[n-1]
-		if out.Files, out.Diff, out.Truncated, err = g.changes(ctx, out.BaseCommit, head); err != nil {
+		if out.Files, out.FilesTruncated, out.Diff, out.Truncated, err = g.changes(ctx, out.BaseCommit, head); err != nil {
 			return nil, err
 		}
-		if out.WholeFiles, out.Whole, out.WholeTruncated, err = g.changes(ctx, w.checkpoints[0], head); err != nil {
+		if out.WholeFiles, out.WholeFilesTruncated, out.Whole, out.WholeTruncated, err = g.changes(ctx, w.checkpoints[0], head); err != nil {
 			return nil, err
 		}
 	}
@@ -107,9 +95,9 @@ func (w *Workspace) dropCheckpoints(ctx context.Context) {
 		return
 	}
 	g := checkpointGit{bin: w.m.git(), gitDir: w.bare}
-	refs, _ := g.run(ctx, "", nil, "for-each-ref", "--format=%(refname)", "refs/gator/checkpoints/"+w.job+"/")
+	refs, _ := g.run(ctx, "", "for-each-ref", "--format=%(refname)", "refs/gator/checkpoints/"+w.job+"/")
 	for _, ref := range lines(refs) {
-		_, _ = g.run(ctx, "", nil, "update-ref", "-d", strings.TrimSpace(ref))
+		_, _ = g.run(ctx, "", "update-ref", "-d", strings.TrimSpace(ref))
 	}
 	_ = os.Remove(w.checkpointIndex())
 	w.checkpoints = nil
@@ -119,30 +107,6 @@ func (w *Workspace) dropCheckpoints(ctx context.Context) {
 // beside the repository cache so the next one hashes only what changed.
 func (w *Workspace) checkpointIndex() string {
 	return filepath.Join(w.bare, "gator-index", w.job)
-}
-
-func seedIndex(from, to string) error {
-	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
-		return err
-	}
-	_ = os.Remove(to)
-	src, err := os.Open(from)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.OpenFile(to, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		return err
-	}
-	return dst.Close()
 }
 
 // excludeSpecs are pathspecs that leave the paths under dir among exclude out of a checkpoint.
@@ -171,38 +135,27 @@ func (w *Workspace) checkpointGit() checkpointGit {
 	return checkpointGit{bin: w.m.git(), gitDir: w.gitDir, workTree: w.Dir, hooks: filepath.Join(w.bare, "gator-nohooks")}
 }
 
-// filterNames are the filter drivers the repository's configuration defines: each is switched off
-// by name, since a clean filter is a program git would run on every file it adds.
-func (g checkpointGit) filterNames(ctx context.Context) ([]string, error) {
-	out, err := g.run(ctx, "", nil, "config", "--name-only", "--get-regexp", `^filter\.`)
-	if err != nil && strings.TrimSpace(out) == "" {
-		return nil, nil // exit 1: there are none
-	}
-	seen := map[string]bool{}
-	var names []string
-	for _, key := range lines(out) {
-		key = strings.TrimSpace(key)
-		i, j := strings.Index(key, "."), strings.LastIndex(key, ".")
-		if i < 0 || j <= i {
-			continue
-		}
-		if name := key[i+1 : j]; !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	return names, nil
+func (g checkpointGit) run(ctx context.Context, index string, args ...string) (string, error) {
+	var out bytes.Buffer
+	err := g.stream(ctx, index, nil, &out, -1, args...)
+	return out.String(), err
 }
 
-func (g checkpointGit) run(ctx context.Context, index string, filters []string, args ...string) (string, error) {
+// runIndex is run on an index git only reads.
+func (g checkpointGit) runIndex(ctx context.Context, index string, args ...string) (string, error) {
+	return g.run(ctx, index, args...)
+}
+
+// runInput is run with input on stdin.
+func (g checkpointGit) runInput(ctx context.Context, index string, input []byte, args ...string) (string, error) {
 	var out bytes.Buffer
-	err := g.stream(ctx, index, filters, &out, -1, args...)
+	err := g.stream(ctx, index, input, &out, -1, args...)
 	return out.String(), err
 }
 
 // stream runs git with its output into w, at most limit bytes of it (-1: all of it). It answers
 // errTooLong when there was more.
-func (g checkpointGit) stream(ctx context.Context, index string, filters []string, w io.Writer, limit int, args ...string) error {
+func (g checkpointGit) stream(ctx context.Context, index string, input []byte, w io.Writer, limit int, args ...string) error {
 	full := []string{"--git-dir=" + g.gitDir}
 	if g.workTree != "" {
 		full = append(full, "--work-tree="+g.workTree)
@@ -213,17 +166,12 @@ func (g checkpointGit) stream(ctx context.Context, index string, filters []strin
 	if g.workTree != "" {
 		cmd.Dir = g.workTree // pathspecs are the worktree's
 	}
-	// The overrides go through GIT_CONFIG_KEY_n/VALUE_n, not -c: a key there is taken whole, so a
-	// driver named with "=" in it (which -c would split) is switched off like any other. The
-	// user's global configuration is not read at all, only the repository's, whose drivers are.
+	// What the runner sets goes through GIT_CONFIG_KEY_n/VALUE_n; the user's global configuration
+	// is not read at all. No checkpoint step reads a file of the worktree through git (stage.go),
+	// so no filter, attribute or textconv of the repository's ever runs.
 	settings := [][2]string{{"core.fsmonitor", "false"}, {"core.attributesFile", os.DevNull}, {"diff.external", ""},
-		{"core.hooksPath", g.hooksDir()}, {"core.quotePath", "false"}, {"gc.auto", "0"}, {"maintenance.auto", "false"}}
-	for _, f := range filters {
-		for _, k := range []string{"clean", "smudge", "process"} {
-			settings = append(settings, [2]string{"filter." + f + "." + k, ""})
-		}
-		settings = append(settings, [2]string{"filter." + f + ".required", "false"})
-	}
+		{"core.hooksPath", g.hooksDir()}, {"core.quotePath", "false"}, {"gc.auto", "0"}, {"maintenance.auto", "false"},
+		{"core.untrackedCache", "false"}}
 	cmd.Env = append(withoutGitConfigEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_ATTR_NOSYSTEM=1", "GIT_ATTR_SOURCE="+emptyTree, "GIT_OPTIONAL_LOCKS=0",
 		"GIT_AUTHOR_NAME=Gator Runner", "GIT_AUTHOR_EMAIL=runner@gator.local",
@@ -234,6 +182,9 @@ func (g checkpointGit) stream(ctx context.Context, index string, filters []strin
 	}
 	if index != "" {
 		cmd.Env = append(cmd.Env, "GIT_INDEX_FILE="+index)
+	}
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -287,17 +238,17 @@ var errTooLong = errors.New("output over the limit")
 
 // changes are the files that differ between two checkpoints, with their line counts, and the
 // unified diff, cut at proto.MaxDiffBytes on a line boundary.
-func (g checkpointGit) changes(ctx context.Context, from, to string) ([]proto.FileChange, []byte, bool, error) {
+func (g checkpointGit) changes(ctx context.Context, from, to string) ([]proto.FileChange, bool, []byte, bool, error) {
 	diffArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--ignore-submodules=all"}
 	var numstat bytes.Buffer
 	if err := g.stream(ctx, "", nil, &numstat, 16<<20, append(append([]string{}, diffArgs...), "--numstat", "-z", from, to)...); err != nil && !errors.Is(err, errTooLong) {
-		return nil, nil, false, err
+		return nil, false, nil, false, err
 	}
-	statuses, err := g.run(ctx, "", nil, append(append([]string{}, diffArgs...), "--name-status", "-z", from, to)...)
+	statuses, err := g.run(ctx, "", append(append([]string{}, diffArgs...), "--name-status", "-z", from, to)...)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, false, nil, false, err
 	}
-	files := parseChanges(numstat.String(), statuses)
+	files, more := parseChanges(numstat.String(), statuses)
 	var diff bytes.Buffer
 	truncated := false
 	err = g.stream(ctx, "", nil, &diff, proto.MaxDiffBytes, append(append([]string{}, diffArgs...), from, to)...)
@@ -309,14 +260,15 @@ func (g checkpointGit) changes(ctx context.Context, from, to string) ([]proto.Fi
 		}
 		diff.Truncate(len(b))
 	} else if err != nil {
-		return nil, nil, false, err
+		return nil, false, nil, false, err
 	}
-	return files, diff.Bytes(), truncated, nil
+	return files, more, diff.Bytes(), truncated, nil
 }
 
 // parseChanges reads `git diff --numstat -z` and `--name-status -z` (no renames: one path each)
-// into the files a turn changed, at most proto.MaxCheckpointFiles of them.
-func parseChanges(numstat, statuses string) []proto.FileChange {
+// into the files a turn changed, at most proto.MaxCheckpointFiles of them and of their paths at most
+// proto.MaxCheckpointPathBytes; more says there were more.
+func parseChanges(numstat, statuses string) (out []proto.FileChange, more bool) {
 	status := map[string]string{}
 	fields := strings.Split(statuses, "\x00")
 	for i := 0; i+1 < len(fields); i += 2 {
@@ -328,7 +280,7 @@ func parseChanges(numstat, statuses string) []proto.FileChange {
 			status[fields[i+1]] = proto.FileModified
 		}
 	}
-	var out []proto.FileChange
+	pathBytes := 0
 	for rec := range strings.SplitSeq(numstat, "\x00") {
 		parts := strings.SplitN(rec, "\t", 3)
 		if len(parts) != 3 {
@@ -344,10 +296,11 @@ func parseChanges(numstat, statuses string) []proto.FileChange {
 			f.Added, _ = strconv.Atoi(parts[0])
 			f.Removed, _ = strconv.Atoi(parts[1])
 		}
-		out = append(out, f)
-		if len(out) == proto.MaxCheckpointFiles {
-			break
+		if len(out) == proto.MaxCheckpointFiles || pathBytes+len(f.Path) > proto.MaxCheckpointPathBytes {
+			return out, true
 		}
+		pathBytes += len(f.Path)
+		out = append(out, f)
 	}
-	return out
+	return out, false
 }

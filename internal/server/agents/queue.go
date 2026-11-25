@@ -31,6 +31,6 @@ func (r QueueRunner) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	if err != nil {
 		return ignoreGone(err)
 	}
-	_, err = conversations.NextQueued(ctx, r.pool, turn.ConversationID, turn.AgentID)
+	_, err = conversations.NextQueued(ctx, r.pool, turn.ConversationID)
 	return err
 }

@@ -20,8 +20,10 @@ WHERE id = sqlc.arg(id) AND status = 'pending'
 RETURNING *;
 
 -- name: ExpireRuntimeRequests :many
+-- Rows are taken in id order, as every writer of more than one request takes them.
 UPDATE runtime_requests SET status = 'expired', decided_at = now()
-WHERE status = 'pending' AND expires_at <= sqlc.arg(now)
+WHERE id IN (SELECT r.id FROM runtime_requests r WHERE r.status = 'pending' AND r.expires_at <= sqlc.arg(now)
+             ORDER BY r.id FOR UPDATE SKIP LOCKED)
 RETURNING *;
 
 -- name: CancelJobRuntimeRequests :many
@@ -33,7 +35,7 @@ RETURNING *;
 SELECT * FROM runtime_requests WHERE job_id = $1 ORDER BY created_at;
 
 -- name: ListPendingRuntimeRequestsOfJob :many
-SELECT * FROM runtime_requests WHERE job_id = $1 AND status = 'pending' ORDER BY created_at FOR UPDATE;
+SELECT * FROM runtime_requests WHERE job_id = $1 AND status = 'pending' ORDER BY id FOR UPDATE;
 
 -- name: ListPendingRuntimeRequests :many
 -- What waits for a person, newest first, in the given projects (all when none are given).
@@ -44,3 +46,9 @@ LIMIT 200;
 
 -- name: ListUserProjectIDs :many
 SELECT project_id FROM memberships WHERE user_id = $1;
+
+-- name: CancelRuntimeRequest :one
+-- The runner no longer waits on it: the agent's CLI took the request back, or the turn ended.
+UPDATE runtime_requests SET status = 'cancelled', decided_at = now()
+WHERE id = $1 AND job_id = $2 AND status = 'pending'
+RETURNING *;

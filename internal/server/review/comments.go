@@ -190,26 +190,23 @@ func (c *Comments) Send(ctx context.Context, p auth.Principal, job db.Job, agent
 	if err != nil {
 		return conversations.Posted{}, 0, err
 	}
-	drafts, err := q.ListDraftReviewComments(ctx, db.ListDraftReviewCommentsParams{JobID: job.ID, AuthorID: p.UserID})
-	if err != nil {
-		return conversations.Posted{}, 0, err
-	}
-	if len(drafts) == 0 {
-		return conversations.Posted{}, 0, fmt.Errorf("%w: there are no drafts of yours on this job", ErrInvalid)
-	}
+	var locked []db.ReviewComment
 	sent := 0
 	posted, err := c.messages.Post(ctx, p, conv.ID, conversations.Draft{
-		Body:     notesMessage(a.Handle, drafts),
-		Mentions: []conversations.Member{{Kind: conversations.MemberAgent, ID: a.ID}},
-		Within: func(ctx context.Context, q *db.Queries, msg db.Message) error {
-			// The drafts as they are now, under lock: one sent meanwhile goes with the other message.
-			locked, err := q.ListDraftReviewComments(ctx, db.ListDraftReviewCommentsParams{JobID: job.ID, AuthorID: p.UserID})
-			if err != nil {
-				return err
+		// The drafts as they are now, locked: the message says what it carries, and one sent
+		// meanwhile goes with the other message.
+		Compose: func(ctx context.Context, q *db.Queries) (string, error) {
+			var err error
+			if locked, err = q.ListDraftReviewComments(ctx, db.ListDraftReviewCommentsParams{JobID: job.ID, AuthorID: p.UserID}); err != nil {
+				return "", err
 			}
 			if len(locked) == 0 {
-				return fmt.Errorf("%w: these notes were just sent", ErrInvalid)
+				return "", fmt.Errorf("%w: there are no drafts of yours on this job", ErrInvalid)
 			}
+			return notesMessage(a.Handle, locked), nil
+		},
+		Mentions: []conversations.Member{{Kind: conversations.MemberAgent, ID: a.ID}},
+		Within: func(ctx context.Context, q *db.Queries, msg db.Message) error {
 			ids := make([]pgtype.UUID, len(locked))
 			for i, d := range locked {
 				ids[i] = d.ID

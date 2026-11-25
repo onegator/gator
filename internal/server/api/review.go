@@ -115,7 +115,8 @@ func toCheckpoint(cp review.Checkpoint) gen.Checkpoint {
 	return gen.Checkpoint{Id: toUUID(cp.ID), JobId: toUUID(cp.JobID), TurnId: toUUIDPtr(cp.TurnID), Seq: int(cp.Seq), Repo: cp.Repo,
 		BaseCommit: cp.BaseCommit, HeadCommit: cp.HeadCommit, Files: toFileChanges(cp.Files), DiffBytes: cp.DiffBytes,
 		Truncated: cp.Truncated, WholeFiles: toFileChanges(cp.WholeFiles), WholeBytes: cp.WholeBytes, WholeTruncated: cp.WholeTruncated,
-		TookMs: int(cp.TookMs), CreatedAt: cp.CreatedAt.Time}
+		TookMs: int(cp.TookMs), CreatedAt: cp.CreatedAt.Time, Attempt: ptr(int(cp.Attempt)), FilesTruncated: &cp.FilesTruncated,
+		WholeFilesTruncated: &cp.WholeFilesTruncated}
 }
 
 func toFileChanges(b []byte) []gen.FileChange {

@@ -180,7 +180,7 @@ func (q *Queries) DeleteAttachment(ctx context.Context, id pgtype.UUID) error {
 const editMessage = `-- name: EditMessage :one
 UPDATE messages SET body = $1, edited_at = now()
 WHERE id = $2 AND deleted_at IS NULL
-RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for
 `
 
 type EditMessageParams struct {
@@ -210,12 +210,13 @@ func (q *Queries) EditMessage(ctx context.Context, arg EditMessageParams) (Messa
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
 
 const findCard = `-- name: FindCard :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages WHERE card_key = $1 AND conversation_id = ANY($2::uuid[])
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE card_key = $1 AND conversation_id = ANY($2::uuid[])
 ORDER BY created_at LIMIT 1
 `
 
@@ -248,6 +249,7 @@ func (q *Queries) FindCard(ctx context.Context, arg FindCardParams) (Message, er
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
@@ -296,7 +298,7 @@ func (q *Queries) GetAttachment(ctx context.Context, id pgtype.UUID) (MessageAtt
 }
 
 const getCardForUpdate = `-- name: GetCardForUpdate :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages WHERE conversation_id = $1 AND card_key = $2 FOR UPDATE
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE conversation_id = $1 AND card_key = $2 FOR UPDATE
 `
 
 type GetCardForUpdateParams struct {
@@ -327,6 +329,7 @@ func (q *Queries) GetCardForUpdate(ctx context.Context, arg GetCardForUpdatePara
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
@@ -351,7 +354,7 @@ func (q *Queries) GetConversationSummary(ctx context.Context, conversationID pgt
 }
 
 const getMessage = `-- name: GetMessage :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages WHERE id = $1
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE id = $1
 `
 
 func (q *Queries) GetMessage(ctx context.Context, id pgtype.UUID) (Message, error) {
@@ -376,12 +379,13 @@ func (q *Queries) GetMessage(ctx context.Context, id pgtype.UUID) (Message, erro
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
 
 const getMessageByClientID = `-- name: GetMessageByClientID :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages
 WHERE conversation_id = $1 AND author_kind = $2 AND author_id = $3 AND client_id = $4
 `
 
@@ -420,12 +424,13 @@ func (q *Queries) GetMessageByClientID(ctx context.Context, arg GetMessageByClie
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
 
 const getMessageForUpdate = `-- name: GetMessageForUpdate :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages WHERE id = $1 FOR UPDATE
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetMessageForUpdate(ctx context.Context, id pgtype.UUID) (Message, error) {
@@ -450,13 +455,14 @@ func (q *Queries) GetMessageForUpdate(ctx context.Context, id pgtype.UUID) (Mess
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
 
 const incrementReplyCount = `-- name: IncrementReplyCount :one
 UPDATE messages SET reply_count = reply_count + 1 WHERE id = $1
-RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for
 `
 
 func (q *Queries) IncrementReplyCount(ctx context.Context, id pgtype.UUID) (Message, error) {
@@ -481,33 +487,35 @@ func (q *Queries) IncrementReplyCount(ctx context.Context, id pgtype.UUID) (Mess
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
 
 const insertMessage = `-- name: InsertMessage :one
 INSERT INTO messages (conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, client_id, origin, status,
-                      input_intent)
+                      input_intent, queued_for)
 VALUES ($1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10, $11, $12,
-        $13)
-RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent
+        $13, COALESCE($14::uuid[], '{}'))
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for
 `
 
 type InsertMessageParams struct {
-	ConversationID pgtype.UUID `json:"conversation_id"`
-	Seq            int64       `json:"seq"`
-	AuthorKind     string      `json:"author_kind"`
-	AuthorID       pgtype.UUID `json:"author_id"`
-	Kind           string      `json:"kind"`
-	Body           string      `json:"body"`
-	CardType       *string     `json:"card_type"`
-	Card           []byte      `json:"card"`
-	CardKey        *string     `json:"card_key"`
-	ClientID       *string     `json:"client_id"`
-	Origin         []byte      `json:"origin"`
-	Status         string      `json:"status"`
-	InputIntent    *string     `json:"input_intent"`
+	ConversationID pgtype.UUID   `json:"conversation_id"`
+	Seq            int64         `json:"seq"`
+	AuthorKind     string        `json:"author_kind"`
+	AuthorID       pgtype.UUID   `json:"author_id"`
+	Kind           string        `json:"kind"`
+	Body           string        `json:"body"`
+	CardType       *string       `json:"card_type"`
+	Card           []byte        `json:"card"`
+	CardKey        *string       `json:"card_key"`
+	ClientID       *string       `json:"client_id"`
+	Origin         []byte        `json:"origin"`
+	Status         string        `json:"status"`
+	InputIntent    *string       `json:"input_intent"`
+	QueuedFor      []pgtype.UUID `json:"queued_for"`
 }
 
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (Message, error) {
@@ -525,6 +533,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 		arg.Origin,
 		arg.Status,
 		arg.InputIntent,
+		arg.QueuedFor,
 	)
 	var i Message
 	err := row.Scan(
@@ -546,6 +555,7 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) (M
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
@@ -632,7 +642,7 @@ func (q *Queries) ListAttachmentsOfMessages(ctx context.Context, messageIds []pg
 }
 
 const listCardsOfType = `-- name: ListCardsOfType :many
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages WHERE conversation_id = $1 AND card_type = $2 AND kind = 'card' ORDER BY seq
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE conversation_id = $1 AND card_type = $2 AND kind = 'card' ORDER BY seq
 `
 
 type ListCardsOfTypeParams struct {
@@ -668,6 +678,7 @@ func (q *Queries) ListCardsOfType(ctx context.Context, arg ListCardsOfTypeParams
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.InputIntent,
+			&i.QueuedFor,
 		); err != nil {
 			return nil, err
 		}
@@ -705,7 +716,7 @@ func (q *Queries) ListMentionsOfMessages(ctx context.Context, messageIds []pgtyp
 }
 
 const listMessagesAfter = `-- name: ListMessagesAfter :many
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages
 WHERE conversation_id = $1 AND seq > $2
 ORDER BY seq
 LIMIT $3
@@ -745,6 +756,7 @@ func (q *Queries) ListMessagesAfter(ctx context.Context, arg ListMessagesAfterPa
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.InputIntent,
+			&i.QueuedFor,
 		); err != nil {
 			return nil, err
 		}
@@ -757,7 +769,7 @@ func (q *Queries) ListMessagesAfter(ctx context.Context, arg ListMessagesAfterPa
 }
 
 const listMessagesBefore = `-- name: ListMessagesBefore :many
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages
 WHERE conversation_id = $1 AND seq < $2
 ORDER BY seq DESC
 LIMIT $3
@@ -798,6 +810,7 @@ func (q *Queries) ListMessagesBefore(ctx context.Context, arg ListMessagesBefore
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.InputIntent,
+			&i.QueuedFor,
 		); err != nil {
 			return nil, err
 		}
@@ -810,7 +823,7 @@ func (q *Queries) ListMessagesBefore(ctx context.Context, arg ListMessagesBefore
 }
 
 const listQueuedMessages = `-- name: ListQueuedMessages :many
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages WHERE conversation_id = $1 AND input_intent = 'queued' AND deleted_at IS NULL ORDER BY seq
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE conversation_id = $1 AND input_intent = 'queued' AND deleted_at IS NULL ORDER BY seq
 `
 
 // A conversation's queue: what people asked to be done once the agent's turn ends, oldest first.
@@ -842,6 +855,7 @@ func (q *Queries) ListQueuedMessages(ctx context.Context, conversationID pgtype.
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.InputIntent,
+			&i.QueuedFor,
 		); err != nil {
 			return nil, err
 		}
@@ -947,7 +961,7 @@ func (q *Queries) ListThreadsOfMessages(ctx context.Context, messageIds []pgtype
 }
 
 const nextQueuedMessage = `-- name: NextQueuedMessage :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent FROM messages WHERE conversation_id = $1 AND input_intent = 'queued' AND deleted_at IS NULL
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE conversation_id = $1 AND input_intent = 'queued' AND deleted_at IS NULL
 ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED
 `
 
@@ -973,6 +987,7 @@ func (q *Queries) NextQueuedMessage(ctx context.Context, conversationID pgtype.U
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
@@ -1037,7 +1052,7 @@ func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) 
 const rewriteMessage = `-- name: RewriteMessage :one
 UPDATE messages SET body = $1, status = $2
 WHERE id = $3 AND deleted_at IS NULL
-RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for
 `
 
 type RewriteMessageParams struct {
@@ -1069,13 +1084,14 @@ func (q *Queries) RewriteMessage(ctx context.Context, arg RewriteMessageParams) 
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
 
 const setMessageIntent = `-- name: SetMessageIntent :one
 UPDATE messages SET input_intent = $1 WHERE id = $2 AND input_intent = 'queued' AND deleted_at IS NULL
-RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for
 `
 
 type SetMessageIntentParams struct {
@@ -1106,6 +1122,7 @@ func (q *Queries) SetMessageIntent(ctx context.Context, arg SetMessageIntentPara
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
@@ -1128,7 +1145,7 @@ func (q *Queries) SetSummaryJob(ctx context.Context, arg SetSummaryJobParams) er
 const softDeleteMessage = `-- name: SoftDeleteMessage :one
 UPDATE messages SET deleted_at = now(), body = '', card = NULL
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for
 `
 
 // A deleted message keeps its place (its seq, its thread) and loses its words, a card its card.
@@ -1154,6 +1171,7 @@ func (q *Queries) SoftDeleteMessage(ctx context.Context, id pgtype.UUID) (Messag
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }
@@ -1161,7 +1179,7 @@ func (q *Queries) SoftDeleteMessage(ctx context.Context, id pgtype.UUID) (Messag
 const updateCard = `-- name: UpdateCard :one
 UPDATE messages SET body = $1, card = $2, edited_at = now()
 WHERE id = $3
-RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent
+RETURNING id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for
 `
 
 type UpdateCardParams struct {
@@ -1192,6 +1210,7 @@ func (q *Queries) UpdateCard(ctx context.Context, arg UpdateCardParams) (Message
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }

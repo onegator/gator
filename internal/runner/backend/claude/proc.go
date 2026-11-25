@@ -35,7 +35,7 @@ func (b Backend) spawn(spec backend.Spec, args []string, withStdin bool) (*proc,
 	bin, args := agentenv.Command(b.bin(), args, spec.DenyRead)
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = spec.Dir
-	cmd.Env = append(agentenv.Filter(os.Environ(), b.AllowEnv), spec.Env...)
+	cmd.Env = backend.AgentEnv(spec, b.AllowEnv)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	p := &proc{cmd: cmd, stderr: &tail{max: 8 << 10}, stderrDone: make(chan struct{})}
 	if withStdin {
@@ -80,13 +80,15 @@ func (b Backend) spawn(spec backend.Spec, args []string, withStdin bool) (*proc,
 	return p, nil
 }
 
-// lines hands each line of stdout to fn until it ends.
-func (p *proc) lines(fn func([]byte)) {
+// lines hands each line of stdout to fn until it ends, and answers what stopped it early: a line
+// over 32 MiB, a broken pipe.
+func (p *proc) lines(fn func([]byte)) error {
 	sc := bufio.NewScanner(p.stdout)
 	sc.Buffer(make([]byte, 1<<20), 32<<20)
 	for sc.Scan() {
 		fn(sc.Bytes())
 	}
+	return sc.Err()
 }
 
 // terminate asks the group to end and kills it after grace, unless it exits first.

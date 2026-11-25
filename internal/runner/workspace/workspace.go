@@ -46,6 +46,10 @@ type Workspace struct {
 	job         string
 	gitDir      string
 	checkpoints []string
+	// format is the repository's object format (sha1, sha256); hashed what each file was when the
+	// runner last hashed it, so the next checkpoint hashes only what changed.
+	format string
+	hashed map[string]staged
 }
 
 // HasRepo reports whether the workspace is a git checkout.

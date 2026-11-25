@@ -1,9 +1,9 @@
 -- name: InsertMessage :one
 INSERT INTO messages (conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, client_id, origin, status,
-                      input_intent)
+                      input_intent, queued_for)
 VALUES (sqlc.arg(conversation_id), sqlc.arg(seq), sqlc.arg(author_kind), sqlc.narg(author_id), sqlc.arg(kind), sqlc.arg(body),
         sqlc.narg(card_type), sqlc.narg(card), sqlc.narg(card_key), sqlc.narg(client_id), sqlc.arg(origin), sqlc.arg(status),
-        sqlc.narg(input_intent))
+        sqlc.narg(input_intent), COALESCE(sqlc.narg(queued_for)::uuid[], '{}'))
 RETURNING *;
 
 -- name: ListQueuedMessages :many

@@ -117,6 +117,8 @@ type Config struct {
 // request it already decided answers the decision, for the runner to hear again.
 type RuntimeRequests interface {
 	Request(ctx context.Context, job db.Job, r proto.RuntimeRequest) (*proto.RuntimeDecision, error)
+	// Cancel ends a request the runner no longer waits on.
+	Cancel(ctx context.Context, job db.Job, id string) error
 }
 
 // CheckpointRecorder keeps a checkpoint of a job's worktree. review.Checkpoints is one.

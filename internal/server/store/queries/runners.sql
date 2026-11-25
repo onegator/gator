@@ -81,7 +81,7 @@ UPDATE jobs
 SET status = 'leased', runner_id = sqlc.arg(runner_id), lease_expires_at = sqlc.arg(lease_until),
     attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
 WHERE id IN (
-    SELECT j.id FROM jobs j
+    SELECT j.id FROM jobs j JOIN projects pj ON pj.id = j.project_id
     WHERE j.status = 'queued'
       AND j.backend = ANY(sqlc.arg(backends)::text[])
       AND (cardinality(sqlc.arg(projects)::uuid[]) = 0 OR j.project_id = ANY(sqlc.arg(projects)::uuid[]))
@@ -91,13 +91,21 @@ WHERE id IN (
            OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
       -- A runner older than protocol v3 runs every job as a phase; it gets only those.
       AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
+      -- A runner older than protocol v4 cannot hold a work job to an approvals policy, and it would
+      -- let what the policy asks about run unseen: it gets work only of a project that asks nothing.
+      AND (sqlc.arg(asks)::boolean OR (j.tier <> 'work'
+           OR (jsonb_typeof(pj.process_config->'policy'->'approvals'->'ask') = 'array'
+               AND jsonb_array_length(pj.process_config->'policy'->'approvals'->'ask') = 0
+               AND COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(pj.process_config->'policy'->'approvals'->'deny') = 'array'
+                                                    THEN pj.process_config->'policy'->'approvals'->'deny' END), 0) = 0
+               AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.id = j.agent_id AND a.policy ? 'approvals'))))
       -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
       -- with no tools: a runner would refuse it anywhere else.
       AND (j.tier <> 'chat' OR j.backend = ANY(sqlc.arg(read_only)::text[]))
       AND (j.kind <> 'summary' OR j.backend = ANY(sqlc.arg(no_tools)::text[]))
     ORDER BY j.created_at
     LIMIT sqlc.arg(slots)
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF j SKIP LOCKED
 )
 RETURNING *;
 
@@ -156,7 +164,7 @@ RETURNING id, task_id, status;
 -- alone (skip_cloud): nobody is missing, the runner is on its way.
 UPDATE jobs SET unassignable_since = now(), updated_at = now()
 WHERE id IN (
-    SELECT j.id FROM jobs j
+    SELECT j.id FROM jobs j JOIN projects p2 ON p2.id = j.project_id
     WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < sqlc.arg(before)
       AND NOT (sqlc.arg(skip_cloud)::boolean AND j.placement = 'cloud')
       AND NOT EXISTS (
@@ -173,8 +181,14 @@ WHERE id IN (
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
             AND (j.kind = 'phase' OR r.protocol_version >= 3)
+            AND (r.protocol_version >= 4 OR (j.tier <> 'work'
+           OR (jsonb_typeof(p2.process_config->'policy'->'approvals'->'ask') = 'array'
+               AND jsonb_array_length(p2.process_config->'policy'->'approvals'->'ask') = 0
+               AND COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(p2.process_config->'policy'->'approvals'->'deny') = 'array'
+                                                    THEN p2.process_config->'policy'->'approvals'->'deny' END), 0) = 0
+               AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.id = j.agent_id AND a.policy ? 'approvals'))))
       )
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF j SKIP LOCKED
 )
 RETURNING id, task_id, project_id, backend, placement;
 

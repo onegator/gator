@@ -276,6 +276,11 @@ func (s *session) handle(env proto.RawEnvelope) {
 		report(s, env, "checkpoint", s.checkpoint)
 	case proto.TypeRuntimeRequest:
 		report(s, env, "runtime_request", s.runtimeRequest)
+	case proto.TypeRuntimeCancel:
+		var d proto.RuntimeDecision
+		if err := env.Into(&d); err == nil {
+			s.runtimeCancel(d)
+		}
 	case proto.TypeTurnEnding:
 		report(s, env, "turn_ending", func(te proto.TurnEnding) error {
 			s.turnEnding(te)
@@ -389,6 +394,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			Backends: backends, Projects: projects, Slots: int32(free),
 			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
 			PhaseOnly: s.version < turnsVersion,
+			Asks:      s.version >= liveVersion, // only a v4 runner holds a work job to its approvals
 			ReadOnly:  keeping(backends, s.caps.ReadOnly), NoTools: keeping(backends, s.caps.NoTools),
 		})
 		if err != nil {
@@ -483,13 +489,6 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 		}
 	}
 	if s.version >= liveVersion && j.Tier != TierChat {
-		if j.Attempts > 1 {
-			// The attempt before was lost with its runner; its checkpoints (and the comments on
-			// them) are not this attempt's, which starts again at the first turn.
-			if err := q.DeleteJobCheckpoints(ctx, j.ID); err != nil {
-				s.m.log.Warn("dropping an earlier attempt's checkpoints", "job", uuidString(j.ID), "err", err)
-			}
-		}
 		pj.NoCheckpoints = !s.m.process.CheckpointsOn(ctx, j.ProjectID)
 		pj.Approvals = s.approvals(ctx, q, j)
 	}
@@ -830,6 +829,17 @@ func (s *session) runtimeRequest(r proto.RuntimeRequest) error {
 		return s.send(proto.TypeRuntimeDecision, *decided)
 	}
 	return nil
+}
+
+// runtimeCancel ends a request of a job this runner holds that it no longer waits on.
+func (s *session) runtimeCancel(d proto.RuntimeDecision) {
+	job, err := s.ownJob(s.ctx, db.New(s.m.pool), d.JobID)
+	if err != nil || s.m.cfg.Runtime == nil {
+		return
+	}
+	if err := s.m.cfg.Runtime.Cancel(s.ctx, job, d.ID); err != nil {
+		s.m.log.Warn("cancelling a runtime request", "job", d.JobID, "err", err)
+	}
 }
 
 func (s *session) finish(fin proto.Finish) error {

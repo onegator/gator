@@ -53,8 +53,12 @@ var _ backend.Backend = Backend{}
 // limit of the runner connection.
 const maxSummary = 200_000
 
-// errToolLimit ends a run that exceeded its tool-call budget.
-var errToolLimit = errors.New("tool call limit reached")
+// errToolLimit ends a run that exceeded its tool-call budget; errOutput one whose output cannot be
+// read on (a line over the limit).
+var (
+	errToolLimit = errors.New("tool call limit reached")
+	errOutput    = errors.New("claude's output could not be read")
+)
 
 // Name implements backend.Backend.
 func (b Backend) Name() string { return "claude" }
@@ -172,12 +176,15 @@ func (b Backend) runPrint(ctx context.Context, spec backend.Spec, emit backend.E
 	parsed := make(chan struct{})
 	go func() {
 		defer close(parsed)
-		p.lines(func(line []byte) {
+		err := p.lines(func(line []byte) {
 			_ = parser.Line(line, func(typ string, payload any) { emit(typ, payload) })
 			if spec.MaxToolCalls > 0 && parser.ToolCalls > spec.MaxToolCalls && runCtx.Err() == nil {
 				cancel(errToolLimit)
 			}
 		})
+		if err != nil {
+			cancel(fmt.Errorf("%w: %v", errOutput, err)) // the rest of the stream cannot be read: stop now
+		}
 	}()
 
 	exited := make(chan struct{})
@@ -192,7 +199,11 @@ func (b Backend) runPrint(ctx context.Context, spec backend.Spec, emit backend.E
 	waitErr := p.cmd.Wait()
 	close(exited)
 	p.release(parsed)
-	return b.outcome(runCtx, spec, parser, p, waitErr)
+	out := b.outcome(runCtx, spec, parser, p, waitErr)
+	if spec.Live != nil && spec.Live.TurnEnded != nil && parser.Result != nil {
+		spec.Live.TurnEnded() // a session that fell back to print mode still checkpoints its turn
+	}
+	return out
 }
 
 // commonArgs are the flags every run has whatever its mode: Gator's and the runner's MCP servers
@@ -258,6 +269,8 @@ func (b Backend) outcome(runCtx context.Context, spec backend.Spec, parser *Pars
 	switch {
 	case errors.Is(cause, errToolLimit):
 		out.Status, out.Reason = proto.StatusFailed, fmt.Sprintf("tool call limit (%d) reached", spec.MaxToolCalls)
+	case errors.Is(cause, errOutput):
+		out.Status, out.Reason = proto.StatusFailed, cause.Error()
 	case runCtx.Err() != nil:
 		out.Interrupted, out.Cause = true, cause
 		out.Reason = cause.Error()

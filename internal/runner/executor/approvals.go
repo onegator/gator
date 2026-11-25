@@ -34,18 +34,26 @@ type approver struct {
 // agent is told no rather than let through unseen. A job that only reads has no approver: its
 // session is never asked, and a prompt that comes anyway is refused. Nil approvals is what a job
 // had before them: nothing.
-func approvals(job proto.Job, be backend.Backend, io client.JobIO) (backend.Approver, []string) {
+//
+// The rules always reach the backend (Access.Ask and Deny): one that falls back to not asking in
+// the middle of a job (a Claude session refused by its CLI) refuses them by itself.
+func approvals(job proto.Job, be backend.Backend, io client.JobIO) (backend.Approver, backend.Access) {
 	a := job.Approvals
 	if a == nil || job.ReadOnly() || len(a.Ask)+len(a.Deny) == 0 {
-		return nil, nil // nothing to hold the job to: it works as it always did
+		return nil, backend.Access{} // nothing to hold the job to: it works as it always did
 	}
+	rules := backend.Access{Ask: append([]string{}, a.Ask...), Deny: append([]string{}, a.Deny...)}
 	if !be.Capabilities().ToolApprovals || io.Request == nil {
-		io.Emit("approvals_held_as_denials", map[string]any{"rules": len(a.Ask) + len(a.Deny)})
-		return nil, append(append([]string{}, a.Ask...), a.Deny...)
+		io.Emit(EventHeldAsDenials, map[string]any{"rules": len(a.Ask) + len(a.Deny)})
+		return nil, rules
 	}
 	return &approver{ask: backend.ParseRules(a.Ask), deny: backend.ParseRules(a.Deny), timeout: a.TimeoutSeconds,
-		request: io.Request, emit: io.Emit, session: map[string]bool{}}, a.Deny
+		request: io.Request, emit: io.Emit, session: map[string]bool{}}, rules
 }
+
+// EventHeldAsDenials says the job's backend cannot ask a person, so what the policy asks about
+// is refused.
+const EventHeldAsDenials = "approvals_held_as_denials"
 
 // Decide implements backend.Approver.
 func (a *approver) Decide(ctx context.Context, r backend.ToolRequest) backend.Decision {
@@ -70,7 +78,11 @@ func (a *approver) Decide(ctx context.Context, r backend.ToolRequest) backend.De
 
 // putToPerson puts the request to a person and waits for the decision.
 func (a *approver) putToPerson(ctx context.Context, r backend.ToolRequest, rule string) backend.Decision {
-	req := proto.RuntimeRequest{ID: newID(), Kind: r.Kind, Tool: r.Tool, Input: boundedInput(r.Input), Rule: rule,
+	if len(r.Input) > proto.MaxRequestInput {
+		// A person cannot be shown it whole, and nothing is approved unseen.
+		return backend.Decision{Message: fmt.Sprintf("This call is %d bytes, too long to show a person for approval; refused. Split it, or write it to a file in the worktree first.", len(r.Input))}
+	}
+	req := proto.RuntimeRequest{ID: newID(), Kind: r.Kind, Tool: r.Tool, Input: r.Input, Rule: rule,
 		ToolUseID: r.ToolUseID, TimeoutSeconds: a.timeout}
 	a.emit("runtime_request", map[string]any{"id": req.ID, "kind": req.Kind, "tool": req.Tool, "rule": rule})
 	d := a.request(ctx, req)
@@ -107,15 +119,6 @@ func decider(d proto.RuntimeDecision) string {
 		return d.By
 	}
 	return "A person"
-}
-
-// boundedInput keeps a tool's input within what a request may carry; a longer one goes as a note
-// of its length, and the person sees the tool and the rule.
-func boundedInput(in []byte) []byte {
-	if len(in) <= proto.MaxRequestInput {
-		return in
-	}
-	return []byte(fmt.Sprintf(`{"note":"the input is %d bytes, too long to show"}`, len(in)))
 }
 
 // newID is a random UUID (v4), the request's own: a request sent again is the same one.

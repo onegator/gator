@@ -596,6 +596,7 @@ type Message struct {
 	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	InputIntent    *string            `json:"input_intent"`
+	QueuedFor      []pgtype.UUID      `json:"queued_for"`
 }
 
 type MessageAttachment struct {
@@ -936,25 +937,28 @@ type Task struct {
 }
 
 type TurnCheckpoint struct {
-	ID             pgtype.UUID        `json:"id"`
-	JobID          pgtype.UUID        `json:"job_id"`
-	TurnID         pgtype.UUID        `json:"turn_id"`
-	Seq            int32              `json:"seq"`
-	Repo           string             `json:"repo"`
-	BaseCommit     string             `json:"base_commit"`
-	HeadCommit     string             `json:"head_commit"`
-	Files          []byte             `json:"files"`
-	DiffKey        *string            `json:"diff_key"`
-	Diff           []byte             `json:"diff"`
-	DiffBytes      int64              `json:"diff_bytes"`
-	Truncated      bool               `json:"truncated"`
-	WholeFiles     []byte             `json:"whole_files"`
-	WholeKey       *string            `json:"whole_key"`
-	WholeDiff      []byte             `json:"whole_diff"`
-	WholeBytes     int64              `json:"whole_bytes"`
-	WholeTruncated bool               `json:"whole_truncated"`
-	TookMs         int32              `json:"took_ms"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	JobID               pgtype.UUID        `json:"job_id"`
+	TurnID              pgtype.UUID        `json:"turn_id"`
+	Attempt             int32              `json:"attempt"`
+	Seq                 int32              `json:"seq"`
+	Repo                string             `json:"repo"`
+	BaseCommit          string             `json:"base_commit"`
+	HeadCommit          string             `json:"head_commit"`
+	Files               []byte             `json:"files"`
+	FilesTruncated      bool               `json:"files_truncated"`
+	DiffKey             *string            `json:"diff_key"`
+	Diff                []byte             `json:"diff"`
+	DiffBytes           int64              `json:"diff_bytes"`
+	Truncated           bool               `json:"truncated"`
+	WholeFiles          []byte             `json:"whole_files"`
+	WholeKey            *string            `json:"whole_key"`
+	WholeDiff           []byte             `json:"whole_diff"`
+	WholeBytes          int64              `json:"whole_bytes"`
+	WholeTruncated      bool               `json:"whole_truncated"`
+	WholeFilesTruncated bool               `json:"whole_files_truncated"`
+	TookMs              int32              `json:"took_ms"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
 type UsageRecord struct {

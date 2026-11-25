@@ -53,6 +53,41 @@ func (q *Queries) CancelJobRuntimeRequests(ctx context.Context, jobID pgtype.UUI
 	return items, nil
 }
 
+const cancelRuntimeRequest = `-- name: CancelRuntimeRequest :one
+UPDATE runtime_requests SET status = 'cancelled', decided_at = now()
+WHERE id = $1 AND job_id = $2 AND status = 'pending'
+RETURNING id, job_id, turn_id, kind, tool, input, rule, tool_use_id, status, stopped, feedback, decided_by, decided_at, expires_at, created_at
+`
+
+type CancelRuntimeRequestParams struct {
+	ID    pgtype.UUID `json:"id"`
+	JobID pgtype.UUID `json:"job_id"`
+}
+
+// The runner no longer waits on it: the agent's CLI took the request back, or the turn ended.
+func (q *Queries) CancelRuntimeRequest(ctx context.Context, arg CancelRuntimeRequestParams) (RuntimeRequest, error) {
+	row := q.db.QueryRow(ctx, cancelRuntimeRequest, arg.ID, arg.JobID)
+	var i RuntimeRequest
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.TurnID,
+		&i.Kind,
+		&i.Tool,
+		&i.Input,
+		&i.Rule,
+		&i.ToolUseID,
+		&i.Status,
+		&i.Stopped,
+		&i.Feedback,
+		&i.DecidedBy,
+		&i.DecidedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const decideRuntimeRequest = `-- name: DecideRuntimeRequest :one
 UPDATE runtime_requests SET status = $1, feedback = $2, decided_by = $3,
     stopped = $4, decided_at = now()
@@ -100,10 +135,12 @@ func (q *Queries) DecideRuntimeRequest(ctx context.Context, arg DecideRuntimeReq
 
 const expireRuntimeRequests = `-- name: ExpireRuntimeRequests :many
 UPDATE runtime_requests SET status = 'expired', decided_at = now()
-WHERE status = 'pending' AND expires_at <= $1
+WHERE id IN (SELECT r.id FROM runtime_requests r WHERE r.status = 'pending' AND r.expires_at <= $1
+             ORDER BY r.id FOR UPDATE SKIP LOCKED)
 RETURNING id, job_id, turn_id, kind, tool, input, rule, tool_use_id, status, stopped, feedback, decided_by, decided_at, expires_at, created_at
 `
 
+// Rows are taken in id order, as every writer of more than one request takes them.
 func (q *Queries) ExpireRuntimeRequests(ctx context.Context, now pgtype.Timestamptz) ([]RuntimeRequest, error) {
 	rows, err := q.db.Query(ctx, expireRuntimeRequests, now)
 	if err != nil {
@@ -333,7 +370,7 @@ func (q *Queries) ListPendingRuntimeRequests(ctx context.Context, projects []pgt
 }
 
 const listPendingRuntimeRequestsOfJob = `-- name: ListPendingRuntimeRequestsOfJob :many
-SELECT id, job_id, turn_id, kind, tool, input, rule, tool_use_id, status, stopped, feedback, decided_by, decided_at, expires_at, created_at FROM runtime_requests WHERE job_id = $1 AND status = 'pending' ORDER BY created_at FOR UPDATE
+SELECT id, job_id, turn_id, kind, tool, input, rule, tool_use_id, status, stopped, feedback, decided_by, decided_at, expires_at, created_at FROM runtime_requests WHERE job_id = $1 AND status = 'pending' ORDER BY id FOR UPDATE
 `
 
 func (q *Queries) ListPendingRuntimeRequestsOfJob(ctx context.Context, jobID pgtype.UUID) ([]RuntimeRequest, error) {

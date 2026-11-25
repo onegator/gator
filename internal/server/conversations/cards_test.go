@@ -194,7 +194,7 @@ func (f fakeTasks) GetTask(_ context.Context, id pgtype.UUID) (db.Task, error) {
 type fakeJobs struct {
 	fakeTasks
 	jobs    map[[16]byte]db.Job
-	changes map[[16]byte][]byte
+	changes map[[16]byte][][]byte
 }
 
 func (f fakeJobs) GetJob(_ context.Context, id pgtype.UUID) (db.Job, error) {
@@ -215,11 +215,11 @@ func (f fakeJobs) JobProgress(context.Context, pgtype.UUID) (db.JobProgressRow, 
 
 func (f fakeJobs) JobStartupPhase(context.Context, pgtype.UUID) (string, error) { return "", nil }
 
-func (f fakeJobs) JobChanges(_ context.Context, id pgtype.UUID) ([]byte, error) {
+func (f fakeJobs) JobChanges(_ context.Context, id pgtype.UUID) ([][]byte, error) {
 	if f.changes != nil {
 		return f.changes[id.Bytes], nil
 	}
-	return []byte("[]"), nil
+	return nil, nil
 }
 
 func TestSourcesLeaveNoCardForWhatIsGone(t *testing.T) {
@@ -296,8 +296,9 @@ func TestJobCardCountsTheChanges(t *testing.T) {
 	task := db.Task{ID: newID(1), Title: "T", Kind: "bug", Phase: "implementation"}
 	jobs := fakeJobs{fakeTasks: fakeTasks{task.ID.Bytes: task},
 		jobs: map[[16]byte]db.Job{newID(5).Bytes: {ID: newID(5), TaskID: task.ID, Status: "running", Phase: "implementation"}},
-		changes: map[[16]byte][]byte{newID(5).Bytes: []byte(`[{"path":"a.go","added":40,"removed":7,"status":"modified"},` +
-			`{"path":"b.go","added":2,"removed":0,"status":"added"},{"path":"logo.png","added":0,"removed":0,"status":"added","binary":true}]`)}}
+		changes: map[[16]byte][][]byte{newID(5).Bytes: {[]byte(`[{"path":"a.go","added":40,"removed":7,"status":"modified"},` +
+			`{"path":"b.go","added":2,"removed":0,"status":"added"}]`), // two repositories, counted together
+			[]byte(`[{"path":"logo.png","added":0,"removed":0,"status":"added","binary":true}]`)}}}
 	got, err := jobCards{jobs: jobs}.Cards(ctx, db.EventsAfterRow{AggregateID: newID(5)})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("job card: %+v %v", got, err)

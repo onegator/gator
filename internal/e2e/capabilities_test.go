@@ -36,6 +36,22 @@ func TestBackendCapabilitiesReachTheRunnerAndItsJobs(t *testing.T) {
 	if !got.ActiveSteering || !got.ToolApprovals || !got.Checkpoints || got.Enforcement != gen.BackendCapabilitiesEnforcementNative {
 		t.Fatalf("runner capabilities: %+v", got)
 	}
+	if info.Jobs == nil || len(*info.Jobs) != 1 {
+		t.Fatalf("the runner's jobs: %+v", info.Jobs)
+	}
+	// Somebody outside the project sees the runner, not what it works on: the task's title is the project's.
+	var seen gen.RunnerInfo
+	h.asJob(h.person(), "GET", "/runners/"+r.RunnerID, nil, &seen)
+	var all []gen.RunnerInfo
+	h.asJob(h.person(), "GET", "/runners", nil, &all)
+	if seen.Jobs == nil || len(*seen.Jobs) != 0 {
+		t.Fatalf("an outsider sees the runner's jobs: %+v", seen.Jobs)
+	}
+	for _, rn := range all {
+		if rn.Jobs != nil && len(*rn.Jobs) != 0 {
+			t.Fatalf("an outsider sees a runner's jobs in the list: %+v", rn.Jobs)
+		}
+	}
 	var j gen.Job
 	h.do("GET", "/jobs/"+job.Id.String(), nil, &j)
 	if j.Capabilities == nil || !j.Capabilities.ActiveSteering || !j.Capabilities.NativeInterrupt {

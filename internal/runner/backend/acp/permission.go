@@ -78,7 +78,7 @@ func (p Permissions) Decide(call permissionToolCall) Verdict {
 // ask about; it is the runner's part of the approvals policy for an agent that cannot wait for a
 // person.
 func (p Permissions) denied(call permissionToolCall) (string, bool) {
-	rules := backend.ParseRules(p.Access.Deny)
+	rules := backend.ParseRules(p.Access.Refused()) // an ACP agent's requests are answered here, never put to a person
 	if len(rules) == 0 {
 		return "", false
 	}

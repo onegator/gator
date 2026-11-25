@@ -33,6 +33,14 @@ func TestBashRulesSeeEveryCommandOfALine(t *testing.T) {
 		{push, "git push --force origin main", true},
 		{push, "cd repo; git  push", true},
 		{push, "git status && git commit -m push", false},
+		{push, "git -C ../repo -c user.name=x push origin", true},
+		{push, "git --git-dir=.git --no-pager push", true},
+		{push, `eval "git push"`, true},
+		{push, "sudo -u deploy git push", true},
+		{push, "env -u HOME GIT_TRACE=1 git push", true},
+		{push, "command git push", true},
+		{push, "exec git push --force", true},
+		{curl, "xargs -n 1 -I {} curl {}", true},
 		{rmrf, "rm -rf /", true},
 		{rmrf, "cd / && rm -rf /var", true},
 		{rmrf, "rm -rf ./build", false},
@@ -58,7 +66,7 @@ func TestOtherRules(t *testing.T) {
 	if !fetch.Matches("WebFetch", []byte(`{"url":"https://x"}`)) || fetch.Matches("Bash", bash("curl")) {
 		t.Error("tool name rule")
 	}
-	if !domain.Matches("WebFetch", []byte(`{"url":"https://api.example.com/x"}`)) || domain.Matches("WebFetch", []byte(`{"url":"https://example.org"}`)) {
+	if !domain.Matches("WebFetch", []byte(`{"url":"https://API.Example.COM./x"}`)) || !domain.Matches("WebFetch", []byte(`{"url":"https://api.example.com/x"}`)) || domain.Matches("WebFetch", []byte(`{"url":"https://example.org"}`)) {
 		t.Error("domain rule")
 	}
 	for _, bad := range []string{"", "Bash(", "Bash()", "mcp:", "mcp:x", "(x)"} {
@@ -68,5 +76,13 @@ func TestOtherRules(t *testing.T) {
 	}
 	if r, ok := Matching(ParseRules([]string{"WebFetch", "Bash(curl:*)"}), "Bash", bash("curl x")); !ok || r.Raw != "Bash(curl:*)" {
 		t.Errorf("matching: %+v %v", r, ok)
+	}
+}
+
+// A path rule holds to the path as it is, not as it is spelled.
+func TestPathRulesAreCleaned(t *testing.T) {
+	r, _ := ParseRule("Edit(/etc/*)")
+	if !r.Matches("Edit", []byte(`{"file_path":"/tmp/../etc/passwd"}`)) || r.Matches("Edit", []byte(`{"file_path":"/tmp/etc"}`)) {
+		t.Fatal("a path rule read the spelling, not the path")
 	}
 }

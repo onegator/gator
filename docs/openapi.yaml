@@ -13,6 +13,26 @@ info:
     events carry ids and seq, never message bodies; a client reads the messages after its last
     seq. A client sends {"typing":"<conversationId>"} to say it is typing; the others in the
     conversation get a conversation.typing event, which is never stored.
+
+
+    Events of a job (topic job:<id>; the inbox topic too for runtime_request.*), payloads as
+    stored: job.checkpoint {task_id, checkpoint_id, seq, repo, summary: {seq, files, added,
+    removed}, took_ms} — a turn was checkpointed, read GET /jobs/{id}/checkpoints; job.settling
+    {task_id, status: settling, …} — the agent is done, the runner settles before the receipt;
+    job.startup {task_id, phase: checkout|mcp|initialize|ready}; runtime_request.created,
+    runtime_request.decided, runtime_request.expired, runtime_request.cancelled {request_id, kind:
+    tool_approval|question, tool, status, turn_id} — read GET /runtime-requests/{id}; a client
+    drops a decided, expired or cancelled one from "Needs you". Of a conversation (topic
+    conversation:<id>, and me): message.dequeued {messageId, seq, kind, authorKind, authorId,
+    intent: turn_start|promoted_to_steer, agents: [agent ids it was queued for]} — a queued message
+    left the queue (read the message again; it is no longer in GET /conversations/{id}/queue).
+
+
+    Push notifications (APNs) carry a link and a category the app gives its buttons: TOOL_APPROVAL
+    (Allow, Deny — Deny opens the app for the reason; data request_id, task_id; link
+    gator://runtime-requests/<id>), QUESTION (opens the app to answer; the same data and link),
+    TURN_FINISHED (data turn_id; link gator://conversations/<id>). Decide with POST
+    /runtime-requests/{id}/decide.
 servers:
   - url: /api/v1
 paths:
@@ -1246,6 +1266,7 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Checkpoint" } } } } }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /jobs/{jobId}/diff:
     get:
       operationId: getJobDiff
@@ -1266,6 +1287,7 @@ paths:
         "200": { description: a unified diff, content: { text/x-diff: { schema: { type: string } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /checkpoints/{checkpointId}/diff:
     get:
       operationId: getCheckpointDiff
@@ -1279,6 +1301,7 @@ paths:
       responses:
         "200": { description: a unified diff, content: { text/x-diff: { schema: { type: string } } } }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /checkpoints/{checkpointId}/comments:
     post:
       operationId: createReviewComment
@@ -1296,6 +1319,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /jobs/{jobId}/comments:
     get:
       operationId: listJobReviewComments
@@ -1304,6 +1328,7 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ReviewComment" } } } } }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /jobs/{jobId}/comments/send:
     post:
       operationId: sendReviewComments
@@ -1323,6 +1348,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /review-comments/{commentId}:
     patch:
       operationId: updateReviewComment
@@ -1336,6 +1362,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteReviewComment
       description: Take back one of the caller's drafts; a comment that was sent stays (resolve it instead).
@@ -1344,6 +1371,7 @@ paths:
         "204": { description: taken back }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /conversations/{conversationId}/queue:
     get:
       operationId: listConversationQueue
@@ -1355,6 +1383,7 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Message" } } } } }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /messages/{messageId}/steer:
     post:
       operationId: sendQueuedMessageNow
@@ -1365,6 +1394,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /runtime-requests:
     get:
       operationId: listWaitingRuntimeRequests
@@ -1377,6 +1407,7 @@ paths:
         - { name: projectId, in: query, schema: { type: string, format: uuid } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RuntimeRequest" } } } } }
+        "503": { $ref: "#/components/responses/Error" }
   /runtime-requests/{requestId}:
     get:
       operationId: getRuntimeRequest
@@ -1385,6 +1416,7 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeRequest" } } } }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /runtime-requests/{requestId}/decide:
     post:
       operationId: decideRuntimeRequest
@@ -1407,6 +1439,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /jobs/{jobId}/runtime-requests:
     get:
       operationId: listJobRuntimeRequests
@@ -1415,6 +1448,7 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RuntimeRequest" } } } } }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /runners:
     get:
       operationId: listRunners
@@ -2552,6 +2586,9 @@ components:
         jobId: { type: string, format: uuid }
         turnId: { type: string, format: uuid, description: "the conversation turn the job answered, for a reply" }
         seq: { type: integer, description: "the turn of the job: 1 is the first, then one more after every steer or objection" }
+        attempt: { type: integer, description: "the attempt of the job (a job its runner lost is leased again and starts its turns over); the list holds the latest" }
+        filesTruncated: { type: boolean, description: "more files changed than files lists" }
+        wholeFilesTruncated: { type: boolean }
         repo: { type: string }
         baseCommit: { type: string, description: "the checkpoint before (the worktree as the job found it, for seq 1); on the runner only" }
         headCommit: { type: string }

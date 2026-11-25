@@ -213,11 +213,10 @@ func (s *Server) ListRunners(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	byRunner := map[[16]byte][]gen.RunnerJob{}
-	for _, j := range active {
-		job := gen.RunnerJob{Id: toUUID(j.ID), TaskId: toUUID(j.TaskID), TaskTitle: j.TaskTitle, Phase: j.Phase,
-			Role: j.Role, Backend: j.Backend, Status: j.Status, StartedAt: timePtr(j.StartedAt)}
-		byRunner[j.RunnerID.Bytes] = append(byRunner[j.RunnerID.Bytes], job)
+	byRunner, err := s.runnerJobs(r.Context(), p, active)
+	if err != nil {
+		s.fail(w, err)
+		return
 	}
 	out := make([]gen.RunnerInfo, 0, len(rows))
 	for _, rn := range rows {
@@ -230,6 +229,38 @@ func (s *Server) ListRunners(w http.ResponseWriter, r *http.Request) {
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// runnerJobs are what runners work on, by runner, as far as the caller may read it: a job of a
+// project they are not in, or of a conversation they may not read, is left out — its task's title
+// is that project's.
+func (s *Server) runnerJobs(ctx context.Context, p auth.Principal, active []db.ListActiveJobsOnRunnersRow) (map[[16]byte][]gen.RunnerJob, error) {
+	q := db.New(s.Pool)
+	out := map[[16]byte][]gen.RunnerJob{}
+	for _, j := range active {
+		job, err := q.GetJob(ctx, j.ID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		role, err := s.Authz.ProjectRole(ctx, p, job.ProjectID)
+		if err != nil {
+			return nil, err
+		}
+		if role < auth.RoleViewer {
+			continue
+		}
+		if ok, err := s.jobReadable(ctx, p, job); err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
+		out[j.RunnerID.Bytes] = append(out[j.RunnerID.Bytes], gen.RunnerJob{Id: toUUID(j.ID), TaskId: toUUID(j.TaskID), TaskTitle: j.TaskTitle,
+			Phase: j.Phase, Role: j.Role, Backend: j.Backend, Status: j.Status, StartedAt: timePtr(j.StartedAt)})
+	}
+	return out, nil
 }
 
 // GetRunner answers one runner, for people, as the list does.
@@ -257,12 +288,14 @@ func (s *Server) GetRunner(w http.ResponseWriter, r *http.Request, runnerId gen.
 		s.fail(w, err)
 		return
 	}
-	jobs := []gen.RunnerJob{}
-	for _, j := range active {
-		if j.RunnerID == rn.ID {
-			jobs = append(jobs, gen.RunnerJob{Id: toUUID(j.ID), TaskId: toUUID(j.TaskID), TaskTitle: j.TaskTitle, Phase: j.Phase,
-				Role: j.Role, Backend: j.Backend, Status: j.Status, StartedAt: timePtr(j.StartedAt)})
-		}
+	byRunner, err := s.runnerJobs(r.Context(), p, active)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	jobs := byRunner[rn.ID.Bytes]
+	if jobs == nil {
+		jobs = []gen.RunnerJob{}
 	}
 	info := toRunner(rn, s.Runners.Connected(rn.ID))
 	info.Jobs = &jobs

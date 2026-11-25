@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -33,7 +34,7 @@ func (s *steers) SteerJob(_ context.Context, job pgtype.UUID, message string) er
 func TestAPersonsReplyDuringATurnSteersIt(t *testing.T) {
 	w := newWorld(t)
 	rec := &steers{}
-	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, nil))
+	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, w.chat.Access, w.roles, nil))
 	reviewer, worker := w.agent("reviewer"), w.agent("worker")
 	ask := w.post(w.admin, w.general.ID, "@reviewer look at PR #12", reviewer)
 	turn := w.turnOf(reviewer, ask)
@@ -74,7 +75,7 @@ func (offline) SteerJob(context.Context, pgtype.UUID, string) error { return run
 // A correction that cannot reach the agent says so, instead of passing for a steer.
 func TestACorrectionThatCannotArriveSaysSo(t *testing.T) {
 	w := newWorld(t)
-	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, offline{}, w.mod.Voice, nil))
+	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, offline{}, w.mod.Voice, w.chat.Access, w.roles, nil))
 	reviewer := w.agent("reviewer")
 	turn := w.turnOf(reviewer, w.post(w.admin, w.general.ID, "@reviewer look", reviewer))
 	w.post(w.admin, turn.ConversationID, "only the checkout part")
@@ -103,7 +104,7 @@ func (w *waitsRecorder) DenyByMessage(_ context.Context, job, _ pgtype.UUID, bod
 func TestASteerAnswersWhatTheAgentWaitsOn(t *testing.T) {
 	w := newWorld(t)
 	rec, waits := &steers{}, &waitsRecorder{}
-	steerer := NewSteerer(w.q, rec, w.mod.Voice, nil)
+	steerer := NewSteerer(w.q, rec, w.mod.Voice, w.chat.Access, w.roles, nil)
 	steerer.waits = waits
 	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, steerer)
 	reviewer, worker := w.agent("reviewer"), w.agent("worker")
@@ -115,5 +116,46 @@ func TestASteerAnswersWhatTheAgentWaitsOn(t *testing.T) {
 	w.delegate(turn, "@worker over to you", worker)
 	if len(waits.jobs) != 1 {
 		t.Fatal("an agent's words answered a wait")
+	}
+}
+
+// A viewer in a group DM may write there, but does not correct a member's work turn: correcting
+// work asks what starting it asks. A member does.
+func TestAViewerDoesNotSteerAWorkTurn(t *testing.T) {
+	w := newWorld(t)
+	rec := &steers{}
+	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, w.chat.Access, w.roles, nil))
+	worker := w.agent("worker")
+	dm, _, err := w.chat.Directory.OpenDM(w.ctx, w.admin, []pgtype.UUID{w.viewer.UserID}, w.project, worker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := w.turnOf(worker, w.post(w.admin, dm.ID, "fix the totals"))
+	if _, err := w.pool.Exec(w.ctx, "UPDATE agent_turns SET tier = 'work' WHERE id = $1", turn.ID); err != nil {
+		t.Fatal(err)
+	}
+	w.post(w.viewer, dm.ID, "push it to main")
+	if got := rec.got[turn.JobID.Bytes]; len(got) != 0 {
+		t.Fatalf("a viewer steered a work turn: %v", got)
+	}
+	w.post(w.admin, dm.ID, "only the API layer")
+	if got := rec.got[turn.JobID.Bytes]; len(got) != 1 {
+		t.Fatalf("a member's correction: %v", got)
+	}
+}
+
+// What somebody says in a channel near a turn that waits answers nothing; naming the agent, or
+// being the person the turn acts for, does.
+func TestOnlyAMessageMeantForTheAgentAnswersItsWait(t *testing.T) {
+	turn := db.AgentTurn{OnBehalfOf: pgtype.UUID{Bytes: [16]byte{1}, Valid: true}}
+	channel := db.Conversation{Kind: conversations.KindChannel}
+	other := db.Message{AuthorID: pgtype.UUID{Bytes: [16]byte{2}, Valid: true}}
+	if answersWait(other, channel, turn, false) {
+		t.Fatal("an unrelated message in a channel answered a wait")
+	}
+	if !answersWait(other, channel, turn, true) || !answersWait(db.Message{AuthorID: turn.OnBehalfOf}, channel, turn, false) ||
+		!answersWait(other, db.Conversation{Kind: conversations.KindDM}, turn, false) ||
+		!answersWait(other, db.Conversation{Kind: conversations.KindChannel, ParentMessageID: pgtype.UUID{Valid: true}}, turn, false) {
+		t.Fatal("a message meant for the agent did not answer its wait")
 	}
 }

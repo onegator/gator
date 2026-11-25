@@ -88,9 +88,10 @@ func (c *Checkpoints) Record(ctx context.Context, job db.Job, cp proto.Checkpoin
 		return err
 	}
 	diff, wholeDiff := []byte(secrets.RedactText(string(cp.Diff))), []byte(secrets.RedactText(string(cp.Whole)))
-	in := db.InsertCheckpointParams{JobID: job.ID, TurnID: job.TurnID, Seq: int32(cp.Seq), Repo: cp.Repo,
-		BaseCommit: cp.BaseCommit, HeadCommit: cp.HeadCommit, Files: files, DiffBytes: int64(len(diff)), Truncated: cp.Truncated,
-		WholeFiles: whole, WholeBytes: int64(len(wholeDiff)), WholeTruncated: cp.WholeTruncated, TookMs: int32(min(cp.TookMS, 1<<30))}
+	in := db.InsertCheckpointParams{JobID: job.ID, TurnID: job.TurnID, Attempt: max(job.Attempts, 1), Seq: int32(cp.Seq), Repo: cp.Repo,
+		BaseCommit: cp.BaseCommit, HeadCommit: cp.HeadCommit, Files: files, FilesTruncated: cp.FilesTruncated, DiffBytes: int64(len(diff)),
+		Truncated: cp.Truncated, WholeFiles: whole, WholeFilesTruncated: cp.WholeFilesTruncated, WholeBytes: int64(len(wholeDiff)),
+		WholeTruncated: cp.WholeTruncated, TookMs: int32(min(cp.TookMS, 1<<30))}
 	if c.blobs != nil {
 		// The key is the checkpoint's own, of this attempt: a resend writes the same file again.
 		prefix := fmt.Sprintf("checkpoints/%s/%d/%s/%d", uuidString(job.ID), job.Attempts, repoKey(cp.Repo), cp.Seq)

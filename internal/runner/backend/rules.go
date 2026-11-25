@@ -109,9 +109,19 @@ func (r Rule) Matches(tool string, input []byte) bool {
 	}
 	if d, ok := strings.CutPrefix(r.pattern, "domain:"); ok {
 		u, err := url.Parse(inputField(input, "url"))
-		return err == nil && (u.Hostname() == d || strings.HasSuffix(u.Hostname(), "."+d))
+		if err != nil {
+			return true // a URL that does not read is asked about, not let through
+		}
+		host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+		d = strings.TrimSuffix(strings.ToLower(d), ".")
+		return host == d || strings.HasSuffix(host, "."+d)
 	}
-	for _, f := range []string{"file_path", "path", "url", "pattern", "query"} {
+	for _, f := range []string{"file_path", "path"} {
+		if v := inputField(input, f); v != "" {
+			return r.matchesText(filepath.Clean(v))
+		}
+	}
+	for _, f := range []string{"url", "pattern", "query"} {
 		if v := inputField(input, f); v != "" {
 			return r.matchesText(v)
 		}
@@ -176,40 +186,85 @@ func hasWords(cmd, words []string) bool {
 // shellSeparators split a line into commands.
 const shellSeparators = ";&|\n`()$<>{}"
 
-// wrappers run the command that follows them.
-var wrappers = map[string]bool{"sudo": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true,
-	"nice": true, "xargs": true, "timeout": true, "doas": true, "stdbuf": true, "builtin": true}
+// wrappers run the command that follows them; valued are their flags that take a value
+// (sudo -u root, env -u VAR, timeout -s KILL, nice -n 5, xargs -n 1 -I {}).
+var (
+	wrappers = map[string]bool{"sudo": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true,
+		"nice": true, "xargs": true, "timeout": true, "doas": true, "stdbuf": true, "builtin": true, "ionice": true, "setsid": true}
+	valued = map[string]map[string]bool{
+		"sudo":    {"-u": true, "-g": true, "-C": true, "-D": true, "-h": true, "-p": true, "-r": true, "-t": true, "-U": true},
+		"doas":    {"-u": true, "-C": true},
+		"env":     {"-u": true, "-C": true, "-S": true},
+		"timeout": {"-s": true, "-k": true},
+		"nice":    {"-n": true},
+		"ionice":  {"-c": true, "-n": true, "-p": true},
+		"xargs":   {"-n": true, "-I": true, "-P": true, "-L": true, "-s": true, "-d": true, "-E": true, "-a": true},
+		"stdbuf":  {"-i": true, "-o": true, "-e": true},
+	}
+	// gitValued are git's options before its subcommand that take a value.
+	gitValued = map[string]bool{"-C": true, "-c": true, "--git-dir": true, "--work-tree": true, "--namespace": true,
+		"--exec-path": true, "--config-env": true, "--super-prefix": true, "--list-cmds": true, "--attr-source": true}
+)
 
 // Commands are the commands a shell line runs, each as its words, with what wraps them taken away
-// (env and VAR=value, sudo, xargs, timeout N, bash -c "…" read as a line of its own).
+// (VAR=value, env, sudo -u X, xargs, timeout N, command, exec, eval and bash -c "…" read as lines of
+// their own), and git's own options before its subcommand (git -C dir -c k=v push is git push).
+//
+// It is a speed bump, not a sandbox: a command that writes a script and runs it, or builds a name
+// at run time, gets through. Bash rules are a person's look at what an agent does, in a worktree.
 func Commands(line string) [][]string {
 	var out [][]string
 	for _, part := range strings.FieldsFunc(line, func(c rune) bool { return strings.ContainsRune(shellSeparators, c) }) {
-		words := shellWords(part)
-		for len(words) > 0 {
-			w := path.Base(words[0])
-			switch {
-			case strings.Contains(words[0], "=") && !strings.HasPrefix(words[0], "="):
-				words = words[1:] // VAR=value
-				continue
-			case wrappers[w]:
-				words = words[1:]
-				for len(words) > 0 && (strings.HasPrefix(words[0], "-") || isNumber(words[0])) {
-					words = words[1:] // their flags and durations
-				}
-				continue
-			case (w == "bash" || w == "sh" || w == "zsh" || w == "dash") && len(words) > 2 && strings.HasPrefix(words[1], "-") && strings.Contains(words[1], "c"):
-				out = append(out, Commands(strings.Join(words[2:], " "))...)
-				words = nil
-				continue
-			}
-			break
-		}
+		words := unwrap(shellWords(part), &out)
 		if len(words) > 0 {
-			out = append(out, words)
+			out = append(out, gitCommand(words))
 		}
 	}
 	return out
+}
+
+// unwrap takes what wraps a command away, adding the lines it runs (eval, bash -c) to out.
+func unwrap(words []string, out *[][]string) []string {
+	for len(words) > 0 {
+		w := path.Base(words[0])
+		switch {
+		case strings.Contains(words[0], "=") && !strings.HasPrefix(words[0], "=") && !strings.HasPrefix(words[0], "-"):
+			words = words[1:] // VAR=value
+		case wrappers[w]:
+			words = words[1:]
+			for len(words) > 0 && (strings.HasPrefix(words[0], "-") || isNumber(words[0])) {
+				if valued[w][words[0]] && len(words) > 1 {
+					words = words[1:]
+				}
+				words = words[1:] // its flags, their values, durations
+			}
+		case w == "eval":
+			*out = append(*out, Commands(strings.Join(words[1:], " "))...)
+			return nil
+		case (w == "bash" || w == "sh" || w == "zsh" || w == "dash" || w == "ksh") && len(words) > 2 && strings.HasPrefix(words[1], "-") && strings.Contains(words[1], "c"):
+			*out = append(*out, Commands(strings.Join(words[2:], " "))...)
+			return nil
+		default:
+			return words
+		}
+	}
+	return words
+}
+
+// gitCommand is a git command with git's options before the subcommand taken away.
+func gitCommand(words []string) []string {
+	if path.Base(words[0]) != "git" {
+		return words
+	}
+	rest := words[1:]
+	for len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
+		opt, _, inline := strings.Cut(rest[0], "=")
+		rest = rest[1:]
+		if gitValued[opt] && !inline && len(rest) > 0 {
+			rest = rest[1:]
+		}
+	}
+	return append([]string{words[0]}, rest...)
 }
 
 // shellWords splits a command into words, quotes removed (no expansion).

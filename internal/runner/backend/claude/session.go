@@ -57,21 +57,34 @@ type session struct {
 	emit   backend.Emit
 	parser *Parser
 
+	// writeMu orders the writes; stateMu guards closed, and is never held across a write, so the
+	// input can be closed (which ends a write blocked on a full pipe) while a write waits.
 	writeMu sync.Mutex
+	stateMu sync.Mutex
 	closed  bool          // stdin is closed: nothing more goes in
 	closing chan struct{} // closed with it
 
 	mu sync.Mutex
-	// pending are the texts of user messages written and not yet seen replayed, in order;
-	// replays says whether the CLI replays them (--replay-user-messages) at all. unread are the
-	// steers taken from the caller and not delivered: the session had closed.
-	pending   []string
+	// pending are the user messages written and not yet known read, in order; replays says
+	// whether the CLI replays them (--replay-user-messages) at all. unread are the steers taken
+	// from the caller and not delivered: the session closed, or the CLI died before reading them.
+	pending   []outgoing
 	replays   bool
 	unread    []string
 	sessionID string
 	turnEnded chan struct{}
 	seq       atomic.Int64   // request ids of ours
 	answers   sync.WaitGroup // control requests of the CLI's being answered
+	// asking are the answers still being sought, by the CLI's request id, to stop when it cancels.
+	asking map[string]context.CancelFunc
+}
+
+// outgoing is one user message written into the session: a steer is the caller's (reported
+// applied once read), results counts the turns that ended since it was written.
+type outgoing struct {
+	text    string
+	steer   bool
+	results int
 }
 
 // runSession runs one prompt in a live session and every message a person adds while it runs.
@@ -92,43 +105,67 @@ func (b Backend) runSession(ctx context.Context, spec backend.Spec, emit backend
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	s := &session{p: p, spec: spec, emit: emit, parser: &Parser{}, turnEnded: make(chan struct{}, 1), closing: make(chan struct{})}
-	if err := s.say(spec.Prompt, images(spec.Attachments)...); err != nil {
-		cancel(err)
-	}
 
+	// The reader and the supervisor run before anything is written: a CLI that answers the first
+	// message at once, or never reads it, is heard and stopped.
 	parsed := make(chan struct{})
 	go func() {
 		defer close(parsed)
-		p.lines(func(line []byte) { s.line(runCtx, cancel, line) })
+		if err := p.lines(func(line []byte) { s.line(runCtx, cancel, line) }); err != nil {
+			cancel(fmt.Errorf("%w: %v", errOutput, err))
+		}
 		s.closeInput() // the CLI is gone: nothing more can go in
 	}()
 	exited := make(chan struct{})
+	go s.supervise(runCtx, exited, b.grace())
+	if err := s.say(spec.Prompt, false, images(spec.Attachments)...); err != nil {
+		cancel(err)
+	}
 	var steering sync.WaitGroup
 	steering.Add(1)
 	go func() {
 		defer steering.Done()
 		s.steer(runCtx, exited)
 	}()
-	go s.supervise(runCtx, exited, b.grace())
 
 	waitErr := p.cmd.Wait()
 	close(exited)
 	p.release(parsed)
 	s.closeInput()
-
-	if fallback, why := b.fallBack(s, waitErr); fallback {
-		emit("backend_fallback", map[string]any{"mode": ModePrint, "reason": why})
-		return b.runPrint(ctx, spec, emit)
+	fallback, why := b.fallBack(s, waitErr)
+	var out backend.Outcome
+	if !fallback {
+		out = b.outcome(runCtx, spec, s.parser, p, waitErr)
 	}
-	out := b.outcome(runCtx, spec, s.parser, p, waitErr)
 	// A question still waiting for a person when the process ended is not going to be answered
 	// here: its approver is told, and the run returns once every answer gave up.
 	cancel(errors.New("the session ended"))
 	s.answers.Wait()
 	steering.Wait() // a steer it took as the run ended is in unread by now
+	unread := s.undelivered()
+	if fallback {
+		emit("backend_fallback", map[string]any{"mode": ModePrint, "reason": why})
+		if len(spec.Access.Ask) > 0 {
+			// Print mode asks nobody: what the policy asks about is refused (permissionArgs).
+			emit("approvals_held_as_denials", map[string]any{"rules": len(spec.Access.Refused())})
+		}
+		out = b.runPrint(ctx, spec, emit)
+	}
+	out.Unread = append(unread, out.Unread...)
+	return out
+}
+
+// undelivered are the steers the CLI never read: those taken when the session had closed, and
+// those written but neither replayed nor followed by the end of a turn (the CLI died first).
+func (s *session) undelivered() []string {
 	s.mu.Lock()
-	out.Unread = s.unread
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	out := append([]string{}, s.unread...)
+	for _, o := range s.pending {
+		if o.steer && o.results == 0 {
+			out = append(out, o.text)
+		}
+	}
 	return out
 }
 
@@ -192,13 +229,14 @@ func (s *session) steer(ctx context.Context, exited <-chan struct{}) {
 		case <-s.closing:
 			return
 		case msg := <-s.spec.Live.Steer:
-			if err := s.say(msg); err != nil {
+			// Applied is said once the CLI read it (replayed, or a turn ended after it), not when
+			// it was written: a CLI that dies first never read it, and it goes back as unread.
+			if err := s.say(msg, true); err != nil {
 				s.mu.Lock()
 				s.unread = append(s.unread, msg)
 				s.mu.Unlock()
 				return
 			}
-			s.emit("steer_applied", map[string]any{"message": msg, "live": true})
 		}
 	}
 }
@@ -221,7 +259,11 @@ func (s *session) line(ctx context.Context, cancel context.CancelCauseFunc, raw 
 			s.answer(ctx, head.RequestID, head.Request)
 		}()
 		return
-	case "control_response", "control_cancel_request", "keep_alive":
+	case "control_cancel_request":
+		// The CLI no longer needs an answer (the tool call was abandoned): whoever is asked is told.
+		s.cancelAnswer(head.RequestID)
+		return
+	case "control_response", "keep_alive":
 		return
 	case "user":
 		if s.replayed(head.Message) {
@@ -254,8 +296,25 @@ func (s *session) ended(ctx context.Context) {
 	// safe; it only means that what a person says from now on goes in a resumed run instead. A CLI
 	// that does not replay what it read cannot say what is still queued: its input closes at once.
 	s.mu.Lock()
+	kept := s.pending[:0]
+	var applied []string
+	for _, o := range s.pending {
+		o.results++
+		if !s.replays {
+			// It cannot say what it read: what was written before a turn ended is taken as read.
+			if o.steer {
+				applied = append(applied, o.text)
+			}
+			continue
+		}
+		kept = append(kept, o)
+	}
+	s.pending = kept
 	done := len(s.pending) == 0 || !s.replays
 	s.mu.Unlock()
+	for _, m := range applied {
+		s.emit("steer_applied", map[string]any{"message": m, "live": true})
+	}
 	if done || ctx.Err() != nil {
 		s.closeInput()
 		return
@@ -284,14 +343,18 @@ func (s *session) replayed(message json.RawMessage) bool {
 		}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, p := range s.pending {
-		if p == text {
+	for i, o := range s.pending {
+		if o.text == text {
 			s.pending = append(s.pending[:i], s.pending[i+1:]...)
 			s.replays = true
+			s.mu.Unlock()
+			if o.steer {
+				s.emit("steer_applied", map[string]any{"message": o.text, "live": true})
+			}
 			return true
 		}
 	}
+	s.mu.Unlock()
 	return false
 }
 
@@ -313,18 +376,19 @@ func images(files []backend.Attachment) []map[string]any {
 	return out
 }
 
-// say writes a user message into the session: its text, and blocks after it (images).
-func (s *session) say(text string, more ...map[string]any) error {
+// say writes a user message into the session: its text, and blocks after it (images). A steer is
+// the caller's, reported applied once read.
+func (s *session) say(text string, steer bool, more ...map[string]any) error {
 	content := append([]map[string]any{{"type": "text", "text": text}}, more...)
 	s.mu.Lock()
 	msg := map[string]any{"type": "user", "session_id": s.sessionID, "parent_tool_use_id": nil,
 		"message": map[string]any{"role": "user", "content": content}}
-	s.pending = append(s.pending, text)
+	s.pending = append(s.pending, outgoing{text: text, steer: steer})
 	s.mu.Unlock()
 	if err := s.write(msg); err != nil {
 		s.mu.Lock()
 		for i := len(s.pending) - 1; i >= 0; i-- {
-			if s.pending[i] == text {
+			if s.pending[i].text == text {
 				s.pending = append(s.pending[:i], s.pending[i+1:]...)
 				break
 			}
@@ -349,20 +413,38 @@ func (s *session) write(v any) error {
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if s.closed {
+	if s.inputClosed() {
 		return errInputClosed
 	}
 	_, err = s.p.stdin.Write(append(b, '\n'))
 	return err
 }
 
+func (s *session) inputClosed() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.closed
+}
+
+// closeInput closes the session's input, without waiting for a write: closing the pipe ends a write
+// that blocks on it.
 func (s *session) closeInput() {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	if !s.closed {
 		s.closed = true
 		close(s.closing)
 		_ = s.p.stdin.Close()
+	}
+}
+
+// cancelAnswer stops seeking the answer to a request the CLI cancelled.
+func (s *session) cancelAnswer(id string) {
+	s.mu.Lock()
+	cancel := s.asking[id]
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -371,7 +453,20 @@ const questionTool = "AskUserQuestion"
 
 // answer answers one control request of the CLI's. A permission prompt goes to the job's approver;
 // without one, or for anything else, the answer is no: a missing approver is never a yes.
-func (s *session) answer(ctx context.Context, id string, raw json.RawMessage) {
+func (s *session) answer(runCtx context.Context, id string, raw json.RawMessage) {
+	ctx, cancel := context.WithCancel(runCtx)
+	defer cancel()
+	s.mu.Lock()
+	if s.asking == nil {
+		s.asking = map[string]context.CancelFunc{}
+	}
+	s.asking[id] = cancel
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.asking, id)
+		s.mu.Unlock()
+	}()
 	var req struct {
 		Subtype   string          `json:"subtype"`
 		ToolName  string          `json:"tool_name"`
@@ -395,6 +490,9 @@ func (s *session) answer(ctx context.Context, id string, raw json.RawMessage) {
 	if s.spec.Live != nil && s.spec.Live.Approve != nil {
 		d = s.spec.Live.Approve.Decide(ctx, backend.ToolRequest{Kind: kind, Tool: req.ToolName, Input: req.Input, ToolUseID: req.ToolUseID})
 	}
+	if ctx.Err() != nil && runCtx.Err() == nil {
+		return // the CLI cancelled its request: it wants no answer
+	}
 	s.emit("permission", map[string]any{"tool": req.ToolName, "tool_use_id": req.ToolUseID, "allowed": d.Allow, "stop": d.Stop,
 		"kind": kind, "reason": clip(d.Message, 500)})
 	behaviour := map[string]any{"behavior": "allow", "updatedInput": req.Input}
@@ -410,7 +508,7 @@ func (s *session) answer(ctx context.Context, id string, raw json.RawMessage) {
 	}
 	_ = s.write(map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": id, "response": behaviour}})
 	if kind == backend.RequestQuestion && d.Answer != "" && !d.Stop {
-		_ = s.say("A person answered your question:\n\n" + d.Answer)
+		_ = s.say("A person answered your question:\n\n"+d.Answer, false)
 	}
 }
 

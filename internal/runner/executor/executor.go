@@ -109,8 +109,8 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q is not available on this runner", job.Backend)}
 	}
 	access := AccessFor(job)
-	approve, deny := approvals(job, be, io)
-	access.Deny = deny
+	approve, rules := approvals(job, be, io)
+	access.Ask, access.Deny = rules.Ask, rules.Deny
 	if !backend.Supports(be, access) {
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q cannot hold an agent to what this job may touch", job.Backend)}
 	}

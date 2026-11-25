@@ -304,3 +304,26 @@ func fromUUIDString(s string) pgtype.UUID {
 	_ = id.Scan(s)
 	return id
 }
+
+// A runner older than protocol v4 cannot hold a work job to its approvals, so it gets no work job
+// of a project that asks about anything — and gets it once the project asks nothing.
+func TestAV3RunnerGetsNoWorkThatWouldBeAskedAbout(t *testing.T) {
+	h := newHarness(t)
+	backend := uniqueBackend()
+	task := h.task()
+	job := h.job(task, backend, "ok", 0)
+	old, reg := h.dialRaw(h.runner, backend, proto.Version-1, 1)
+	if reg.Type != proto.TypeRegistered {
+		t.Fatalf("a v3 runner registers: %+v", reg)
+	}
+	if got := old.lease(1); len(got) != 0 {
+		t.Fatalf("a v3 runner was handed work under the default approvals: %+v", got)
+	}
+	if _, err := h.pool.Exec(context.Background(), "UPDATE projects SET process_config = $2 WHERE id = $1",
+		task.ProjectId.String(), `{"policy":{"approvals":{"ask":[]}}}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := old.lease(1); len(got) != 1 || got[0].JobID != job.Id.String() {
+		t.Fatalf("a project that asks nothing: %+v", got)
+	}
+}

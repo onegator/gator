@@ -35,16 +35,6 @@ func (q *Queries) CheckpointDiff(ctx context.Context, id pgtype.UUID) (Checkpoin
 	return i, err
 }
 
-const deleteJobCheckpoints = `-- name: DeleteJobCheckpoints :exec
-DELETE FROM turn_checkpoints WHERE job_id = $1
-`
-
-// A job leased again starts its checkpoints over: what the attempt before left is not this one's.
-func (q *Queries) DeleteJobCheckpoints(ctx context.Context, jobID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteJobCheckpoints, jobID)
-	return err
-}
-
 const deleteReviewComment = `-- name: DeleteReviewComment :exec
 DELETE FROM review_comments WHERE id = $1 AND message_id IS NULL
 `
@@ -55,27 +45,30 @@ func (q *Queries) DeleteReviewComment(ctx context.Context, id pgtype.UUID) error
 }
 
 const getCheckpoint = `-- name: GetCheckpoint :one
-SELECT id, job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_bytes, truncated, whole_files, whole_bytes,
-       whole_truncated, took_ms, created_at
+SELECT id, job_id, turn_id, attempt, seq, repo, base_commit, head_commit, files, files_truncated, diff_bytes, truncated, whole_files,
+       whole_files_truncated, whole_bytes, whole_truncated, took_ms, created_at
 FROM turn_checkpoints WHERE id = $1
 `
 
 type GetCheckpointRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	JobID          pgtype.UUID        `json:"job_id"`
-	TurnID         pgtype.UUID        `json:"turn_id"`
-	Seq            int32              `json:"seq"`
-	Repo           string             `json:"repo"`
-	BaseCommit     string             `json:"base_commit"`
-	HeadCommit     string             `json:"head_commit"`
-	Files          []byte             `json:"files"`
-	DiffBytes      int64              `json:"diff_bytes"`
-	Truncated      bool               `json:"truncated"`
-	WholeFiles     []byte             `json:"whole_files"`
-	WholeBytes     int64              `json:"whole_bytes"`
-	WholeTruncated bool               `json:"whole_truncated"`
-	TookMs         int32              `json:"took_ms"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	JobID               pgtype.UUID        `json:"job_id"`
+	TurnID              pgtype.UUID        `json:"turn_id"`
+	Attempt             int32              `json:"attempt"`
+	Seq                 int32              `json:"seq"`
+	Repo                string             `json:"repo"`
+	BaseCommit          string             `json:"base_commit"`
+	HeadCommit          string             `json:"head_commit"`
+	Files               []byte             `json:"files"`
+	FilesTruncated      bool               `json:"files_truncated"`
+	DiffBytes           int64              `json:"diff_bytes"`
+	Truncated           bool               `json:"truncated"`
+	WholeFiles          []byte             `json:"whole_files"`
+	WholeFilesTruncated bool               `json:"whole_files_truncated"`
+	WholeBytes          int64              `json:"whole_bytes"`
+	WholeTruncated      bool               `json:"whole_truncated"`
+	TookMs              int32              `json:"took_ms"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) GetCheckpoint(ctx context.Context, id pgtype.UUID) (GetCheckpointRow, error) {
@@ -85,14 +78,17 @@ func (q *Queries) GetCheckpoint(ctx context.Context, id pgtype.UUID) (GetCheckpo
 		&i.ID,
 		&i.JobID,
 		&i.TurnID,
+		&i.Attempt,
 		&i.Seq,
 		&i.Repo,
 		&i.BaseCommit,
 		&i.HeadCommit,
 		&i.Files,
+		&i.FilesTruncated,
 		&i.DiffBytes,
 		&i.Truncated,
 		&i.WholeFiles,
+		&i.WholeFilesTruncated,
 		&i.WholeBytes,
 		&i.WholeTruncated,
 		&i.TookMs,
@@ -152,34 +148,38 @@ func (q *Queries) GetReviewCommentForUpdate(ctx context.Context, id pgtype.UUID)
 }
 
 const insertCheckpoint = `-- name: InsertCheckpoint :one
-INSERT INTO turn_checkpoints (job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_key, diff, diff_bytes, truncated,
-                              whole_files, whole_key, whole_diff, whole_bytes, whole_truncated, took_ms)
+INSERT INTO turn_checkpoints (job_id, turn_id, attempt, seq, repo, base_commit, head_commit, files, files_truncated, diff_key, diff,
+                              diff_bytes, truncated, whole_files, whole_files_truncated, whole_key, whole_diff, whole_bytes,
+                              whole_truncated, took_ms)
 VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11,
-        $12, $13, $14, $15, $16,
-        $17)
-ON CONFLICT (job_id, repo, seq) DO UPDATE SET job_id = EXCLUDED.job_id
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17,
+        $18, $19, $20)
+ON CONFLICT (job_id, attempt, repo, seq) DO UPDATE SET job_id = EXCLUDED.job_id
 RETURNING id, (xmax = 0)::boolean AS inserted
 `
 
 type InsertCheckpointParams struct {
-	JobID          pgtype.UUID `json:"job_id"`
-	TurnID         pgtype.UUID `json:"turn_id"`
-	Seq            int32       `json:"seq"`
-	Repo           string      `json:"repo"`
-	BaseCommit     string      `json:"base_commit"`
-	HeadCommit     string      `json:"head_commit"`
-	Files          []byte      `json:"files"`
-	DiffKey        *string     `json:"diff_key"`
-	Diff           []byte      `json:"diff"`
-	DiffBytes      int64       `json:"diff_bytes"`
-	Truncated      bool        `json:"truncated"`
-	WholeFiles     []byte      `json:"whole_files"`
-	WholeKey       *string     `json:"whole_key"`
-	WholeDiff      []byte      `json:"whole_diff"`
-	WholeBytes     int64       `json:"whole_bytes"`
-	WholeTruncated bool        `json:"whole_truncated"`
-	TookMs         int32       `json:"took_ms"`
+	JobID               pgtype.UUID `json:"job_id"`
+	TurnID              pgtype.UUID `json:"turn_id"`
+	Attempt             int32       `json:"attempt"`
+	Seq                 int32       `json:"seq"`
+	Repo                string      `json:"repo"`
+	BaseCommit          string      `json:"base_commit"`
+	HeadCommit          string      `json:"head_commit"`
+	Files               []byte      `json:"files"`
+	FilesTruncated      bool        `json:"files_truncated"`
+	DiffKey             *string     `json:"diff_key"`
+	Diff                []byte      `json:"diff"`
+	DiffBytes           int64       `json:"diff_bytes"`
+	Truncated           bool        `json:"truncated"`
+	WholeFiles          []byte      `json:"whole_files"`
+	WholeFilesTruncated bool        `json:"whole_files_truncated"`
+	WholeKey            *string     `json:"whole_key"`
+	WholeDiff           []byte      `json:"whole_diff"`
+	WholeBytes          int64       `json:"whole_bytes"`
+	WholeTruncated      bool        `json:"whole_truncated"`
+	TookMs              int32       `json:"took_ms"`
 }
 
 type InsertCheckpointRow struct {
@@ -192,16 +192,19 @@ func (q *Queries) InsertCheckpoint(ctx context.Context, arg InsertCheckpointPara
 	row := q.db.QueryRow(ctx, insertCheckpoint,
 		arg.JobID,
 		arg.TurnID,
+		arg.Attempt,
 		arg.Seq,
 		arg.Repo,
 		arg.BaseCommit,
 		arg.HeadCommit,
 		arg.Files,
+		arg.FilesTruncated,
 		arg.DiffKey,
 		arg.Diff,
 		arg.DiffBytes,
 		arg.Truncated,
 		arg.WholeFiles,
+		arg.WholeFilesTruncated,
 		arg.WholeKey,
 		arg.WholeDiff,
 		arg.WholeBytes,
@@ -260,16 +263,32 @@ func (q *Queries) InsertReviewComment(ctx context.Context, arg InsertReviewComme
 	return i, err
 }
 
-const jobChanges = `-- name: JobChanges :one
-SELECT COALESCE((SELECT whole_files FROM turn_checkpoints c WHERE c.job_id = $1 ORDER BY c.seq DESC, c.repo LIMIT 1), '[]'::jsonb)::jsonb AS files
+const jobChanges = `-- name: JobChanges :many
+SELECT DISTINCT ON (repo) whole_files FROM turn_checkpoints c
+WHERE c.job_id = $1 AND c.attempt = (SELECT max(attempt) FROM turn_checkpoints l WHERE l.job_id = $1)
+ORDER BY repo, seq DESC
 `
 
-// What a job changed so far, for its card: the files of its latest checkpoint's diff of the whole job.
-func (q *Queries) JobChanges(ctx context.Context, jobID pgtype.UUID) ([]byte, error) {
-	row := q.db.QueryRow(ctx, jobChanges, jobID)
-	var files []byte
-	err := row.Scan(&files)
-	return files, err
+// What a job changed so far, for its card: of its latest attempt, the files of each repository's
+// latest checkpoint's diff of the whole job.
+func (q *Queries) JobChanges(ctx context.Context, jobID pgtype.UUID) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, jobChanges, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items [][]byte
+	for rows.Next() {
+		var whole_files []byte
+		if err := rows.Scan(&whole_files); err != nil {
+			return nil, err
+		}
+		items = append(items, whole_files)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const jobStartupPhase = `-- name: JobStartupPhase :one
@@ -286,29 +305,34 @@ func (q *Queries) JobStartupPhase(ctx context.Context, jobID pgtype.UUID) (strin
 }
 
 const listCheckpoints = `-- name: ListCheckpoints :many
-SELECT id, job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_bytes, truncated, whole_files, whole_bytes,
-       whole_truncated, took_ms, created_at
-FROM turn_checkpoints WHERE job_id = $1 ORDER BY repo, seq
+SELECT id, job_id, turn_id, attempt, seq, repo, base_commit, head_commit, files, files_truncated, diff_bytes, truncated, whole_files,
+       whole_files_truncated, whole_bytes, whole_truncated, took_ms, created_at
+FROM turn_checkpoints c WHERE c.job_id = $1 AND c.attempt = (SELECT max(attempt) FROM turn_checkpoints l WHERE l.job_id = $1)
+ORDER BY repo, seq
 `
 
 type ListCheckpointsRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	JobID          pgtype.UUID        `json:"job_id"`
-	TurnID         pgtype.UUID        `json:"turn_id"`
-	Seq            int32              `json:"seq"`
-	Repo           string             `json:"repo"`
-	BaseCommit     string             `json:"base_commit"`
-	HeadCommit     string             `json:"head_commit"`
-	Files          []byte             `json:"files"`
-	DiffBytes      int64              `json:"diff_bytes"`
-	Truncated      bool               `json:"truncated"`
-	WholeFiles     []byte             `json:"whole_files"`
-	WholeBytes     int64              `json:"whole_bytes"`
-	WholeTruncated bool               `json:"whole_truncated"`
-	TookMs         int32              `json:"took_ms"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	JobID               pgtype.UUID        `json:"job_id"`
+	TurnID              pgtype.UUID        `json:"turn_id"`
+	Attempt             int32              `json:"attempt"`
+	Seq                 int32              `json:"seq"`
+	Repo                string             `json:"repo"`
+	BaseCommit          string             `json:"base_commit"`
+	HeadCommit          string             `json:"head_commit"`
+	Files               []byte             `json:"files"`
+	FilesTruncated      bool               `json:"files_truncated"`
+	DiffBytes           int64              `json:"diff_bytes"`
+	Truncated           bool               `json:"truncated"`
+	WholeFiles          []byte             `json:"whole_files"`
+	WholeFilesTruncated bool               `json:"whole_files_truncated"`
+	WholeBytes          int64              `json:"whole_bytes"`
+	WholeTruncated      bool               `json:"whole_truncated"`
+	TookMs              int32              `json:"took_ms"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
+// A job's checkpoints, of its latest attempt: an attempt its runner lost started its turns over.
 func (q *Queries) ListCheckpoints(ctx context.Context, jobID pgtype.UUID) ([]ListCheckpointsRow, error) {
 	rows, err := q.db.Query(ctx, listCheckpoints, jobID)
 	if err != nil {
@@ -322,14 +346,17 @@ func (q *Queries) ListCheckpoints(ctx context.Context, jobID pgtype.UUID) ([]Lis
 			&i.ID,
 			&i.JobID,
 			&i.TurnID,
+			&i.Attempt,
 			&i.Seq,
 			&i.Repo,
 			&i.BaseCommit,
 			&i.HeadCommit,
 			&i.Files,
+			&i.FilesTruncated,
 			&i.DiffBytes,
 			&i.Truncated,
 			&i.WholeFiles,
+			&i.WholeFilesTruncated,
 			&i.WholeBytes,
 			&i.WholeTruncated,
 			&i.TookMs,

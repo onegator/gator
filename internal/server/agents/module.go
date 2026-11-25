@@ -79,7 +79,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	}
 	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})
 	consent := NewConsent(q, voice, chat.Access, deps.Roles, deps.Process, guards, starter)
-	steerer := NewSteerer(q, deps.Jobs, voice, deps.Log)
+	steerer := NewSteerer(q, deps.Jobs, voice, chat.Access, deps.Roles, deps.Log)
 	steerer.waits = deps.Waits
 	return &Module{
 		Consent:    consent,

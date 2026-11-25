@@ -29,9 +29,9 @@ func TestApproverHoldsAWorkJobToThePolicy(t *testing.T) {
 	}}
 	job := proto.Job{Approvals: &proto.Approvals{Ask: []string{"Bash(curl:*)", "Bash(git push:*)", "WebFetch"},
 		Deny: []string{"Bash(rm -rf /*)"}, TimeoutSeconds: 600}}
-	ap, deny := approvals(job, &scripted{live: true}, io)
-	if ap == nil || len(deny) != 1 {
-		t.Fatalf("approver %v deny %v", ap, deny)
+	ap, rules := approvals(job, &scripted{live: true}, io)
+	if ap == nil || len(rules.Deny) != 1 || len(rules.Ask) != 3 {
+		t.Fatalf("approver %v rules %+v", ap, rules)
 	}
 	answer["Bash(curl:*)"] = proto.RuntimeDecision{Decision: proto.DecisionDeny, Feedback: "use the vendored copy", By: "Ada"}
 	answer["Bash(git push:*)"] = proto.RuntimeDecision{Decision: proto.DecisionAllowForSession}
@@ -76,16 +76,16 @@ func TestApproverHoldsAWorkJobToThePolicy(t *testing.T) {
 func TestApprovalsWithoutAnyoneToAsk(t *testing.T) {
 	job := proto.Job{Approvals: &proto.Approvals{Ask: []string{"Bash(curl:*)"}, Deny: []string{"WebFetch"}}}
 	io := client.JobIO{Emit: func(string, any) {}}
-	if ap, deny := approvals(job, &scripted{live: false}, io); ap != nil || strings.Join(deny, ",") != "Bash(curl:*),WebFetch" {
-		t.Fatalf("a backend that cannot ask: %v %v", ap, deny)
+	if ap, rules := approvals(job, &scripted{live: false}, io); ap != nil || strings.Join(rules.Refused(), ",") != "WebFetch,Bash(curl:*)" {
+		t.Fatalf("a backend that cannot ask: %v %+v", ap, rules)
 	}
 	io.Request = func(context.Context, proto.RuntimeRequest) proto.RuntimeDecision { return proto.RuntimeDecision{} }
 	job.Tier = proto.TierChat
-	if ap, deny := approvals(job, &scripted{live: true}, io); ap != nil || deny != nil {
-		t.Fatalf("a chat job: %v %v", ap, deny)
+	if ap, rules := approvals(job, &scripted{live: true}, io); ap != nil || len(rules.Refused()) != 0 {
+		t.Fatalf("a chat job: %v %+v", ap, rules)
 	}
 	job.Tier, job.Approvals = proto.TierWork, nil
-	if ap, deny := approvals(job, &scripted{live: true}, io); ap != nil || deny != nil {
-		t.Fatalf("no policy: %v %v", ap, deny)
+	if ap, rules := approvals(job, &scripted{live: true}, io); ap != nil || len(rules.Refused()) != 0 {
+		t.Fatalf("no policy: %v %+v", ap, rules)
 	}
 }

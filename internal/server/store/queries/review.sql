@@ -1,31 +1,37 @@
 -- name: InsertCheckpoint :one
 -- A checkpoint sent again (a runner resends what was not acked) is the one already there.
-INSERT INTO turn_checkpoints (job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_key, diff, diff_bytes, truncated,
-                              whole_files, whole_key, whole_diff, whole_bytes, whole_truncated, took_ms)
-VALUES (sqlc.arg(job_id), sqlc.narg(turn_id), sqlc.arg(seq), sqlc.arg(repo), sqlc.arg(base_commit), sqlc.arg(head_commit),
-        sqlc.arg(files), sqlc.narg(diff_key), sqlc.narg(diff), sqlc.arg(diff_bytes), sqlc.arg(truncated),
-        sqlc.arg(whole_files), sqlc.narg(whole_key), sqlc.narg(whole_diff), sqlc.arg(whole_bytes), sqlc.arg(whole_truncated),
-        sqlc.arg(took_ms))
-ON CONFLICT (job_id, repo, seq) DO UPDATE SET job_id = EXCLUDED.job_id
+INSERT INTO turn_checkpoints (job_id, turn_id, attempt, seq, repo, base_commit, head_commit, files, files_truncated, diff_key, diff,
+                              diff_bytes, truncated, whole_files, whole_files_truncated, whole_key, whole_diff, whole_bytes,
+                              whole_truncated, took_ms)
+VALUES (sqlc.arg(job_id), sqlc.narg(turn_id), sqlc.arg(attempt), sqlc.arg(seq), sqlc.arg(repo), sqlc.arg(base_commit),
+        sqlc.arg(head_commit), sqlc.arg(files), sqlc.arg(files_truncated), sqlc.narg(diff_key), sqlc.narg(diff), sqlc.arg(diff_bytes),
+        sqlc.arg(truncated), sqlc.arg(whole_files), sqlc.arg(whole_files_truncated), sqlc.narg(whole_key), sqlc.narg(whole_diff),
+        sqlc.arg(whole_bytes), sqlc.arg(whole_truncated), sqlc.arg(took_ms))
+ON CONFLICT (job_id, attempt, repo, seq) DO UPDATE SET job_id = EXCLUDED.job_id
 RETURNING id, (xmax = 0)::boolean AS inserted;
 
 -- name: ListCheckpoints :many
-SELECT id, job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_bytes, truncated, whole_files, whole_bytes,
-       whole_truncated, took_ms, created_at
-FROM turn_checkpoints WHERE job_id = $1 ORDER BY repo, seq;
+-- A job's checkpoints, of its latest attempt: an attempt its runner lost started its turns over.
+SELECT id, job_id, turn_id, attempt, seq, repo, base_commit, head_commit, files, files_truncated, diff_bytes, truncated, whole_files,
+       whole_files_truncated, whole_bytes, whole_truncated, took_ms, created_at
+FROM turn_checkpoints c WHERE c.job_id = $1 AND c.attempt = (SELECT max(attempt) FROM turn_checkpoints l WHERE l.job_id = $1)
+ORDER BY repo, seq;
 
 -- name: GetCheckpoint :one
-SELECT id, job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_bytes, truncated, whole_files, whole_bytes,
-       whole_truncated, took_ms, created_at
+SELECT id, job_id, turn_id, attempt, seq, repo, base_commit, head_commit, files, files_truncated, diff_bytes, truncated, whole_files,
+       whole_files_truncated, whole_bytes, whole_truncated, took_ms, created_at
 FROM turn_checkpoints WHERE id = $1;
 
 -- name: CheckpointDiff :one
 -- Where a checkpoint's diffs are: a storage key, or the bytes themselves.
 SELECT diff_key, diff, whole_key, whole_diff FROM turn_checkpoints WHERE id = $1;
 
--- name: JobChanges :one
--- What a job changed so far, for its card: the files of its latest checkpoint's diff of the whole job.
-SELECT COALESCE((SELECT whole_files FROM turn_checkpoints c WHERE c.job_id = $1 ORDER BY c.seq DESC, c.repo LIMIT 1), '[]'::jsonb)::jsonb AS files;
+-- name: JobChanges :many
+-- What a job changed so far, for its card: of its latest attempt, the files of each repository's
+-- latest checkpoint's diff of the whole job.
+SELECT DISTINCT ON (repo) whole_files FROM turn_checkpoints c
+WHERE c.job_id = $1 AND c.attempt = (SELECT max(attempt) FROM turn_checkpoints l WHERE l.job_id = $1)
+ORDER BY repo, seq DESC;
 
 -- name: InsertReviewComment :one
 INSERT INTO review_comments (checkpoint_id, author_id, path, side, line_start, line_end, body, snippet)
@@ -79,6 +85,3 @@ ORDER BY rc.message_id, rc.path, rc.line_start, rc.created_at;
 SELECT COALESCE((SELECT payload->>'phase' FROM job_events e WHERE e.job_id = $1 AND e.type = 'startup_phase'
                  ORDER BY e.seq DESC LIMIT 1), '')::text AS phase;
 
--- name: DeleteJobCheckpoints :exec
--- A job leased again starts its checkpoints over: what the attempt before left is not this one's.
-DELETE FROM turn_checkpoints WHERE job_id = $1;

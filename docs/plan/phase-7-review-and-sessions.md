@@ -580,13 +580,49 @@ to częsty kontekst. Wzór: `provider/userInputAttachments.ts`, `AttachmentClaim
   `UnreadWait` także wtedy, gdy odtworzenia wiadomości nie da się dopasować; `settling` przeżywa
   ponowienie zdarzenia i zastój; „Needs you” filtruje projekty osoby w SQL; ścieżka z diffu w
   wiadomości z uwagami jest oczyszczona. Prośby są anulowane też przy `job.requeued`.
+- **Po przeglądzie PR #28** (szczegóły w commicie):
+  - checkpoint nie daje gitowi czytać plików worktree: runner listuje nazwy (`ls-files`), czyta pliki
+    przez `os.Root` worktree (żaden link, podmieniony choćby w trakcie, nie wyprowadza poza niego),
+    sam zapisuje bloby i oddaje gitowi gotowe wpisy (`update-index --index-info`); żaden filtr ani
+    atrybut repozytorium nie jest więc wykonywany, kiedykolwiek go skonfigurowano;
+  - reguły `Bash` zdejmują opcje gita przed podkomendą (`-C`, `-c`, `--git-dir`…), `eval`,
+    `sudo -u X`, `env -u X VAR=…`, `command`, `exec`, `xargs -n N`; to dalej próg, nie piaskownica:
+    skrypt zapisany do pliku i uruchomiony przechodzi;
+  - backend, który przestał pytać w trakcie joba (sesja → `print`), odmawia także reguł `ask`
+    (`Access.Ask` zawsze dochodzi do backendu, a `--disallowedTools` niesie `ask` i `deny`);
+  - steer turnu `work` tylko od członka projektu, który może pisać w rozmowie; inaczej wiadomość idzie
+    dalej jak zwykła, przez strażników; odmowa czekającej prośby wiadomością tylko, gdy pisze osoba
+    turnu, w DM-ie, w wątku agenta albo ze wzmianką agenta;
+  - runner v3 nie dostaje jobów `work` projektu, który o cokolwiek pyta (polityka domyślna pyta), i
+    takie joby czekają jak bez runnera (`no_runner`), aż przyjdzie runner v4;
+  - sesja: czytnik i nadzór startują przed pierwszym zapisem, zamknięcie wejścia nie czeka na zapis
+    (zamknięcie rury kończy zapis zablokowany), steer jest „applied” dopiero po odtworzeniu przez CLI
+    (albo po końcu tury, gdy CLI nie odtwarza), a steer, którego CLI nie przeczytało przed śmiercią,
+    wraca jako nieprzeczytany; po przejściu na `print` tura dalej ma checkpoint;
+    `control_cancel_request` przestaje pytać człowieka, a runner mówi serwerowi
+    (`runtime_cancel`), że już nie czeka; wejście narzędzia powyżej 64 KiB jest odrzucane, nie
+    pokazywane w skrócie; błąd czytania wyjścia CLI kończy run od razu;
+  - wiadomość z kolejki pamięta agentów, dla których była kolejkowana (`messages.queued_for`), i
+    pyta właśnie ich; „Wyślij teraz” wiadomości, która nikogo nie pyta, to 409;
+  - checkpointy mają numer próby (`attempt`): job wzięty ponownie zaczyna tury od nowa, a komentarze
+    ludzi zostają przy checkpointach wcześniejszej próby; listy plików są ucinane z flagą
+    (`filesTruncated`), żeby wiadomość zmieściła się w 4 MiB; karta liczy zmiany wszystkich repozytoriów;
+  - `GET /runners` i `GET /runners/{id}` pokazują tylko joby, które wołający może czytać;
+  - migracje 00050, 00053 i 00054 poprawione w miejscu (PR nie był scalony): `attempt`,
+    `files_truncated`, `queued_for`, indeks zdarzeń cyklu życia joba.
+  - **Przygotowanie pod PR #27:** środowisko procesu agenta buduje jedna funkcja
+    (`backend.AgentEnv`, ta sama nazwa i podpis co w #27), a wszystko, co job wysyła na serwer w
+    trakcie (zdarzenia, koniec tury, checkpointy z diffami i ścieżkami, prośby z wejściem narzędzia),
+    przechodzi przez jeden haczyk `client.JobIO.Masked(mask)` — tu zastąpi `maskIO` z #27.
 - **Zawężone:** kolejka wiadomości rusza tylko na końcu joba odpowiedzi; ponownie dostarczone
   `job.finished` zanim następna tura wystartuje może wziąć z kolejki drugą wiadomość. Pliki diffów
   wcześniejszej próby joba zostają w magazynie (wiersze są usuwane).
 
 ## Do zrobienia w gator-app
 
-Wszystko poniżej ma już API w `docs/openapi.yaml` (regeneracja `GatorAPI`).
+Wszystko poniżej ma już API w `docs/openapi.yaml` (regeneracja `GatorAPI`): endpointy, zdarzenia
+WebSocket fazy (`job.checkpoint`, `job.settling`, `job.startup`, `runtime_request.*`,
+`message.dequeued`, z treścią) i kategorie pushy z danymi i linkami są opisane w `info.description`.
 
 1. **Możliwości.** `Job.capabilities` (i `RunnerInfo.capabilities.perBackend`, `GET
    /runners/{id}`): chować Steer, natywny Stop, karty zgód i podpowiedź „Steruj przerywa turę”, gdy

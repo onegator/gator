@@ -58,6 +58,9 @@ const (
 	// TypeRuntimeRequest asks a person, mid-turn, before a tool (v4). Kept until acked, and sent
 	// again after a reconnect: the server answers a request it already decided with its decision.
 	TypeRuntimeRequest MessageType = "runtime_request"
+	// TypeRuntimeCancel says the runner no longer waits on a request (v4): the agent took it back,
+	// or its turn ended. Best effort: a request nobody cancels expires.
+	TypeRuntimeCancel MessageType = "runtime_cancel"
 )
 
 // Server → runner.
@@ -543,6 +546,9 @@ type Finish struct {
 const (
 	MaxDiffBytes       = 1 << 20
 	MaxCheckpointFiles = 1000
+	// MaxCheckpointPathBytes bounds the paths one list of files carries: two lists, two diffs and
+	// their base64 stay under the connection's 4 MiB.
+	MaxCheckpointPathBytes = 192 << 10
 )
 
 // File statuses in a checkpoint.
@@ -573,10 +579,14 @@ type Checkpoint struct {
 	BaseCommit string       `json:"base_commit"`
 	HeadCommit string       `json:"head_commit"`
 	Files      []FileChange `json:"files"`
-	Diff       []byte       `json:"diff,omitempty"`
-	Truncated  bool         `json:"truncated,omitempty"`
-	WholeFiles []FileChange `json:"whole_files,omitempty"`
-	Whole      []byte       `json:"whole,omitempty"`
+	// FilesTruncated says more files changed than Files lists (MaxCheckpointFiles, or the bytes of
+	// their paths): the message stays well under the connection's limit.
+	FilesTruncated      bool         `json:"files_truncated,omitempty"`
+	WholeFilesTruncated bool         `json:"whole_files_truncated,omitempty"`
+	Diff                []byte       `json:"diff,omitempty"`
+	Truncated           bool         `json:"truncated,omitempty"`
+	WholeFiles          []FileChange `json:"whole_files,omitempty"`
+	Whole               []byte       `json:"whole,omitempty"`
 	// WholeTruncated says Whole was cut at MaxDiffBytes.
 	WholeTruncated bool `json:"whole_truncated,omitempty"`
 	// TookMS is how long the checkpoint took: on a large repository it is the price of the feature.

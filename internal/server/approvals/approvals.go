@@ -232,30 +232,40 @@ func (s *Service) Decide(ctx context.Context, p auth.Principal, id pgtype.UUID, 
 	if utf8.RuneCountInString(feedback) > maxFeedback {
 		return db.RuntimeRequest{}, fmt.Errorf("%w: feedback is at most %d characters", ErrInvalid, maxFeedback)
 	}
+	// Who may decide is settled first, outside the row's lock; the request's state is settled
+	// under it, in the transaction that decides.
+	q := db.New(s.pool)
+	req, err := q.GetRuntimeRequest(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.RuntimeRequest{}, ErrNotFound
+	}
+	if err != nil {
+		return db.RuntimeRequest{}, err
+	}
+	job, err := q.GetJob(ctx, req.JobID)
+	if err != nil {
+		return db.RuntimeRequest{}, err
+	}
+	if err := s.mayDecide(ctx, q, p, job); err != nil {
+		return db.RuntimeRequest{}, err
+	}
+	status, err := statusFor(req.Kind, decision, feedback)
+	if err != nil {
+		return db.RuntimeRequest{}, err
+	}
 	var out db.RuntimeRequest
-	var job db.Job
-	err := store.InTx(ctx, s.pool, func(q *db.Queries) error {
-		req, err := q.GetRuntimeRequestForUpdate(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+	err = store.InTx(ctx, s.pool, func(q *db.Queries) error {
+		locked, err := q.GetRuntimeRequestForUpdate(ctx, id)
 		if err != nil {
 			return err
 		}
-		if job, err = q.GetJob(ctx, req.JobID); err != nil {
-			return err
-		}
-		if err := s.mayDecide(ctx, q, p, job); err != nil {
-			return err
-		}
-		status, err := statusFor(req.Kind, decision, feedback)
-		if err != nil {
+		if job, err = q.GetJob(ctx, locked.JobID); err != nil {
 			return err
 		}
 		switch {
-		case req.Status != StatusPending:
-			return fmt.Errorf("%w: this request is %s", ErrConflict, req.Status)
-		case !req.ExpiresAt.Time.After(s.deps.Now()):
+		case locked.Status != StatusPending:
+			return fmt.Errorf("%w: this request is %s", ErrConflict, locked.Status)
+		case !locked.ExpiresAt.Time.After(s.deps.Now()):
 			return fmt.Errorf("%w: this request expired", ErrConflict)
 		case terminal(job.Status):
 			return fmt.Errorf("%w: the turn has ended", ErrConflict)
@@ -425,6 +435,24 @@ func (s *Service) Expire(ctx context.Context) (int, error) {
 		}
 	}
 	return len(expired), nil
+}
+
+// Cancel ends a request of the job that its runner no longer waits on: its card stops asking.
+func (s *Service) Cancel(ctx context.Context, job db.Job, id string) error {
+	var rid pgtype.UUID
+	if rid.Scan(id) != nil {
+		return nil
+	}
+	return store.InTx(ctx, s.pool, func(q *db.Queries) error {
+		r, err := q.CancelRuntimeRequest(ctx, db.CancelRuntimeRequestParams{ID: rid, JobID: job.ID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // decided, or not this job's
+		}
+		if err != nil {
+			return err
+		}
+		return emit(ctx, q, EventCancelled, r)
+	})
 }
 
 // CancelForJob ends what a job that ended was waiting for.

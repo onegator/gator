@@ -808,6 +808,8 @@ func (c *Client) request(ctx context.Context, jobID string, rj *runningJob, r pr
 	case d := <-ch:
 		return d
 	case <-ctx.Done():
+		// Its card must not go on asking a person for what nobody waits on any more.
+		c.sendBestEffort(proto.TypeRuntimeCancel, proto.RuntimeDecision{ID: r.ID, JobID: jobID, Decision: proto.DecisionCancelled})
 		return no
 	case <-timer.C:
 		no.Decision, no.Feedback = proto.DecisionExpired, "nobody answered in time"

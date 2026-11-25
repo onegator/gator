@@ -3,6 +3,7 @@ package conversations
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -31,19 +32,27 @@ const EventMessageDequeued = "message.dequeued"
 // intentOf is what a person's message is for. While a turn runs in the conversation it steers the
 // turn unless the person queues it — and a command (a line that starts with /) always waits for
 // the turn's end. With no turn running it is an ordinary message and says nothing.
-func intentOf(ctx context.Context, q *db.Queries, conv db.Conversation, author Author, d Draft) (*string, error) {
+// A queued message keeps the agents it was queued for: those answering when it was written.
+func intentOf(ctx context.Context, q *db.Queries, conv db.Conversation, author Author, d Draft) (*string, []pgtype.UUID, error) {
 	if author.Kind != AuthorUser {
-		return nil, nil
+		return nil, nil, nil
 	}
-	active, err := q.CountActiveTurnsIn(ctx, conv.ID)
-	if err != nil || active == 0 {
-		return nil, err
+	turns, err := q.ListActiveTurnsIn(ctx, conv.ID)
+	if err != nil || len(turns) == 0 {
+		return nil, nil, err
 	}
 	intent := IntentSteer
-	if d.Intent == IntentQueued || strings.HasPrefix(strings.TrimSpace(d.Body), "/") {
-		intent = IntentQueued
+	if d.Intent != IntentQueued && !strings.HasPrefix(strings.TrimSpace(d.Body), "/") {
+		return &intent, nil, nil
 	}
-	return &intent, nil
+	intent = IntentQueued
+	var agents []pgtype.UUID
+	for _, t := range turns {
+		if !slices.Contains(agents, t.AgentID) {
+			agents = append(agents, t.AgentID)
+		}
+	}
+	return &intent, agents, nil
 }
 
 // Queue is a conversation's queue of messages for after the agent's turn.
@@ -90,6 +99,15 @@ func (qu *Queue) SendNow(ctx context.Context, p auth.Principal, id pgtype.UUID) 
 	if author, ok := authorOf(p); !ok || !rights.Write || author.Kind != msg.AuthorKind || author.ID != msg.AuthorID {
 		return db.Message{}, ErrForbidden
 	}
+	if len(msg.QueuedFor) == 0 {
+		mentions, err := q.ListMentionsOfMessages(ctx, []pgtype.UUID{msg.ID})
+		if err != nil {
+			return db.Message{}, err
+		}
+		if !slices.ContainsFunc(mentions, func(m db.MessageMention) bool { return m.MemberKind == MemberAgent }) {
+			return db.Message{}, conflict("this message asks no agent; it stays queued")
+		}
+	}
 	var out db.Message
 	err = store.InTx(ctx, qu.pool, func(q *db.Queries) error {
 		var err error
@@ -100,24 +118,17 @@ func (qu *Queue) SendNow(ctx context.Context, p auth.Principal, id pgtype.UUID) 
 			}
 			return err
 		}
-		// It was queued for the agents answering here; if their turns ended meanwhile, it asks them.
-		turns, err := q.ListActiveTurnsIn(ctx, msg.ConversationID)
-		if err != nil {
-			return err
-		}
-		agents := make([]pgtype.UUID, 0, len(turns))
-		for _, t := range turns {
-			agents = append(agents, t.AgentID)
-		}
+		// It was queued for the agents answering when it was written: it steers those still
+		// answering, and asks those whose turn ended meanwhile.
 		return emit(ctx, q, EventMessageDequeued, out.ConversationID, messagePayload(out, map[string]any{"intent": intent,
-			"agents": uuidStrings(agents)}))
+			"agents": uuidStrings(out.QueuedFor)}))
 	})
 	return out, err
 }
 
-// NextQueued takes the first message of a conversation's queue out of it to start the next turn of
-// agent (whose turn there just ended), once no turn runs there. It answers whether it took one.
-func NextQueued(ctx context.Context, pool *pgxpool.Pool, conversation, agent pgtype.UUID) (bool, error) {
+// NextQueued takes the first message of a conversation's queue out of it to start the next turn,
+// once no turn runs there; it asks the agents it was queued for. It answers whether it took one.
+func NextQueued(ctx context.Context, pool *pgxpool.Pool, conversation pgtype.UUID) (bool, error) {
 	took := false
 	err := store.InTx(ctx, pool, func(q *db.Queries) error {
 		if err := q.LockConversation(ctx, conversation); err != nil {
@@ -141,7 +152,7 @@ func NextQueued(ctx context.Context, pool *pgxpool.Pool, conversation, agent pgt
 		}
 		took = true
 		return emit(ctx, q, EventMessageDequeued, out.ConversationID, messagePayload(out, map[string]any{"intent": intent,
-			"agents": uuidStrings([]pgtype.UUID{agent})}))
+			"agents": uuidStrings(out.QueuedFor)}))
 	})
 	return took, err
 }

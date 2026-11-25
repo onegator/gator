@@ -39,9 +39,10 @@ func permissionArgs(a backend.Access, mcp []string, skills bool) []string {
 	}
 	if !a.ReadOnly {
 		args := []string{"--permission-mode", "bypassPermissions"}
-		if len(a.Deny) > 0 {
-			// Deny rules hold in every permission mode, bypass included.
-			args = append(args, "--disallowedTools", strings.Join(cliRules(a.Deny), ","))
+		if refused := a.Refused(); len(refused) > 0 {
+			// Nobody is asked in this mode, so what the policy asks about is refused with what it
+			// denies; deny rules hold in every permission mode, bypass included.
+			args = append(args, "--disallowedTools", strings.Join(cliRules(refused), ","))
 		}
 		return args
 	}

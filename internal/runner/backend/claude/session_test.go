@@ -222,10 +222,19 @@ func TestSessionFallsBackToPrintModeOnAnOldCLI(t *testing.T) {
 	if !b.Capabilities().ActiveSteering {
 		t.Fatal("a session backend steers")
 	}
+	argsFile := os.Getenv("FAKE_CLAUDE_ARGS")
 	var evs []string
-	out := b.Run(context.Background(), backend.Spec{Dir: t.TempDir(), Prompt: "x", Live: &backend.Live{}}, func(typ string, _ any) { evs = append(evs, typ) })
-	if out.Status != proto.StatusDone || out.Summary != "DONE" || evs[0] != "backend_fallback" {
+	ap := &recordingApprover{}
+	out := b.Run(context.Background(), backend.Spec{Dir: t.TempDir(), Prompt: "x", Live: &backend.Live{Approve: ap},
+		Access: backend.Access{Ask: []string{"Bash(curl:*)", "mcp:sentry/*"}, Deny: []string{"WebFetch"}}},
+		func(typ string, _ any) { evs = append(evs, typ) })
+	if out.Status != proto.StatusDone || out.Summary != "DONE" || evs[0] != "backend_fallback" || evs[1] != "approvals_held_as_denials" {
 		t.Fatalf("outcome %+v events %v", out, evs)
+	}
+	// Print mode asks nobody: what the policy would have asked about is refused, never let through.
+	args, _ := os.ReadFile(argsFile)
+	if !strings.Contains(string(args), "--disallowedTools\nWebFetch,Bash(curl:*),mcp__sentry\n") || !strings.Contains(string(args), "bypassPermissions") {
+		t.Fatalf("the print run's access:\n%s", args)
 	}
 	if c := b.Capabilities(); c.ActiveSteering || c.ToolApprovals {
 		t.Fatalf("after the fallback: %+v", c)
@@ -260,5 +269,47 @@ func TestSessionShowsImages(t *testing.T) {
 	first := mustJSON(lines[0])
 	if !strings.Contains(first, `"type":"image"`) || !strings.Contains(first, `"media_type":"image/png"`) || strings.Count(first, `"type":"image"`) != 1 {
 		t.Fatalf("first message: %s", first)
+	}
+}
+
+// A correction the CLI took in but never read into a turn (it died first) is not reported applied,
+// and goes back to be sent again.
+func TestSessionHandsBackASteerTheCLIDiedWith(t *testing.T) {
+	b, _, _ := liveFake(t, "synthetic-session-crash.ndjson")
+	steer := make(chan string, 1)
+	var applied atomic.Int32
+	emit := func(typ string, _ any) {
+		switch typ {
+		case "tool_call":
+			steer <- "use the other target"
+		case "steer_applied":
+			applied.Add(1)
+		}
+	}
+	out := b.Run(context.Background(), backend.Spec{Dir: t.TempDir(), Prompt: "build it", Live: &backend.Live{Steer: steer}}, emit)
+	if out.Status != proto.StatusFailed || applied.Load() != 0 || len(out.Unread) != 1 || out.Unread[0] != "use the other target" {
+		t.Fatalf("outcome %+v, applied %d", out, applied.Load())
+	}
+}
+
+// waitingApprover waits for its answer until it is no longer wanted.
+type waitingApprover struct{ gaveUp atomic.Bool }
+
+func (a *waitingApprover) Decide(ctx context.Context, _ backend.ToolRequest) backend.Decision {
+	<-ctx.Done()
+	a.gaveUp.Store(true)
+	return backend.Decision{Message: "cancelled"}
+}
+
+// A request the CLI takes back stops being put to a person, and is not answered.
+func TestSessionStopsAskingWhatTheCLICancelled(t *testing.T) {
+	b, _, stdin := liveFake(t, "synthetic-session-cancel.ndjson")
+	ap := &waitingApprover{}
+	out := b.Run(context.Background(), backend.Spec{Dir: t.TempDir(), Prompt: "go", Live: &backend.Live{Approve: ap}}, func(string, any) {})
+	if out.Status != proto.StatusDone || !ap.gaveUp.Load() {
+		t.Fatalf("outcome %+v, gave up %v", out, ap.gaveUp.Load())
+	}
+	if strings.Contains(mustJSON(readLines(t, stdin)), "perm-gone") {
+		t.Fatal("a cancelled request was answered")
 	}
 }

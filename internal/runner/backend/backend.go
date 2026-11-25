@@ -4,9 +4,18 @@ package backend
 
 import (
 	"context"
+	"os"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/agentenv"
 )
+
+// AgentEnv is the environment of an agent's process: what it may inherit of the runner's (allow
+// names more than agentenv's list), and the job's own variables last, so they win. Every backend
+// builds its process's environment here, and only here.
+func AgentEnv(spec Spec, allow []string) []string {
+	return append(agentenv.Filter(os.Environ(), allow), spec.Env...)
+}
 
 // Spec describes one agent run.
 type Spec struct {
@@ -137,10 +146,16 @@ type Access struct {
 	NoTools bool
 	// Commands are the only commands a read-only agent may run, by name: gator-cli, to talk back.
 	Commands []string
-	// Deny are rules (Rule) of tools the agent is refused, whatever else it may do: the project's
-	// approvals policy, held where nobody can be asked.
+	// Deny are rules (Rule) of tools the agent is refused, whatever else it may do.
 	Deny []string
+	// Ask are rules of tools a person is asked about first (Live.Approve). A backend that does not
+	// ask — print mode, a session that fell back to it, an ACP agent — refuses them like Deny:
+	// nothing the policy asks about runs unseen.
+	Ask []string
 }
+
+// Refused are the rules a backend refuses by itself when it does not ask: Deny and Ask.
+func (a Access) Refused() []string { return append(append([]string{}, a.Deny...), a.Ask...) }
 
 // Emit streams one event.
 type Emit func(typ string, payload any)

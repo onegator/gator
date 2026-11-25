@@ -27,7 +27,7 @@ func (w *world) dequeued(msg db.Message) {
 func TestQueuedMessagesWaitForTheTurnToEnd(t *testing.T) {
 	w := newWorld(t)
 	rec := &steers{}
-	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, nil))
+	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, w.chat.Access, w.roles, nil))
 	reviewer := w.agent("reviewer")
 	ask := w.post(w.admin, w.general.ID, "@reviewer look at PR #12", reviewer)
 	turn := w.turnOf(reviewer, ask)
@@ -100,7 +100,7 @@ func TestQueuedMessagesWaitForTheTurnToEnd(t *testing.T) {
 func TestALateMessagePostedOfADequeuedMessageAsksNobody(t *testing.T) {
 	w := newWorld(t)
 	rec := &steers{}
-	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, nil))
+	w.mod.Dispatcher = NewDispatcher(w.q, Guards{}, w.mod.Starter, NewSteerer(w.q, rec, w.mod.Voice, w.chat.Access, w.roles, nil))
 	reviewer := w.agent("reviewer")
 	turn := w.turnOf(reviewer, w.post(w.admin, w.general.ID, "@reviewer look", reviewer))
 	posted, err := w.chat.Messages.Post(w.ctx, w.admin, turn.ConversationID, conversations.Draft{Body: "and the tests", Intent: conversations.IntentQueued})
