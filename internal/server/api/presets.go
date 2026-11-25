@@ -110,10 +110,12 @@ func (s *Server) SaveProjectPreset(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only what a person approved: a proposal nobody accepted is not yet how this product
 	// thinks, and it certainly should not become how the next one starts.
-	entries, err := brain.NewLegacy(q).ApprovedProduct(ctx, projectID)
-	if err != nil {
-		s.fail(w, err)
-		return
+	var entries []db.BrainEntry
+	if s.Brain != nil {
+		if entries, err = s.Brain.Legacy.ApprovedProduct(ctx, projectID); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	for _, e := range entries {
 		snapshot.Product = append(snapshot.Product, presetEntry{Kind: brain.ProductKind(e.Kind), Title: e.Title, Content: e.Content})
@@ -185,6 +187,10 @@ func (s *Server) applyPreset(ctx context.Context, name string, project db.Projec
 			ProjectID: project.ID, PackID: pack.ID, Position: int32(100 + i)}); err != nil {
 			return err
 		}
+	}
+	if s.Brain == nil && len(p.Product) > 0 {
+		s.Log.Warn("the preset's product context is not copied: the Brain is not enabled on this server")
+		p.Product = nil
 	}
 	for _, e := range p.Product {
 		if _, err := s.Brain.Service.RecordIn(ctx, q, brain.Draft{Scope: brain.ScopeProject, Project: project.ID,

@@ -55,17 +55,23 @@ type shelfStore interface {
 }
 
 // Legacy is the product context and the knowledge shelves as they were read and written, over
-// the Brain.
+// the Brain. What it lists for a person goes through the same Policy as every other door: a
+// proposal made in a private conversation is not the project's to read until it is approved.
 type Legacy struct {
-	store shelfStore
+	store  shelfStore
+	policy Policy
 }
 
 // NewLegacy builds it.
-func NewLegacy(store shelfStore) Legacy { return Legacy{store: store} }
+func NewLegacy(store shelfStore, policy Policy) Legacy { return Legacy{store: store, policy: policy} }
 
-// Product is a project's product context, every version.
-func (l Legacy) Product(ctx context.Context, project pgtype.UUID) ([]db.BrainEntry, error) {
-	return l.store.ListProductEntries(ctx, db.ListProductEntriesParams{ProjectID: project, Kinds: ProductKinds})
+// Product is a project's product context, every version r may read.
+func (l Legacy) Product(ctx context.Context, r Reader, project pgtype.UUID) ([]db.BrainEntry, error) {
+	rows, err := l.store.ListProductEntries(ctx, db.ListProductEntriesParams{ProjectID: project, Kinds: ProductKinds})
+	if err != nil {
+		return nil, err
+	}
+	return visible(ctx, l.policy, r, rows)
 }
 
 // ApprovedProduct is what a project decided about its product and still holds: the newest
@@ -85,9 +91,13 @@ func (l Legacy) ApprovedProduct(ctx context.Context, project pgtype.UUID) ([]db.
 	return out, nil
 }
 
-// ProposedProduct is what waits in the inbox from the product context, in one project or all.
-func (l Legacy) ProposedProduct(ctx context.Context, project pgtype.UUID) ([]db.BrainEntry, error) {
-	return l.store.ListProposedProduct(ctx, db.ListProposedProductParams{Kinds: ProductKinds, ProjectID: project})
+// ProposedProduct is what waits in r's inbox from the product context, in one project or all.
+func (l Legacy) ProposedProduct(ctx context.Context, r Reader, project pgtype.UUID) ([]db.BrainEntry, error) {
+	rows, err := l.store.ListProposedProduct(ctx, db.ListProposedProductParams{Kinds: ProductKinds, ProjectID: project})
+	if err != nil {
+		return nil, err
+	}
+	return visible(ctx, l.policy, r, rows)
 }
 
 // Shelf is the conventions written by hand for a project, or for the workspace (no project).

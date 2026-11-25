@@ -98,7 +98,8 @@ func (p Policy) CanRead(ctx context.Context, r Reader, e db.BrainEntry) (bool, e
 	if !inReach(r, e) {
 		return false, nil
 	}
-	if e.SourcePrivate && e.Status != StatusApproved {
+	// Once a person approved it into its scope it is its scope's, superseded or not later.
+	if e.SourcePrivate && !e.ApprovedAt.Valid {
 		return p.readsConversation(ctx, r, e.SourceConversationID)
 	}
 	return true, nil

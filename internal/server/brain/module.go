@@ -52,7 +52,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Readers: NewReaders(q),
 		Service: svc,
 		Finder:  NewFinder(searcher, policy),
-		Legacy:  NewLegacy(q),
+		Legacy:  NewLegacy(q, policy),
 		Plugins: NewPluginProposals(q, svc),
 		Focus:   NewFocus(q, svc, nil),
 	}

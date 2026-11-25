@@ -245,16 +245,6 @@ func (s *Service) Decide(ctx context.Context, r Reader, id pgtype.UUID, verdict 
 	return s.decide(ctx, e, verdict, r.User)
 }
 
-// DecideAs gives the verdict for a door that has checked the caller's rights itself (the old
-// product endpoint, which a project member has always used).
-func (s *Service) DecideAs(ctx context.Context, id pgtype.UUID, verdict string, by pgtype.UUID) (db.BrainEntry, error) {
-	e, err := s.store.GetBrainEntry(ctx, id)
-	if err != nil {
-		return db.BrainEntry{}, notFound(err)
-	}
-	return s.decide(ctx, e, verdict, by)
-}
-
 func (s *Service) decide(ctx context.Context, e db.BrainEntry, verdict string, by pgtype.UUID) (db.BrainEntry, error) {
 	status, ok := map[string]string{VerdictApprove: StatusApproved, VerdictReject: StatusRejected, VerdictArchive: StatusArchived}[verdict]
 	if !ok {
@@ -356,9 +346,14 @@ func (s *Service) Forget(ctx context.Context, r Reader) (int64, error) {
 
 // Visible keeps the entries r may read, in order.
 func (s *Service) Visible(ctx context.Context, r Reader, rows []db.BrainEntry) ([]db.BrainEntry, error) {
+	return visible(ctx, s.policy, r, rows)
+}
+
+// visible keeps the entries r may read under policy, in order.
+func visible(ctx context.Context, policy Policy, r Reader, rows []db.BrainEntry) ([]db.BrainEntry, error) {
 	out := make([]db.BrainEntry, 0, len(rows))
 	for _, e := range rows {
-		ok, err := s.policy.CanRead(ctx, r, e)
+		ok, err := policy.CanRead(ctx, r, e)
 		if err != nil {
 			return nil, err
 		}
@@ -479,8 +474,13 @@ func emit(ctx context.Context, st Store, typ string, e db.BrainEntry) error {
 	if e.Scope == ScopeUser {
 		return nil
 	}
-	payload, _ := json.Marshal(map[string]any{"entry_id": UUIDString(e.ID), "kind": e.Kind, "scope": e.Scope,
-		"status": e.Status, "task_id": UUIDString(e.SourceTaskID), "conversation_id": UUIDString(e.SourceConversationID)})
+	fields := map[string]any{"entry_id": UUIDString(e.ID), "kind": e.Kind, "scope": e.Scope, "status": e.Status}
+	// Where a proposal from a private conversation was made is that conversation's to know: the
+	// project's people read the event, not the conversation.
+	if !e.SourcePrivate {
+		fields["task_id"], fields["conversation_id"] = UUIDString(e.SourceTaskID), UUIDString(e.SourceConversationID)
+	}
+	payload, _ := json.Marshal(fields)
 	aggregate, id := "project", e.ProjectID
 	if !id.Valid {
 		aggregate, id = "brain", e.ID
@@ -568,11 +568,13 @@ func (s *Service) prepare(d Draft) (Draft, error) {
 	return d, nil
 }
 
-// probe is the entry d would be, for the rules to look at before it exists.
+// probe is the entry d would be, for the rules to look at before it exists: as if approved, since
+// what is asked is whether its scope lets the writer write there (whoever writes from a private
+// conversation is in it).
 func (d Draft) probe() db.BrainEntry {
 	return db.BrainEntry{Scope: d.Scope, ProjectID: d.Project, ComponentKey: optional(d.Component), UserID: d.User,
 		AgentID: d.Agent, Kind: d.Kind, Visibility: d.Visibility, Status: StatusApproved, SourcePrivate: d.Private,
-		SourceConversationID: d.Conversation}
+		SourceConversationID: d.Conversation, ApprovedAt: pgtype.Timestamptz{Valid: true}}
 }
 
 // draftOf is e as a draft of its next version.

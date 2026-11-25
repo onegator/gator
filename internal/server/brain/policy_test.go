@@ -45,7 +45,9 @@ func TestPolicyDecidesWhoReadsWhat(t *testing.T) {
 		adaScope        = db.BrainEntry{Scope: ScopeUser, UserID: ada, Kind: KindPreference, Status: approved, Visibility: VisibilityScope}
 		adaShared       = db.BrainEntry{Scope: ScopeUser, UserID: ada, ProjectID: alpha, Kind: KindExpertise, Status: approved, Visibility: VisibilityProject}
 		fromDM          = db.BrainEntry{Scope: ScopeProject, ProjectID: alpha, Status: StatusProposed, SourcePrivate: true, SourceConversationID: dm}
-		fromDMApproved  = db.BrainEntry{Scope: ScopeProject, ProjectID: alpha, Status: approved, SourcePrivate: true, SourceConversationID: dm}
+		fromDMApproved  = db.BrainEntry{Scope: ScopeProject, ProjectID: alpha, Status: approved, SourcePrivate: true, SourceConversationID: dm, ApprovedAt: pgtype.Timestamptz{Valid: true}}
+		fromDMReplaced  = db.BrainEntry{Scope: ScopeProject, ProjectID: alpha, Status: StatusSuperseded, SourcePrivate: true, SourceConversationID: dm, ApprovedAt: pgtype.Timestamptz{Valid: true}}
+		fromDMRejected  = db.BrainEntry{Scope: ScopeProject, ProjectID: alpha, Status: StatusRejected, SourcePrivate: true, SourceConversationID: dm}
 		supersededEntry = db.BrainEntry{Scope: ScopeProject, ProjectID: alpha, Status: StatusSuperseded}
 	)
 	cases := []struct {
@@ -78,6 +80,8 @@ func TestPolicyDecidesWhoReadsWhat(t *testing.T) {
 		{"and by no other member", bobReads, fromDM, false},
 		{"nor by the workspace admin", admin, fromDM, false},
 		{"once approved it belongs to its scope", bobReads, fromDMApproved, true},
+		{"and stays there when a newer version replaces it", bobReads, fromDMReplaced, true},
+		{"a DM's proposal turned down stays the DM's", bobReads, fromDMRejected, false},
 	}
 	for _, c := range cases {
 		got, err := policy.CanRead(context.Background(), c.reader, c.entry)

@@ -25,7 +25,11 @@ func (s *Server) ListProductContext(w http.ResponseWriter, r *http.Request, proj
 	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
 		return
 	}
-	rows, err := s.Brain.Legacy.Product(r.Context(), fromUUID(projectId))
+	reader, ok := s.brainReader(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.Brain.Legacy.Product(r.Context(), reader, fromUUID(projectId))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -62,20 +66,8 @@ func (s *Server) AddProductEntry(w http.ResponseWriter, r *http.Request, project
 // SetProductEntryStatus approves a proposal or archives an entry. Approving a condensed entry
 // archives the entries it replaces: still readable, no longer carried into every prompt.
 func (s *Server) SetProductEntryStatus(w http.ResponseWriter, r *http.Request, entryId openapi_types.UUID) {
-	p, ok := s.principal(w, r)
+	reader, ok := s.brainReader(w, r)
 	if !ok {
-		return
-	}
-	entry, err := db.New(s.Pool).GetBrainEntry(r.Context(), fromUUID(entryId))
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	if entry.Scope != brain.ScopeProject {
-		writeError(w, http.StatusNotFound, "not found", "not_found")
-		return
-	}
-	if _, ok := s.requireProject(w, r, entry.ProjectID, auth.RoleMember); !ok {
 		return
 	}
 	var in gen.ProductStatusChange
@@ -86,7 +78,18 @@ func (s *Server) SetProductEntryStatus(w http.ResponseWriter, r *http.Request, e
 	if in.Status == gen.ProductStatusChangeStatusApproved {
 		verdict = brain.VerdictApprove
 	}
-	updated, err := s.Brain.Service.DecideAs(r.Context(), entry.ID, verdict, p.UserID)
+	// The same verdict as /brain/{id}/approve, under the same rules: a project member decides on
+	// what they may read, and an entry they may not read is not found. This door is the product
+	// context's, so it decides nothing else.
+	d, err := s.Brain.Service.Get(r.Context(), reader, fromUUID(entryId))
+	if err == nil && d.Entry.Scope != brain.ScopeProject {
+		err = brain.ErrNotFound
+	}
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	updated, err := s.Brain.Service.Decide(r.Context(), reader, d.Entry.ID, verdict)
 	if err != nil {
 		s.failBrain(w, err)
 		return
