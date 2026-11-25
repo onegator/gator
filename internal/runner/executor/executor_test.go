@@ -113,7 +113,7 @@ func TestCommitIsPushedAndWorkspaceCleaned(t *testing.T) {
 	if _, err := os.Stat(be.specs[0].Dir); !os.IsNotExist(err) {
 		t.Fatal("workspace not cleaned up")
 	}
-	if strings.Join(*evs, ",") != "workspace,text,git" {
+	if strings.Join(*evs, ",") != "startup_phase,workspace,startup_phase,text,settling,git" {
 		t.Fatalf("events: %v", *evs)
 	}
 }

@@ -253,7 +253,7 @@ func taskState(task db.Task, jobs []db.Job, cur string, enteredAt, unblockedAt t
 	}
 	for _, j := range jobs {
 		switch j.Status {
-		case "leased", "running":
+		case "leased", "running", "settling":
 			t := j.CreatedAt.Time
 			if j.StartedAt.Valid {
 				t = j.StartedAt.Time

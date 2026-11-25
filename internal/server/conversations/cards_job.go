@@ -17,6 +17,7 @@ type jobReader interface {
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
 	JobProgress(ctx context.Context, jobID pgtype.UUID) (db.JobProgressRow, error)
 	JobChanges(ctx context.Context, jobID pgtype.UUID) ([]byte, error)
+	JobStartupPhase(ctx context.Context, jobID pgtype.UUID) (string, error)
 }
 
 // jobCards shows each job in its task's thread as one card that follows the job from queued to
@@ -28,7 +29,8 @@ type jobCards struct {
 // Events implements CardSource.
 func (jobCards) Events() []string {
 	return []string{"job.queued", "job.leased", "job.started", "job.stalled", "job.resumed", "job.requeued",
-		"job.no_runner", "job.provisioned", "job.provision_failed", "job.finished", EventJobProgress, EventJobCheckpoint}
+		"job.no_runner", "job.provisioned", "job.provision_failed", "job.finished", EventJobProgress, EventJobCheckpoint,
+		"job.settling", "job.startup"}
 }
 
 // Cards implements CardSource.
@@ -62,10 +64,25 @@ func (s jobCards) Cards(ctx context.Context, e db.EventsAfterRow) ([]PlacedCard,
 	if err != nil {
 		return nil, err
 	}
+	startup, err := s.jobs.JobStartupPhase(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
 	card := JobCard(job, agent)
+	withStartup(card, job, startup, progress)
 	withProgress(card, progress)
 	withChanges(card, files)
 	return []PlacedCard{{Task: task, Card: card}}, nil
+}
+
+// withStartup says on the card of a job still starting how far its start got (checkout, mcp,
+// initialize, ready), from what the runner says rather than a generic "working".
+func withStartup(c Card, j db.Job, phase string, p db.JobProgressRow) {
+	if phase == "" || p.ToolCalls > 0 || (j.Status != "leased" && j.Status != "running") {
+		return
+	}
+	c.Data["startup"] = phase
+	c.Data["summary"] = fmt.Sprintf("%s · starting: %s", c.Data["summary"], phase)
 }
 
 // EventJobCheckpoint says a turn of a job was checkpointed (the review package writes it): its
@@ -122,7 +139,7 @@ func JobCard(j db.Job, agent *db.Agent) Card {
 	}
 	actions := []string{"logs"}
 	switch j.Status {
-	case "queued", "leased", "running", "stalled":
+	case "queued", "leased", "running", "stalled", "settling":
 		actions = []string{"stop", "steer", "logs"}
 	}
 	state := j.Status

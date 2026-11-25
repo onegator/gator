@@ -23,7 +23,7 @@ func (q *Queries) BumpJobObjections(ctx context.Context, id pgtype.UUID) (int32,
 }
 
 const countActiveJobsForRunner = `-- name: CountActiveJobsForRunner :one
-SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled')
+SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled', 'settling')
 `
 
 func (q *Queries) CountActiveJobsForRunner(ctx context.Context, runnerID pgtype.UUID) (int64, error) {
@@ -123,7 +123,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 const extendLeases = `-- name: ExtendLeases :execrows
 UPDATE jobs SET lease_expires_at = $1, updated_at = now()
 WHERE runner_id = $2 AND id = ANY($3::uuid[])
-  AND status IN ('leased', 'running', 'stalled')
+  AND status IN ('leased', 'running', 'stalled', 'settling')
 `
 
 type ExtendLeasesParams struct {
@@ -447,7 +447,7 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 const listActiveJobsOnRunners = `-- name: ListActiveJobsOnRunners :many
 SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, j.placement, t.title AS task_title
 FROM jobs j JOIN tasks t ON t.id = j.task_id
-WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
+WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled', 'settling')
 ORDER BY j.started_at NULLS LAST
 `
 
@@ -802,8 +802,9 @@ func (q *Queries) LockTask(ctx context.Context, key string) error {
 
 const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
-SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
-WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
+SET status = CASE WHEN status = 'settling' THEN 'settling' ELSE 'running' END,
+    started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled', 'settling')
 RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
 `
 
@@ -812,9 +813,62 @@ type MarkJobActiveParams struct {
 	RunnerID pgtype.UUID `json:"runner_id"`
 }
 
-// First event moves leased → running; any event revives a stalled job.
+// First event moves leased → running; any event revives a stalled job. A job settling (its agent
+// done, the runner checkpointing and pushing) stays settling.
 func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (Job, error) {
 	row := q.db.QueryRow(ctx, markJobActive, arg.ID, arg.RunnerID)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.ProjectID,
+		&i.Phase,
+		&i.Role,
+		&i.Backend,
+		&i.Instruction,
+		&i.Status,
+		&i.RunnerID,
+		&i.Attempts,
+		&i.MaxAttempts,
+		&i.LeaseExpiresAt,
+		&i.LastEventAt,
+		&i.Bounds,
+		&i.Receipt,
+		&i.StopReason,
+		&i.CreatedByKind,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+		&i.Model,
+		&i.UnassignableSince,
+		&i.ContextBytes,
+		&i.ContextDocs,
+		&i.Objections,
+		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
+	)
+	return i, err
+}
+
+const markJobSettling = `-- name: MarkJobSettling :one
+UPDATE jobs SET status = 'settling', last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('running', 'stalled')
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
+`
+
+type MarkJobSettlingParams struct {
+	ID       pgtype.UUID `json:"id"`
+	RunnerID pgtype.UUID `json:"runner_id"`
+}
+
+// The agent is done; the runner settles what it left (checkpoint, digest, push) before its receipt.
+func (q *Queries) MarkJobSettling(ctx context.Context, arg MarkJobSettlingParams) (Job, error) {
+	row := q.db.QueryRow(ctx, markJobSettling, arg.ID, arg.RunnerID)
 	var i Job
 	err := row.Scan(
 		&i.ID,
@@ -887,7 +941,7 @@ func (q *Queries) MarkSilentRunnersOffline(ctx context.Context, before pgtype.Ti
 
 const markStalledJobs = `-- name: MarkStalledJobs :many
 UPDATE jobs SET status = 'stalled', updated_at = now()
-WHERE status = 'running' AND last_event_at < $1
+WHERE status IN ('running', 'settling') AND last_event_at < $1
 RETURNING id, task_id
 `
 
@@ -1015,7 +1069,7 @@ SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
     runner_id = CASE WHEN attempts >= max_attempts THEN runner_id ELSE NULL END,
     finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
     lease_expires_at = NULL, updated_at = now()
-WHERE status IN ('leased', 'running', 'stalled') AND lease_expires_at < $1
+WHERE status IN ('leased', 'running', 'stalled', 'settling') AND lease_expires_at < $1
 RETURNING id, task_id, status
 `
 

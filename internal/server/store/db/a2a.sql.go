@@ -258,7 +258,7 @@ WITH RECURSIVE asked AS (
 SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
                   WHERE j.turn_id IN (SELECT id FROM asked) AND u.created_at >= $1), 0)
       + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
-                  WHERE j.turn_id IN (SELECT id FROM asked) AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8
+                  WHERE j.turn_id IN (SELECT id FROM asked) AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling')), 0))::float8
 `
 
 type ExternalCostSinceParams struct {

@@ -1161,7 +1161,13 @@ paths:
   /tasks/{taskId}/jobs:
     get:
       operationId: listTaskJobs
-      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      description: |
+        The task's jobs. kind=phase is what the task view shows by default (the work of its phases;
+        "is running", "nothing to run" and the phase bar look at these alone); the answers and
+        summaries in its conversation are kind=reply and kind=summary.
+      parameters:
+        - { $ref: "#/components/parameters/taskId" }
+        - { name: kind, in: query, schema: { type: string, enum: [phase, reply, summary] } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Job" } } } } }
     post:
@@ -2522,7 +2528,7 @@ components:
         placement: { type: string, enum: [local, cloud], description: "where the job runs" }
         model: { type: string }
         instruction: { type: string }
-        status: { type: string, enum: [queued, leased, running, stalled, done, failed, stopped] }
+        status: { type: string, enum: [queued, leased, running, stalled, settling, done, failed, stopped], description: "settling: the agent is done and the runner is settling what it left (the last checkpoint, the digest, the push) before its receipt; the card says it is finishing" }
         runnerId: { type: string, format: uuid }
         attempts: { type: integer }
         maxAttempts: { type: integer }

@@ -46,7 +46,7 @@ WITH RECURSIVE asked AS (
 SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
                   WHERE j.turn_id IN (SELECT id FROM asked) AND u.created_at >= sqlc.arg(since)), 0)
       + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
-                  WHERE j.turn_id IN (SELECT id FROM asked) AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8;
+                  WHERE j.turn_id IN (SELECT id FROM asked) AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling')), 0))::float8;
 
 -- name: CreateA2ATask :one
 INSERT INTO a2a_tasks (client_id, project_id, agent_id, message_id, context_id)

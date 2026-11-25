@@ -721,9 +721,50 @@ func (s *session) events(ev proto.Events) error {
 			return errRetry
 		}
 		if n == 1 {
+			if err := s.lifecycle(ctx, q, job, e); err != nil {
+				return errRetry
+			}
 			out, _ := json.Marshal(e)
 			s.m.hub.Publish(events.Event{Type: "job.output", Aggregate: "job", AggregateID: ev.JobID, Payload: out, CreatedAt: at})
 		}
+	}
+	return nil
+}
+
+// Job events that say where a job's life is, which its card follows.
+const (
+	// EventSettling: the agent is done; the runner settles what it left before the receipt.
+	EventSettling = "settling"
+	// EventStartupPhase: how far the start got (checkout, mcp, initialize, ready).
+	EventStartupPhase = "startup_phase"
+)
+
+// startupPhases are the phases a runner may say a start is in.
+var startupPhases = map[string]bool{"checkout": true, "mcp": true, "initialize": true, "ready": true}
+
+// lifecycle reads what a job event says of the job's life: settling moves it to settling
+// (job.settling), a startup phase tells its card how far the start got (job.startup).
+func (s *session) lifecycle(ctx context.Context, q *db.Queries, job db.Job, e proto.JobEvent) error {
+	switch e.Type {
+	case EventSettling:
+		j, err := q.MarkJobSettling(ctx, db.MarkJobSettlingParams{ID: job.ID, RunnerID: s.runnerID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // ended meanwhile, or never ran
+		}
+		if err != nil {
+			return err
+		}
+		return s.m.tx(ctx, func(q *db.Queries) error { return s.m.emitJob(ctx, q, "job.settling", j, nil) })
+	case EventStartupPhase:
+		var p struct {
+			Phase string `json:"phase"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil || !startupPhases[p.Phase] {
+			return nil
+		}
+		return s.m.tx(ctx, func(q *db.Queries) error {
+			return emit(ctx, q, "job.startup", "job", job.ID, map[string]any{"task_id": uuidString(job.TaskID), "phase": p.Phase})
+		})
 	}
 	return nil
 }

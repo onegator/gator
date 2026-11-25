@@ -262,6 +262,19 @@ func (q *Queries) JobChanges(ctx context.Context, jobID pgtype.UUID) ([]byte, er
 	return files, err
 }
 
+const jobStartupPhase = `-- name: JobStartupPhase :one
+SELECT COALESCE((SELECT payload->>'phase' FROM job_events e WHERE e.job_id = $1 AND e.type = 'startup_phase'
+                 ORDER BY e.seq DESC LIMIT 1), '')::text AS phase
+`
+
+// How far a job's start got, by what its runner said last.
+func (q *Queries) JobStartupPhase(ctx context.Context, jobID pgtype.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, jobStartupPhase, jobID)
+	var phase string
+	err := row.Scan(&phase)
+	return phase, err
+}
+
 const listCheckpoints = `-- name: ListCheckpoints :many
 SELECT id, job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_bytes, truncated, whole_files, whole_bytes,
        whole_truncated, took_ms, created_at

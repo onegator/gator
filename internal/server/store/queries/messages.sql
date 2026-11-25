@@ -167,7 +167,7 @@ WHERE conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
        OR (conversation_summaries.pending_job_id IS NULL AND conversation_summaries.updated_at < now() - interval '2 minutes')
        OR (conversation_summaries.pending_job_id IS NOT NULL AND NOT EXISTS (
                SELECT 1 FROM jobs j WHERE j.id = conversation_summaries.pending_job_id
-                 AND j.status IN ('queued', 'leased', 'running', 'stalled'))))
+                 AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling'))))
 RETURNING *;
 
 -- name: SetSummaryJob :exec

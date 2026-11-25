@@ -104,13 +104,21 @@ RETURNING *;
 -- name: ExtendLeases :execrows
 UPDATE jobs SET lease_expires_at = sqlc.arg(lease_until), updated_at = now()
 WHERE runner_id = sqlc.arg(runner_id) AND id = ANY(sqlc.arg(job_ids)::uuid[])
-  AND status IN ('leased', 'running', 'stalled');
+  AND status IN ('leased', 'running', 'stalled', 'settling');
 
 -- name: MarkJobActive :one
--- First event moves leased → running; any event revives a stalled job.
+-- First event moves leased → running; any event revives a stalled job. A job settling (its agent
+-- done, the runner checkpointing and pushing) stays settling.
 UPDATE jobs
-SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
-WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
+SET status = CASE WHEN status = 'settling' THEN 'settling' ELSE 'running' END,
+    started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled', 'settling')
+RETURNING *;
+
+-- name: MarkJobSettling :one
+-- The agent is done; the runner settles what it left (checkpoint, digest, push) before its receipt.
+UPDATE jobs SET status = 'settling', last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('running', 'stalled')
 RETURNING *;
 
 -- name: InsertJobEvent :execrows
@@ -133,7 +141,7 @@ SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
     runner_id = CASE WHEN attempts >= max_attempts THEN runner_id ELSE NULL END,
     finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
     lease_expires_at = NULL, updated_at = now()
-WHERE status IN ('leased', 'running', 'stalled') AND lease_expires_at < sqlc.arg(now)
+WHERE status IN ('leased', 'running', 'stalled', 'settling') AND lease_expires_at < sqlc.arg(now)
 RETURNING id, task_id, status;
 
 -- name: MarkUnassignableJobs :many
@@ -175,7 +183,7 @@ WHERE j.status = 'queued' AND j.unassignable_since IS NOT NULL AND t.closed_at I
 
 -- name: MarkStalledJobs :many
 UPDATE jobs SET status = 'stalled', updated_at = now()
-WHERE status = 'running' AND last_event_at < sqlc.arg(before)
+WHERE status IN ('running', 'settling') AND last_event_at < sqlc.arg(before)
 RETURNING id, task_id;
 
 -- name: StopQueuedJob :execrows
@@ -183,7 +191,7 @@ UPDATE jobs SET status = 'stopped', stop_reason = $2, finished_at = now(), updat
 WHERE id = $1 AND status = 'queued';
 
 -- name: CountActiveJobsForRunner :one
-SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled');
+SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled', 'settling');
 
 -- name: InsertReceipt :exec
 INSERT INTO receipts (source, subject_kind, subject_id, status, payload, verified_at)
@@ -198,7 +206,7 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
 -- including a phone, which has no task detail open.
 SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, j.placement, t.title AS task_title
 FROM jobs j JOIN tasks t ON t.id = j.task_id
-WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
+WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled', 'settling')
 ORDER BY j.started_at NULLS LAST;
 
 -- name: RecordAgentCall :exec

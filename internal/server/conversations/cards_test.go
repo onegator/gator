@@ -213,6 +213,8 @@ func (f fakeJobs) JobProgress(context.Context, pgtype.UUID) (db.JobProgressRow, 
 	return db.JobProgressRow{}, nil
 }
 
+func (f fakeJobs) JobStartupPhase(context.Context, pgtype.UUID) (string, error) { return "", nil }
+
 func (f fakeJobs) JobChanges(_ context.Context, id pgtype.UUID) ([]byte, error) {
 	if f.changes != nil {
 		return f.changes[id.Bytes], nil

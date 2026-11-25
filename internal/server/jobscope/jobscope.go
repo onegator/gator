@@ -71,7 +71,7 @@ func For(kind string) Set {
 // ends, so a finished job calling is a race, not a hole.
 func Active(status string) bool {
 	switch status {
-	case "queued", "leased", "running", "stalled":
+	case "queued", "leased", "running", "stalled", "settling":
 		return true
 	}
 	return false

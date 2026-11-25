@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/onegator/gator/internal/names"
@@ -120,6 +121,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	if access.ReadOnly {
 		prepare = e.WS.PrepareReadOnly
 	}
+	if job.Repo != nil {
+		startup(io, "checkout")
+	}
 	ws, err := prepare(ctx, job)
 	if err != nil {
 		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
@@ -153,19 +157,24 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 
 	cps := newCheckpoints(job, ws, io, e.DenyRead, e.Log)
 	cps.baseline(ctx)
+	if len(servers) > 0 {
+		startup(io, "mcp")
+	}
+	startup(io, "initialize")
 
 	var usage proto.Usage
 	var last backend.Outcome
 	prompt, session, tools := opening, "", 0
 	steers, objections := 0, 0
 	steer := steeringFor(be, io, cps, approve)
+	ready := &readiness{io: io}
 	for {
 		budget := 0
 		if job.Bounds.MaxToolCalls > 0 {
 			budget = max(job.Bounds.MaxToolCalls-tools, 1)
 		}
 		var steered []string
-		last, steered = steer.run(ctx, spec(prompt, session, budget, costLeft(job, usage)), be, backend.Emit(io.Emit))
+		last, steered = steer.run(ctx, spec(prompt, session, budget, costLeft(job, usage)), be, ready.emit)
 		addUsage(&usage, last.Usage)
 		tools += last.ToolCalls
 		if last.SessionID != "" {
@@ -198,6 +207,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		last.Status, last.Reason = proto.StatusFailed, fmt.Sprintf("cost bound ($%.2f) exceeded: $%.2f", limit, usage.CostUSD)
 	}
 
+	// The agent is done; what follows (the digest, git, the push) is the runner's. The receipt
+	// comes once it is all settled, and the card says it is finishing meanwhile.
+	io.Emit("settling", map[string]any{"status": last.Status})
 	digest, summary := ExtractDigest(last.Summary)
 	if job.KindOrPhase() == proto.KindSummary {
 		digest, summary = nil, last.Summary // a summary is all answer: there is no work to digest
@@ -258,6 +270,32 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		e.Log.Warn("workspace cleanup", "job", job.JobID, "err", err)
 	}
 	return fin
+}
+
+// startup says how far the start of a job got, for its card: checkout, mcp, initialize, ready.
+func startup(io client.JobIO, phase string) {
+	io.Emit("startup_phase", map[string]any{"phase": phase})
+}
+
+// readiness passes the backend's events on and says the start is over at the first sign of a
+// session: its init.
+type readiness struct {
+	io   client.JobIO
+	mu   sync.Mutex
+	done bool
+}
+
+func (r *readiness) emit(typ string, payload any) {
+	if typ == "session" {
+		r.mu.Lock()
+		first := !r.done
+		r.done = true
+		r.mu.Unlock()
+		if first {
+			startup(r.io, "ready")
+		}
+	}
+	r.io.Emit(typ, payload)
 }
 
 // Prompt is the opening instruction for a job: the role's guide (resolved by the server per

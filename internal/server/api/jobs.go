@@ -36,7 +36,7 @@ func (s *Server) requireJob(w http.ResponseWriter, r *http.Request, jobID gen.Jo
 	return job, true
 }
 
-func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen.TaskId, params gen.ListTaskJobsParams) {
 	p, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer)
 	if !ok {
 		return
@@ -49,6 +49,9 @@ func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen
 	out := make([]gen.Job, 0, len(rows))
 	caps := newJobCapabilities(db.New(s.Pool))
 	for _, j := range rows {
+		if params.Kind != nil && j.Kind != string(*params.Kind) {
+			continue
+		}
 		readable, err := s.jobReadable(r.Context(), p, j)
 		if err != nil {
 			s.fail(w, err)

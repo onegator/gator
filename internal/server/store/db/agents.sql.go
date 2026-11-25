@@ -15,7 +15,7 @@ const agentCostSince = `-- name: AgentCostSince :one
 SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
                   WHERE j.agent_id = $1 AND u.created_at >= $2), 0)
       + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
-                  WHERE j.agent_id = $1 AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8
+                  WHERE j.agent_id = $1 AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling')), 0))::float8
 `
 
 type AgentCostSinceParams struct {
@@ -125,7 +125,7 @@ SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.i
       + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
                   LEFT JOIN agent_turns t ON t.id = j.turn_id
                   WHERE (t.chain_id = $1 OR j.id = $1)
-                    AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8
+                    AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling')), 0))::float8
 `
 
 // What a chain of delegations has spent, or may still spend: the cost of every job of every turn

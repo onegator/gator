@@ -648,7 +648,7 @@ func (m *Manager) SteerJob(ctx context.Context, jobID pgtype.UUID, message strin
 	if err != nil {
 		return err
 	}
-	if job.Status != "leased" && job.Status != "running" && job.Status != "stalled" {
+	if job.Status != "leased" && job.Status != "running" && job.Status != "stalled" && job.Status != "settling" {
 		return ErrJobNotActive
 	}
 	s := m.session(job.RunnerID)

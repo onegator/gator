@@ -73,3 +73,8 @@ SELECT rc.message_id, rc.path, rc.side, rc.line_start, rc.line_end, rc.snippet, 
 FROM review_comments rc JOIN users u ON u.id = rc.author_id
 WHERE rc.message_id = ANY(sqlc.arg(message_ids)::uuid[])
 ORDER BY rc.message_id, rc.path, rc.line_start, rc.created_at;
+
+-- name: JobStartupPhase :one
+-- How far a job's start got, by what its runner said last.
+SELECT COALESCE((SELECT payload->>'phase' FROM job_events e WHERE e.job_id = $1 AND e.type = 'startup_phase'
+                 ORDER BY e.seq DESC LIMIT 1), '')::text AS phase;

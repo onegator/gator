@@ -188,7 +188,7 @@ UPDATE tasks SET closed_at = NULL, phase_entered_at = now(), updated_at = now()
 WHERE id = $1 RETURNING *;
 
 -- name: ListActiveJobsForTask :many
-SELECT * FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at;
+SELECT * FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled', 'settling') ORDER BY created_at;
 
 -- name: GetCurrentPhaseJob :one
 -- The newest job of a task's current phase entry, as ListCurrentPhaseJobs answers for all, and
