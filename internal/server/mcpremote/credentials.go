@@ -3,6 +3,8 @@ package mcpremote
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/onegator/gator/internal/server/secrets"
@@ -89,5 +91,38 @@ func (t credentialTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 			return nil, err
 		}
 	}
-	return t.base.RoundTrip(r)
+	res, err := t.base.RoundTrip(r)
+	if err == nil {
+		res.Body = &boundedBody{ReadCloser: res.Body, left: MaxAnswer}
+	}
+	return res, err
+}
+
+// MaxAnswer bounds what one answer of a remote server is read to, before anything parses it.
+const MaxAnswer = 4 << 20
+
+// ErrTooLarge is an answer past MaxAnswer.
+var ErrTooLarge = errors.New("the server's answer is larger than Gator reads")
+
+// boundedBody reads a response up to a limit and fails past it, rather than cutting it short and
+// handing on half a JSON document.
+type boundedBody struct {
+	io.ReadCloser
+	left int64
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.left <= 0 {
+		var one [1]byte
+		if n, _ := b.ReadCloser.Read(one[:]); n > 0 {
+			return 0, ErrTooLarge
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.left -= int64(n)
+	return n, err
 }

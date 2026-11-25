@@ -152,8 +152,8 @@ func (p *Proxy) serverFor(r *http.Request) *sdk.Server {
 	})
 	registered := map[string]bool{}
 	for _, t := range req.tools {
-		if !objectSchema(t.InputSchema) {
-			continue
+		if !ValidToolName(t.Name) || !objectSchema(t.InputSchema) {
+			continue // a name that is not one, or a schema that is not a small object, is not offered
 		}
 		srv.AddTool(offered(t, g.Server.Name), p.handle(req.calls))
 		registered[t.Name] = true
@@ -212,9 +212,13 @@ func (p *Proxy) refuseUnknown(req *request, registered map[string]bool) sdk.Midd
 	}
 }
 
-// maxDescription bounds a remote tool's description: it is words from outside, and it reaches
-// the agent's context before any call is made.
-const maxDescription = 1024
+// maxDescription, maxTitle and maxSchema bound what of a remote tool reaches the agent's context
+// before any call is made: words and shapes from outside.
+const (
+	maxDescription = 1024
+	maxTitle       = 80
+	maxSchema      = 16 << 10
+)
 
 // offered is a remote tool as the job sees it: its name, schema and hints, its description
 // marked as the server's and bounded. Its output schema is not offered: the answer comes back
@@ -227,7 +231,11 @@ func offered(t *sdk.Tool, server string) *sdk.Tool {
 	if !utf8.ValidString(desc) {
 		desc = strings.ToValidUTF8(desc, "")
 	}
-	return &sdk.Tool{Name: t.Name, Title: t.Title, Description: "[" + server + ", through Gator] " + desc, InputSchema: t.InputSchema,
+	title := strings.Join(strings.Fields(t.Title), " ")
+	if len(title) > maxTitle {
+		title = strings.ToValidUTF8(title[:maxTitle], "") + "…"
+	}
+	return &sdk.Tool{Name: t.Name, Title: title, Description: "[" + server + ", through Gator] " + desc, InputSchema: t.InputSchema,
 		Annotations: t.Annotations}
 }
 
@@ -236,7 +244,7 @@ func objectSchema(s any) bool {
 		return false
 	}
 	b, err := json.Marshal(s)
-	if err != nil {
+	if err != nil || len(b) > maxSchema {
 		return false
 	}
 	var m map[string]any

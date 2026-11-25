@@ -111,8 +111,11 @@ func (s *session) close() {
 	}
 }
 
-// maxListPages bounds how far a server's paged tool list is read.
-const maxListPages = 20
+// maxListPages and MaxTools bound how far a server's paged tool list is read.
+const (
+	maxListPages = 20
+	MaxTools     = 256
+)
 
 func (s *session) ListTools(ctx context.Context) ([]*sdk.Tool, error) {
 	cs, err := s.open(ctx)
@@ -127,6 +130,9 @@ func (s *session) ListTools(ctx context.Context) ([]*sdk.Tool, error) {
 			return nil, err
 		}
 		out = append(out, res.Tools...)
+		if len(out) >= MaxTools {
+			return out[:MaxTools], nil
+		}
 		if cursor = res.NextCursor; cursor == "" {
 			break
 		}
