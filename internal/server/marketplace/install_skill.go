@@ -94,3 +94,48 @@ func (SkillInstaller) put(ctx context.Context, tx *db.Queries, project pgtype.UU
 	return tx.UpsertSkill(ctx, db.UpsertSkillParams{ProjectID: project, Name: m.Name, Version: version, Description: m.Description,
 		Files: data, Source: src})
 }
+
+// Current implements Updater: a skill's SKILL.md, as it is now.
+func (SkillInstaller) Current(ctx context.Context, tx *db.Queries, inst db.Installation) (map[string]string, error) {
+	sk, err := tx.GetSkill(ctx, inst.TargetID)
+	if err != nil {
+		return nil, err
+	}
+	var files Files
+	_ = json.Unmarshal(sk.Files, &files)
+	md, _ := files.Get(SkillFile)
+	return map[string]string{stateSkill: string(md.Data)}, nil
+}
+
+// Incoming implements Updater.
+func (SkillInstaller) Incoming(pkg Package) (map[string]string, error) {
+	md, _ := pkg.Files.Get(SkillFile)
+	return map[string]string{stateSkill: string(md.Data)}, nil
+}
+
+// Update implements Updater: the new version's folder, with the SKILL.md a person kept.
+func (s SkillInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, keep map[string]bool) (Installed, error) {
+	files := in.Package.Files
+	incoming, _ := files.Get(SkillFile)
+	if keep[stateSkill] {
+		cur, err := s.Current(ctx, tx, inst)
+		if err != nil {
+			return Installed{}, err
+		}
+		kept := make(Files, 0, len(files))
+		for _, f := range files {
+			if f.Path == SkillFile {
+				f = File{Path: SkillFile, Data: []byte(cur[stateSkill])}
+			}
+			kept = append(kept, f)
+		}
+		files = kept
+	}
+	source := map[string]string{"kind": "marketplace", "registry": uuidString(in.Registry), "package": in.Package.Item.Name,
+		"version": in.Package.Item.Version}
+	sk, err := s.put(ctx, tx, inst.ProjectID, files, source)
+	if err != nil {
+		return Installed{}, err
+	}
+	return Installed{Target: sk.ID, State: map[string]string{stateSkill: string(incoming.Data)}}, nil
+}

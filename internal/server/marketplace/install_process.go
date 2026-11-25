@@ -26,6 +26,7 @@ const (
 	stateTemplate = "previous_template"
 	stateRoles    = "previous_roles"
 	stateKind     = "kind"
+	stateProcess  = "template" // the template as installed, to tell a local edit
 )
 
 // Install implements Installer.
@@ -52,6 +53,7 @@ func (ProcessInstaller) Install(ctx context.Context, tx *db.Queries, in Input) (
 
 	t, _ := json.Marshal(pp.Template)
 	templates[kind] = t
+	state[stateProcess] = string(t)
 	for role, prompt := range pp.Roles {
 		roles[role], _ = json.Marshal(prompt)
 	}
@@ -170,4 +172,84 @@ func writeConfig(ctx context.Context, tx *db.Queries, project pgtype.UUID, cfg c
 	}
 	_, err = tx.SetWorkspaceProcessConfig(ctx, raw)
 	return err
+}
+
+// Current implements Updater: the kind's template as the config has it now.
+func (ProcessInstaller) Current(ctx context.Context, tx *db.Queries, inst db.Installation) (map[string]string, error) {
+	var rec installedRecord
+	if err := json.Unmarshal(inst.Installed, &rec); err != nil {
+		return nil, err
+	}
+	cfg, err := readConfig(ctx, tx, inst.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{stateProcess: string(cfg.object("templates")[rec.State[stateKind]])}, nil
+}
+
+// Incoming implements Updater.
+func (ProcessInstaller) Incoming(pkg Package) (map[string]string, error) {
+	pp, err := ParseProcess(pkg.Files)
+	if err != nil {
+		return nil, err
+	}
+	t, _ := json.Marshal(pp.Template)
+	return map[string]string{stateProcess: string(t)}, nil
+}
+
+// Update implements Updater: the new template and prompts, or the template a person kept. What
+// the first installation replaced is still what its removal puts back.
+func (ProcessInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, keep map[string]bool) (Installed, error) {
+	var rec installedRecord
+	if err := json.Unmarshal(inst.Installed, &rec); err != nil {
+		return Installed{}, err
+	}
+	pp, err := ParseProcess(in.Package.Files)
+	if err != nil {
+		return Installed{}, err
+	}
+	kind := rec.State[stateKind]
+	if pp.Template.Kind != kind {
+		return Installed{}, invalid("the new version is the process of %s tasks, not %s; remove it and install that", pp.Template.Kind, kind)
+	}
+	cfg, err := readConfig(ctx, tx, inst.ProjectID)
+	if err != nil {
+		return Installed{}, err
+	}
+	templates, roles := cfg.object("templates"), cfg.object("roles")
+	state := map[string]string{stateKind: kind, stateTemplate: rec.State[stateTemplate], stateRoles: rec.State[stateRoles]}
+	t, _ := json.Marshal(pp.Template)
+	state[stateProcess] = string(t)
+	if !keep[stateProcess] {
+		templates[kind] = t
+	}
+	var prevRoles map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(rec.State[stateRoles]), &prevRoles)
+	if prevRoles == nil {
+		prevRoles = map[string]json.RawMessage{}
+	}
+	old, _ := processOf(rec)
+	for role, prompt := range pp.Roles {
+		if _, ours := old.Roles[role]; !ours {
+			if prev, ok := roles[role]; ok {
+				prevRoles[role] = prev // a role the first version did not set: what it replaces comes back too
+			}
+		}
+		roles[role], _ = json.Marshal(prompt)
+	}
+	for role := range old.Roles {
+		if _, still := pp.Roles[role]; !still {
+			if prev, ok := prevRoles[role]; ok {
+				roles[role] = prev
+			} else {
+				delete(roles, role)
+			}
+			delete(prevRoles, role)
+		}
+	}
+	pr, _ := json.Marshal(prevRoles)
+	state[stateRoles] = string(pr)
+	cfg.set("templates", templates)
+	cfg.set("roles", roles)
+	return Installed{State: state}, writeConfig(ctx, tx, inst.ProjectID, cfg)
 }

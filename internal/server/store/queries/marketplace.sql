@@ -141,3 +141,34 @@ ORDER BY name, project_id IS NULL;
 
 -- name: LockProjectConfig :one
 SELECT process_config FROM projects WHERE id = $1 FOR UPDATE;
+
+-- name: UpdateInstallation :one
+UPDATE installations
+SET version = sqlc.arg(version), checksum = sqlc.arg(checksum), accepted_permissions = sqlc.arg(accepted_permissions),
+    installed = sqlc.arg(installed), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: UpdateInstalledAgent :one
+-- An installed agent brought to a new version of its package; its handle, status and who made it stay.
+UPDATE agents
+SET display_name = sqlc.arg(display_name), description = sqlc.arg(description), avatar = sqlc.arg(avatar), role_key = sqlc.narg(role_key),
+    instructions = sqlc.arg(instructions), tier = sqlc.arg(tier), policy = sqlc.arg(policy), tools = sqlc.arg(tools), skills = sqlc.arg(skills),
+    source = sqlc.arg(source), updated_at = now()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+RETURNING *;
+
+-- name: UpdateInstalledMCPServer :one
+-- A remote server brought to a new version of its package. A new address takes its credentials
+-- away: they were given for the old one.
+UPDATE mcp_servers
+SET display_name = sqlc.arg(display_name), url = sqlc.arg(url), auth = sqlc.arg(auth), oauth = sqlc.arg(oauth),
+    allowed_tools = sqlc.arg(allowed_tools), source = sqlc.arg(source),
+    secrets = CASE WHEN url = sqlc.arg(url) AND auth = sqlc.arg(auth) THEN secrets ELSE '' END,
+    token_expires_at = CASE WHEN url = sqlc.arg(url) AND auth = sqlc.arg(auth) THEN token_expires_at END,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: GetSkill :one
+SELECT * FROM skills WHERE id = $1;

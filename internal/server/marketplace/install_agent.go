@@ -115,3 +115,59 @@ func orNone(s []string) []string {
 	}
 	return s
 }
+
+// Current implements Updater: a person may have changed the agent's instructions.
+func (AgentInstaller) Current(ctx context.Context, tx *db.Queries, inst db.Installation) (map[string]string, error) {
+	a, err := tx.GetAgent(ctx, inst.TargetID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{stateInstructions: a.Instructions}, nil
+}
+
+// Incoming implements Updater.
+func (AgentInstaller) Incoming(pkg Package) (map[string]string, error) {
+	_, instructions, err := ParseAgent(pkg.Files)
+	return map[string]string{stateInstructions: instructions}, err
+}
+
+// Update implements Updater: the agent takes the new version's description, tier, policy, tools
+// and skills; it keeps its handle (people know it by it) and, when asked, its own instructions.
+func (ai AgentInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, keep map[string]bool) (Installed, error) {
+	am, instructions, err := ParseAgent(in.Package.Files)
+	if err != nil {
+		return Installed{}, err
+	}
+	cur, err := tx.GetAgent(ctx, inst.TargetID)
+	if err != nil {
+		return Installed{}, err
+	}
+	if err := agents.Check(cur.Handle, am.DisplayName, am.Description, am.Tier); err != nil {
+		return Installed{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	text := instructions
+	if keep[stateInstructions] {
+		text = cur.Instructions
+	}
+	var roleKey *string
+	if am.RoleKey != "" {
+		roleKey = &am.RoleKey
+	}
+	policy, _ := json.Marshal(am.Policy)
+	tools, _ := json.Marshal(agentTools(am))
+	skills, _ := json.Marshal(orNone(am.Skills))
+	source, _ := json.Marshal(map[string]string{"kind": agents.SourceMarketplace, "registry": uuidString(in.Registry),
+		"package": am.Name, "version": am.Version})
+	if _, err := tx.UpdateInstalledAgent(ctx, db.UpdateInstalledAgentParams{ID: cur.ID, DisplayName: am.DisplayName, Description: am.Description,
+		Avatar: am.Avatar, RoleKey: roleKey, Instructions: text, Tier: am.Tier, Policy: policy, Tools: tools, Skills: skills, Source: source}); err != nil {
+		return Installed{}, err
+	}
+	for _, name := range am.Skills {
+		if files := in.Package.Files.Under("skills/" + name); len(files) > 0 {
+			if err := ai.skills.PutBundled(ctx, tx, inst.ProjectID, am.Name, in, files); err != nil {
+				return Installed{}, err
+			}
+		}
+	}
+	return Installed{Target: cur.ID, State: map[string]string{stateInstructions: instructions}}, nil
+}

@@ -1766,6 +1766,17 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { description: "permissions not accepted, or already installed, or the handle is taken", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+  /installations/{installationId}/update:
+    get:
+      operationId: previewInstallationUpdate
+      description: "What updating would do, changing nothing: the permissions the version adds and drops, and what a person changed here that it would touch, as diffs. The \"Update\" chip's sheet."
+      parameters:
+        - { $ref: "#/components/parameters/installationId" }
+        - { name: version, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UpdatePreview" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /workspace/installations:
     get:
       operationId: listWorkspaceInstallations
@@ -1791,6 +1802,26 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
         "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateInstallation
+      description: >
+        Bring an installation to another version (default: the newest its registry offers). Nothing ever updates by
+        itself. A version that asks for permissions never accepted needs them in acceptedPermissions (409
+        permissions_not_accepted otherwise, naming them). A part a person changed since installing (an agent's
+        instructions, a skill's SKILL.md, a process's template) blocks the update (409 local_changes, with diffs)
+        until resolve says keep_local (the new version, their changes kept) or take_theirs (the new version whole).
+        An agent keeps its handle; a remote server its allowlist and, at the same address, its credentials. For the
+        project's admins, or workspace admins.
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/InstallationUpdate" } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, local changes, or that version is installed already", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
     delete:
       operationId: removeInstallation
       description: "Uninstall: an agent is put away (its turns stay), a skill, an MCP server or a process goes. For the project's admins, or workspace admins."
@@ -3589,6 +3620,7 @@ components:
         error: { type: string }
         code: { type: string, description: "permissions_not_accepted | conflict" }
         permissions: { type: array, items: { type: string }, description: "with permissions_not_accepted: what is still to accept" }
+        localChanges: { type: array, items: { $ref: "#/components/schemas/LocalChange" }, description: "with local_changes: what a person changed, and what the new version would" }
     SkillInfo:
       type: object
       description: "A skill: a folder in the Agent Skills format (SKILL.md, scripts/, references/, assets/). A job of an agent that carries it gets it whole; Claude Code loads it by itself, other backends read it through skill_read."
@@ -3654,3 +3686,26 @@ components:
         resultBytes: { type: integer }
         durationMs: { type: integer }
         createdAt: { type: string, format: date-time }
+    InstallationUpdate:
+      type: object
+      properties:
+        version: { type: string, description: "default: the newest its registry offers" }
+        acceptedPermissions: { type: array, items: { type: string }, description: "accepted now; with what was accepted before, every permission of the new version" }
+        resolve: { type: string, enum: [keep_local, take_theirs], description: "what becomes of what a person changed since installing" }
+    UpdatePreview:
+      type: object
+      required: [from, to, addedPermissions, removedPermissions, needsAcceptance, localChanges]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        addedPermissions: { type: array, items: { type: string }, description: "asked for by the new version and never accepted: to accept again" }
+        removedPermissions: { type: array, items: { type: string } }
+        needsAcceptance: { type: boolean }
+        localChanges: { type: array, items: { $ref: "#/components/schemas/LocalChange" } }
+    LocalChange:
+      type: object
+      required: [part, local, incoming]
+      properties:
+        part: { type: string, description: "instructions, SKILL.md, template" }
+        local: { type: string, description: "a unified diff: what was installed → what it is now" }
+        incoming: { type: string, description: "a unified diff: what was installed → what the new version has" }

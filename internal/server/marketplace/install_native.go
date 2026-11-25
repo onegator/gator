@@ -180,3 +180,16 @@ func (n NativeTrack) Remove(ctx context.Context, tx *db.Queries, inst db.Install
 	}
 	return nil
 }
+
+// Update implements the native track's update: the new version's build, checked as the first was,
+// then the plugin installed from it; the old version's build goes.
+func (n NativeTrack) Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, old, im IntegrationManifest) (Installed, error) {
+	made, err := n.Install(ctx, tx, in, im)
+	if err != nil {
+		return Installed{}, err
+	}
+	if old.Version != im.Version && n.Dir != "" && ValidName(old.Name) && ValidVersion(old.Version) {
+		_ = os.RemoveAll(filepath.Join(n.Dir, old.Name, old.Version))
+	}
+	return made, nil
+}

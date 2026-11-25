@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -74,6 +75,42 @@ func (ii IntegrationInstaller) Remove(ctx context.Context, tx *db.Queries, inst 
 	return t.Remove(ctx, tx, inst)
 }
 
+// trackUpdater is a track that updates in place.
+type trackUpdater interface {
+	Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, old, im IntegrationManifest) (Installed, error)
+}
+
+// Current implements Updater: nothing of an integration is a person's text; its allowlist and
+// credentials are settings, and stay.
+func (IntegrationInstaller) Current(context.Context, *db.Queries, db.Installation) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+// Incoming implements Updater.
+func (IntegrationInstaller) Incoming(Package) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+// Update implements Updater, by the installation's track; it stays on it.
+func (ii IntegrationInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, _ map[string]bool) (Installed, error) {
+	old, err := installedIntegration(inst)
+	if err != nil {
+		return Installed{}, err
+	}
+	im, err := ParseIntegration(in.Package.Files)
+	if err != nil {
+		return Installed{}, err
+	}
+	if im.Kind != old.Kind {
+		return Installed{}, invalid("the new version is a %s integration, not %s; remove it and install that", im.Kind, old.Kind)
+	}
+	t, ok := ii.tracks[im.Kind].(trackUpdater)
+	if !ok {
+		return Installed{}, invalid("a %s integration is not updated in place", im.Kind)
+	}
+	return t.Update(ctx, tx, inst, in, old, im)
+}
+
 // installedIntegration is the integration manifest an installation was made from.
 func installedIntegration(inst db.Installation) (IntegrationManifest, error) {
 	var rec installedRecord
@@ -121,4 +158,31 @@ func (MCPTrack) Remove(ctx context.Context, tx *db.Queries, inst db.Installation
 		return err
 	}
 	return nil
+}
+
+// Update brings a remote server to a new version of its package: its address, sign-in and name.
+// The tools its admin switched on stay; tools the new version allows by default and the old one
+// did not are switched on (the person accepted them with the update). A new address takes the
+// credentials away.
+func (MCPTrack) Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, old, im IntegrationManifest) (Installed, error) {
+	srv, err := tx.GetMCPServer(ctx, inst.TargetID)
+	if err != nil {
+		return Installed{}, err
+	}
+	allowed := slices.Clone(srv.AllowedTools)
+	for _, t := range im.ToolsDefaultAllow {
+		if !slices.Contains(old.ToolsDefaultAllow, t) && !slices.Contains(allowed, t) {
+			allowed = append(allowed, t)
+		}
+	}
+	oauth := []byte("{}")
+	if im.OAuth != nil {
+		oauth, _ = json.Marshal(im.OAuth)
+	}
+	source, _ := json.Marshal(map[string]string{"kind": "marketplace", "registry": uuidString(in.Registry), "package": im.Name, "version": im.Version})
+	if _, err := tx.UpdateInstalledMCPServer(ctx, db.UpdateInstalledMCPServerParams{ID: srv.ID, DisplayName: im.DisplayName, Url: im.URL,
+		Auth: im.Auth, Oauth: oauth, AllowedTools: orNone(allowed), Source: source}); err != nil {
+		return Installed{}, err
+	}
+	return Installed{Target: srv.ID}, nil
 }

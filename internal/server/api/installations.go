@@ -99,6 +99,11 @@ func (s *Server) failInstall(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, gen.InstallRefusal{Error: err.Error(), Code: "permissions_not_accepted", Permissions: &pe.Missing})
 		return
 	}
+	if le, ok := errors.AsType[*marketplace.LocalChangesError](err); ok {
+		changes := toLocalChanges(le.Changes)
+		writeJSON(w, http.StatusConflict, gen.InstallRefusal{Error: err.Error(), Code: "local_changes", LocalChanges: &changes})
+		return
+	}
 	s.failMarketplace(w, err)
 }
 
@@ -163,5 +168,51 @@ func toSkill(sk db.Skill) gen.SkillInfo {
 		out.Files = append(out.Files, f.Path)
 	}
 	_ = json.Unmarshal(sk.Source, &out.Source)
+	return out
+}
+
+func (s *Server) UpdateInstallation(w http.ResponseWriter, r *http.Request, installationId gen.InstallationId) {
+	p, ok := s.marketplaceCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.InstallationUpdate
+	if !decode(w, r, &in) {
+		return
+	}
+	req := marketplace.UpdateRequest{Version: deref(in.Version)}
+	if in.AcceptedPermissions != nil {
+		req.Accepted = *in.AcceptedPermissions
+	}
+	if in.Resolve != nil {
+		req.Resolve = string(*in.Resolve)
+	}
+	inst, err := s.Marketplace.Installations.Update(r.Context(), p, fromUUID(installationId), req)
+	if err != nil {
+		s.failInstall(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.toInstallation(r, p, inst))
+}
+
+func (s *Server) PreviewInstallationUpdate(w http.ResponseWriter, r *http.Request, installationId gen.InstallationId, params gen.PreviewInstallationUpdateParams) {
+	p, ok := s.marketplaceCaller(w, r)
+	if !ok {
+		return
+	}
+	_, pv, err := s.Marketplace.Installations.Preview(r.Context(), p, fromUUID(installationId), deref(params.Version))
+	if err != nil {
+		s.failMarketplace(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gen.UpdatePreview{From: pv.From, To: pv.To, AddedPermissions: orEmpty(pv.Added), RemovedPermissions: orEmpty(pv.Removed),
+		NeedsAcceptance: len(pv.Added) > 0, LocalChanges: toLocalChanges(pv.Local)})
+}
+
+func toLocalChanges(cs []marketplace.LocalChange) []gen.LocalChange {
+	out := make([]gen.LocalChange, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, gen.LocalChange{Part: c.Part, Local: c.Local, Incoming: c.Incoming})
+	}
 	return out
 }

@@ -398,6 +398,27 @@ func (q *Queries) GetRegistry(ctx context.Context, id pgtype.UUID) (MarketplaceR
 	return i, err
 }
 
+const getSkill = `-- name: GetSkill :one
+SELECT id, project_id, name, version, description, files, source, created_at, updated_at FROM skills WHERE id = $1
+`
+
+func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
+	row := q.db.QueryRow(ctx, getSkill, id)
+	var i Skill
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Version,
+		&i.Description,
+		&i.Files,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSkillIn = `-- name: GetSkillIn :one
 SELECT id, project_id, name, version, description, files, source, created_at, updated_at FROM skills WHERE project_id IS NOT DISTINCT FROM $1::uuid AND name = $2
 `
@@ -812,6 +833,164 @@ type UnlistItemsParams struct {
 func (q *Queries) UnlistItems(ctx context.Context, arg UnlistItemsParams) error {
 	_, err := q.db.Exec(ctx, unlistItems, arg.RegistryID, arg.Keep)
 	return err
+}
+
+const updateInstallation = `-- name: UpdateInstallation :one
+UPDATE installations
+SET version = $1, checksum = $2, accepted_permissions = $3,
+    installed = $4, updated_at = now()
+WHERE id = $5
+RETURNING id, project_id, registry_id, kind, name, version, checksum, target_id, accepted_permissions, installed, installed_by, installed_at, updated_at
+`
+
+type UpdateInstallationParams struct {
+	Version             string      `json:"version"`
+	Checksum            string      `json:"checksum"`
+	AcceptedPermissions []byte      `json:"accepted_permissions"`
+	Installed           []byte      `json:"installed"`
+	ID                  pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateInstallation(ctx context.Context, arg UpdateInstallationParams) (Installation, error) {
+	row := q.db.QueryRow(ctx, updateInstallation,
+		arg.Version,
+		arg.Checksum,
+		arg.AcceptedPermissions,
+		arg.Installed,
+		arg.ID,
+	)
+	var i Installation
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RegistryID,
+		&i.Kind,
+		&i.Name,
+		&i.Version,
+		&i.Checksum,
+		&i.TargetID,
+		&i.AcceptedPermissions,
+		&i.Installed,
+		&i.InstalledBy,
+		&i.InstalledAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateInstalledAgent = `-- name: UpdateInstalledAgent :one
+UPDATE agents
+SET display_name = $1, description = $2, avatar = $3, role_key = $4,
+    instructions = $5, tier = $6, policy = $7, tools = $8, skills = $9,
+    source = $10, updated_at = now()
+WHERE id = $11 AND deleted_at IS NULL
+RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
+`
+
+type UpdateInstalledAgentParams struct {
+	DisplayName  string      `json:"display_name"`
+	Description  string      `json:"description"`
+	Avatar       string      `json:"avatar"`
+	RoleKey      *string     `json:"role_key"`
+	Instructions string      `json:"instructions"`
+	Tier         string      `json:"tier"`
+	Policy       []byte      `json:"policy"`
+	Tools        []byte      `json:"tools"`
+	Skills       []byte      `json:"skills"`
+	Source       []byte      `json:"source"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+// An installed agent brought to a new version of its package; its handle, status and who made it stay.
+func (q *Queries) UpdateInstalledAgent(ctx context.Context, arg UpdateInstalledAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, updateInstalledAgent,
+		arg.DisplayName,
+		arg.Description,
+		arg.Avatar,
+		arg.RoleKey,
+		arg.Instructions,
+		arg.Tier,
+		arg.Policy,
+		arg.Tools,
+		arg.Skills,
+		arg.Source,
+		arg.ID,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Handle,
+		&i.DisplayName,
+		&i.Description,
+		&i.Avatar,
+		&i.RoleKey,
+		&i.Instructions,
+		&i.Tier,
+		&i.Policy,
+		&i.Tools,
+		&i.Skills,
+		&i.Status,
+		&i.Source,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const updateInstalledMCPServer = `-- name: UpdateInstalledMCPServer :one
+UPDATE mcp_servers
+SET display_name = $1, url = $2, auth = $3, oauth = $4,
+    allowed_tools = $5, source = $6,
+    secrets = CASE WHEN url = $2 AND auth = $3 THEN secrets ELSE '' END,
+    token_expires_at = CASE WHEN url = $2 AND auth = $3 THEN token_expires_at END,
+    updated_at = now()
+WHERE id = $7
+RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
+`
+
+type UpdateInstalledMCPServerParams struct {
+	DisplayName  string      `json:"display_name"`
+	Url          string      `json:"url"`
+	Auth         string      `json:"auth"`
+	Oauth        []byte      `json:"oauth"`
+	AllowedTools []string    `json:"allowed_tools"`
+	Source       []byte      `json:"source"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+// A remote server brought to a new version of its package. A new address takes its credentials
+// away: they were given for the old one.
+func (q *Queries) UpdateInstalledMCPServer(ctx context.Context, arg UpdateInstalledMCPServerParams) (McpServer, error) {
+	row := q.db.QueryRow(ctx, updateInstalledMCPServer,
+		arg.DisplayName,
+		arg.Url,
+		arg.Auth,
+		arg.Oauth,
+		arg.AllowedTools,
+		arg.Source,
+		arg.ID,
+	)
+	var i McpServer
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Url,
+		&i.Auth,
+		&i.Secrets,
+		&i.AllowedTools,
+		&i.Enabled,
+		&i.Oauth,
+		&i.TokenExpiresAt,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertItem = `-- name: UpsertItem :exec
