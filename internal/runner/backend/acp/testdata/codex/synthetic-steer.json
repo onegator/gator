@@ -1,0 +1,20 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true, "mcpCapabilities": {"http": true}}, "agentInfo": {"name": "codex-acp", "version": "0.0.0-synthetic"}},
+  "new_session": {"sessionId": "sess-steer"},
+  "load_session": {},
+  "load_turn": 1,
+  "load_replay": [
+    {"sessionId": "sess-steer", "update": {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "the first prompt, replayed"}}},
+    {"sessionId": "sess-steer", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Working on it, replayed.\n\n"}}},
+    {"sessionId": "sess-steer", "update": {"sessionUpdate": "tool_call", "toolCallId": "old-1", "title": "Read", "kind": "read", "status": "completed"}}
+  ],
+  "turns": [
+    {"steps": [
+      {"update": {"sessionId": "sess-steer", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Working on it.\n\n"}}}},
+      {"wait_cancel": true}
+    ]},
+    {"steps": [
+      {"update": {"sessionId": "sess-steer", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Corrected, as asked."}}}}
+    ]}
+  ]
+}

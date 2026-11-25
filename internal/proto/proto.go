@@ -147,7 +147,7 @@ func ValidPlacement(p string) bool { return p == PlacementLocal || p == Placemen
 
 // Capabilities describes what a runner can execute.
 type Capabilities struct {
-	Backends    []string `json:"backends"`     // "claude", "codex", "pi"
+	Backends    []string `json:"backends"`     // "claude", "acp:codex", "acp:gemini"
 	MaxParallel int      `json:"max_parallel"` // concurrent jobs
 	Projects    []string `json:"projects"`     // project ids; empty = any project
 	// CanLogin says this runner can drive an interactive backend login and answer with a
@@ -349,7 +349,7 @@ type LoginPrompt struct {
 // Usage is what one job consumed. Every finish carries it; the server stores it per task
 // and phase so time and tokens can be reported for every task Gator runs.
 type Usage struct {
-	Backend          string    `json:"backend"` // "claude" | "codex" | "pi"
+	Backend          string    `json:"backend"` // "claude" | "acp:<agent>"
 	Model            string    `json:"model"`
 	InputTokens      int64     `json:"input_tokens"`
 	OutputTokens     int64     `json:"output_tokens"`

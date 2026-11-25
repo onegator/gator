@@ -16,8 +16,6 @@ import (
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/agentenv"
-	"github.com/onegator/gator/internal/runner/backend"
-	"github.com/onegator/gator/internal/runner/backend/claude"
 	"github.com/onegator/gator/internal/runner/client"
 	"github.com/onegator/gator/internal/runner/config"
 	"github.com/onegator/gator/internal/runner/executor"
@@ -106,21 +104,9 @@ func run(args []string) error {
 		}
 		log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 		denyRead := agentDenyRead(cfg, log)
-		backends := map[string]backend.Backend{}
-		var advertised []string
-		for _, name := range cfg.Backends {
-			switch name {
-			case "claude":
-				// What a run that died left of a job's MCP configuration (its token) goes now.
-				if err := claude.PrepareMCPDir(claude.DefaultMCPDir()); err != nil {
-					return err
-				}
-				backends[name] = claude.Backend{Bin: os.Getenv("GATOR_RUNNER_CLAUDE_BIN"), Model: os.Getenv("GATOR_RUNNER_CLAUDE_MODEL"),
-					MCPConfig: os.Getenv("GATOR_RUNNER_CLAUDE_MCP_CONFIG"), Log: log, AllowEnv: cfg.AgentEnv}
-				advertised = append(advertised, name)
-			default:
-				log.Warn("unknown backend ignored", "backend", name)
-			}
+		backends, advertised, err := backends(cfg, log)
+		if err != nil {
+			return err
 		}
 		if len(advertised) == 0 {
 			log.Warn("no usable GATOR_RUNNER_BACKENDS; this runner stays online but receives no jobs")

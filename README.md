@@ -218,6 +218,32 @@ and `/stop`; live output streams on the WebSocket topic `job:<id>`.
 `internal/runner/backend/claude/testdata` holds sanitized recordings of real Claude Code 2.1.270
 sessions; the parser and backend tests replay them through a fake `claude`.
 
+### Agents speaking ACP
+
+Any agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) runs as the
+backend `acp:<name>`: `GATOR_ACP_AGENTS=codex:/usr/local/bin/codex-acp,gemini:/usr/local/bin/gemini
+--experimental-acp` (name, colon, the command and its arguments). The runner starts the command in
+the worktree for every run (`internal/runner/backend/acp`): `initialize`, `session/new` with Gator's
+MCP servers over HTTP (when the agent can reach them; the job's token travels in the session's
+headers, never on the command line), `session/prompt`, and `session/update` as the same job events
+as Claude's. A steer is `session/cancel`, then `session/load` of the same session and the correction
+(an agent that cannot load sessions starts over with the opening and the correction). The tool-call
+limit and a cost the agent reports (`usage_update`) are counted by the runner, which cancels the
+turn and ends the process group. The agent's permission requests are answered for the job's tier:
+a work job allows them once each; a chat job allows reading, searching, fetching, the job's own MCP
+servers and `gator-cli` alone, and refuses editing, deleting, moving and other commands (and sets
+the agent's read-only mode when its profile names one), on a read-only worktree. A job with no tools
+(summaries) never goes to an ACP backend. Each supported agent has a profile (its login variables
+and files for `AuthState`, its read-only mode) and synthetic replays in `testdata/<agent>`: `codex`
+(via codex-acp) and `gemini`; anything else runs as experimental. A policy picks it per role, tier or
+agent (`"backend": "acp:codex"`).
+
+**To check live before relying on it:** the adapters' current versions and flags (`codex-acp`,
+`gemini --experimental-acp`), whether they report usage (`usage` in the prompt's answer,
+`usage_update` with a cost), the ids of their session modes (codex-acp's `read-only`), and how they
+title MCP tool calls in permission requests. The recordings here are synthetic: no model session
+was started to make them.
+
 ## Autopilot, roles and artifacts
 
 When a task enters a phase owned by a runner (discovery, planning, implementation, verification

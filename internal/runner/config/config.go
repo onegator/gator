@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/backend/acp"
 )
 
 // Config is the runner configuration.
@@ -34,6 +35,9 @@ type Config struct {
 	// AgentEnv names variables the agent gets on top of the built-in allow-list
 	// (GATOR_RUNNER_AGENT_ENV), for a backend or a tool that needs one this runner cannot guess.
 	AgentEnv []string
+	// ACPAgents are the agents speaking the Agent Client Protocol this runner runs, each as the
+	// backend acp:<name> (GATOR_ACP_AGENTS=codex:/usr/local/bin/codex-acp,…).
+	ACPAgents []acp.Agent
 }
 
 // Load reads GATOR_RUNNER_* variables.
@@ -52,6 +56,11 @@ func Load() (Config, error) {
 		Once:        os.Getenv("GATOR_RUNNER_ONCE") == "1",
 		AgentEnv:    list(os.Getenv("GATOR_RUNNER_AGENT_ENV")),
 	}
+	agents, err := acp.ParseAgents(os.Getenv("GATOR_ACP_AGENTS"))
+	if err != nil {
+		return c, err
+	}
+	c.ACPAgents = agents
 	if c.Placement == "" {
 		c.Placement = proto.PlacementFor(c.Location)
 	}
