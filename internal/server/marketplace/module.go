@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -25,7 +26,7 @@ type Module struct {
 
 // Deps are what the module is built from; zero values take the defaults.
 type Deps struct {
-	Fetcher Fetcher // default: DefaultFetcher
+	Fetcher Fetcher // default: FetcherFor(Net)
 	Limits  Limits  // default: DefaultLimits
 	Kinds   Kinds   // default: every kind this server knows
 	// Roles answers people's roles in projects; default auth.Authorizer over the pool.
@@ -41,6 +42,11 @@ type Deps struct {
 	// this server's.
 	Download Downloader
 	Platform string
+	// Net is what addresses registries and downloads may have (GATOR_OUTBOUND_ALLOW_PRIVATE);
+	// AllowFileDownloads lets packages name builds on the server's disk
+	// (GATOR_MARKETPLACE_ALLOW_FILE).
+	Net                netguard.Policy
+	AllowFileDownloads bool
 }
 
 // DefaultKinds are the kinds a registry may offer.
@@ -51,7 +57,7 @@ func DefaultKinds() Kinds {
 // New builds the module.
 func New(pool *pgxpool.Pool, deps Deps) *Module {
 	if deps.Fetcher == nil {
-		deps.Fetcher = DefaultFetcher
+		deps.Fetcher = FetcherFor(deps.Net)
 	}
 	if deps.Limits == (Limits{}) {
 		deps.Limits = DefaultLimits
@@ -66,7 +72,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	catalog := NewCatalog(q, deps.Fetcher, deps.Kinds, deps.Limits)
 	skills := SkillInstaller{}
 	if deps.Download == nil {
-		deps.Download = HTTPDownloader{}
+		deps.Download = HTTPDownloader{Net: deps.Net, AllowFile: deps.AllowFileDownloads}
 	}
 	native := NativeTrack{Dir: deps.PluginDir, Platform: deps.Platform, Download: deps.Download, Host: deps.Plugins}
 	tx := func(ctx context.Context, fn func(q *db.Queries) error) error { return store.InTx(ctx, pool, fn) }

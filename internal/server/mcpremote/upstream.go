@@ -19,6 +19,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/version"
 )
@@ -53,13 +54,16 @@ type Dialer interface {
 // HTTPDialer reaches servers over Streamable HTTP, with their credentials on every request.
 type HTTPDialer struct {
 	Credentials Credentials
-	// HTTP makes the requests; default: a 30 s timeout. Its transport carries the credentials.
+	// HTTP makes the requests; default: a 30 s timeout over Net's transport. Its transport
+	// carries the credentials.
 	HTTP *http.Client
+	// Net is what addresses the requests may reach.
+	Net netguard.Policy
 }
 
 // Dial implements Dialer. Nothing is sent until the first call.
 func (d HTTPDialer) Dial(_ context.Context, srv db.McpServer) (Upstream, func(), error) {
-	base := http.DefaultTransport
+	base := d.Net.Transport()
 	timeout := 30 * time.Second
 	if d.HTTP != nil {
 		if d.HTTP.Transport != nil {

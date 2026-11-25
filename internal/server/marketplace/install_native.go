@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/plugin"
 )
@@ -22,10 +23,13 @@ type Downloader interface {
 	Download(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
-// HTTPDownloader downloads over HTTP(S), and reads file:// URLs from the server's disk (a mirror,
-// an air-gapped install, a test).
+// HTTPDownloader downloads over https (through the server's outbound policy), and reads file://
+// URLs from the server's disk only where the operator allows it (a mirror, an air-gapped install):
+// otherwise a package could name any file the server can read.
 type HTTPDownloader struct {
-	HTTP *http.Client // default: a 5 minute timeout
+	HTTP      *http.Client // default: a 5 minute timeout over Net's transport
+	Net       netguard.Policy
+	AllowFile bool // GATOR_MARKETPLACE_ALLOW_FILE=1
 }
 
 // Download implements Downloader.
@@ -35,11 +39,14 @@ func (d HTTPDownloader) Download(ctx context.Context, raw string) (io.ReadCloser
 		return nil, invalid("%q is not an address", raw)
 	}
 	if u.Scheme == "file" {
+		if !d.AllowFile {
+			return nil, invalid("file:// downloads are off on this server (GATOR_MARKETPLACE_ALLOW_FILE)")
+		}
 		return os.Open(u.Path)
 	}
 	client := d.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Minute}
+		client = d.Net.Client(5 * time.Minute)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {

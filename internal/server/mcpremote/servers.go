@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -42,11 +43,12 @@ type Servers struct {
 	dial     Dialer
 	cache    *ToolCache
 	breakers *Breakers
+	net      netguard.Policy
 }
 
-// NewServers builds it.
-func NewServers(store serverStore, rs roles, keys Keyring, dial Dialer, cache *ToolCache, breakers *Breakers) *Servers {
-	return &Servers{store: store, roles: rs, keys: keys, dial: dial, cache: cache, breakers: breakers}
+// NewServers builds it; net is what addresses a server may have.
+func NewServers(store serverStore, rs roles, keys Keyring, dial Dialer, cache *ToolCache, breakers *Breakers, net netguard.Policy) *Servers {
+	return &Servers{store: store, roles: rs, keys: keys, dial: dial, cache: cache, breakers: breakers, net: net}
 }
 
 // View is a server as people see it: never its secrets, only which are set.
@@ -123,7 +125,7 @@ func (s *Servers) Put(ctx context.Context, p auth.Principal, project pgtype.UUID
 	next := db.UpdateMCPServerParams{ID: srv.ID, Url: srv.Url, AllowedTools: srv.AllowedTools, Enabled: srv.Enabled}
 	moved := false
 	if in.URL != nil && *in.URL != srv.Url {
-		if err := CheckURL(*in.URL); err != nil {
+		if err := CheckURL(*in.URL, s.net); err != nil {
 			return View{}, err
 		}
 		next.Url, moved = *in.URL, true
@@ -163,7 +165,7 @@ func (s *Servers) create(ctx context.Context, project pgtype.UUID, name string, 
 	if in.URL == nil || in.Auth == nil {
 		return db.McpServer{}, ErrNotFound
 	}
-	if err := CheckURL(*in.URL); err != nil {
+	if err := CheckURL(*in.URL, s.net); err != nil {
 		return db.McpServer{}, err
 	}
 	switch *in.Auth {

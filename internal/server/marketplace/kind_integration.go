@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/onegator/gator/internal/server/mcpremote"
+	"github.com/onegator/gator/internal/server/netguard"
 )
 
 // IntegrationFile is an integration package's manifest.
@@ -186,9 +187,11 @@ func checkNative(im IntegrationManifest) error {
 	return nil
 }
 
-// CheckServerURL holds an address the server will send credentials to (see mcpremote.CheckURL).
+// CheckServerURL holds the shape of an address a package names: https, or http to localhost (a
+// test's, a laptop's). Whether the server may reach it is decided when it does, by its outbound
+// policy (netguard), never by the package.
 func CheckServerURL(raw string) error {
-	if err := mcpremote.CheckURL(raw); err != nil {
+	if err := mcpremote.CheckURL(raw, netguard.Policy{AllowPrivate: true}); err != nil {
 		return invalid("%v", err)
 	}
 	return nil

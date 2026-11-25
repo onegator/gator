@@ -32,6 +32,7 @@ import (
 	"github.com/onegator/gator/internal/server/marketplace"
 	"github.com/onegator/gator/internal/server/mcp"
 	"github.com/onegator/gator/internal/server/mcpremote"
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -170,7 +171,10 @@ func serve(ctx context.Context) error {
 	// Plugins propose to the Brain too (brain.propose), as proposals a person approves.
 	// Remote MCP servers agents reach through Gator's proxy; their credentials stay here, and one
 	// that signs in with OAuth is connected through the plugins' /connect/callback.
-	remote := mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log, PublicURL: cfg.PublicURL, Apps: oauthApps})
+	// The server's own requests to remote servers, providers, registries and downloads stay off
+	// private addresses unless the operator says otherwise.
+	outbound := netguard.FromEnv(os.Getenv)
+	remote := mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log, PublicURL: cfg.PublicURL, Apps: oauthApps, Net: outbound})
 	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins,
 		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth}}
 	pluginCfg.LoadEnv()
@@ -265,7 +269,8 @@ func serve(ctx context.Context) error {
 	// Native plugins from a registry are built for this platform, checked against their sha256 and
 	// kept next to the bundled ones, where the catalogue does not look.
 	market := marketplace.New(db.Pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: db.Pool},
-		Plugins: pluginHost, PluginDir: marketplacePluginDir(pluginCfg.CatalogueDir)})
+		Plugins: pluginHost, PluginDir: marketplacePluginDir(pluginCfg.CatalogueDir),
+		Net: outbound, AllowFileDownloads: os.Getenv("GATOR_MARKETPLACE_ALLOW_FILE") == "1"})
 	go func() {
 		if err := market.Start(ctx, marketplace.BuiltinFromEnv(os.Getenv)); err != nil && ctx.Err() == nil {
 			log.Warn("marketplace: Gator's registry could not be fetched; the catalogue waits for a fetch", "err", err)

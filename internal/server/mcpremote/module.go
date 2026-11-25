@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -39,8 +40,10 @@ type Deps struct {
 	PublicURL string
 	// Apps are the server's OAuth apps by provider; default: none.
 	Apps func(provider string) (OAuthApp, bool)
-	// OAuthHTTP makes the requests to providers; default a 20 s timeout.
+	// OAuthHTTP makes the requests to providers; default a 20 s timeout over Net's transport.
 	OAuthHTTP *http.Client
+	// Net is what addresses remote servers and providers may have (GATOR_OUTBOUND_ALLOW_PRIVATE).
+	Net netguard.Policy
 }
 
 // New builds the module.
@@ -49,9 +52,12 @@ func New(pool *pgxpool.Pool, d Deps) *Module {
 	keys := Keyring{Keys: d.Keys}
 	breakers, cache := NewBreakers(d.BreakerThreshold, d.BreakerCooldown), NewToolCache(0)
 	roles := auth.Authorizer{Pool: pool}
+	if d.OAuthHTTP == nil {
+		d.OAuthHTTP = d.Net.Client(20 * time.Second)
+	}
 	oauth := NewOAuth(q, roles, keys, d.Apps, d.PublicURL, d.OAuthHTTP, cache)
-	dial := HTTPDialer{Credentials: oauth, HTTP: d.HTTP}
+	dial := HTTPDialer{Credentials: oauth, HTTP: d.HTTP, Net: d.Net}
 	proxy := NewProxy(ProxyDeps{Gate: JobGate{Store: q}, Dialer: dial, Recorder: DBRecorder{Store: q, Log: d.Log},
 		Breakers: breakers, Cache: cache, MaxResult: d.MaxResult, Log: d.Log})
-	return &Module{Servers: NewServers(q, roles, keys, dial, cache, breakers), Proxy: proxy, OAuth: oauth, Keys: keys}
+	return &Module{Servers: NewServers(q, roles, keys, dial, cache, breakers, d.Net), Proxy: proxy, OAuth: oauth, Keys: keys}
 }

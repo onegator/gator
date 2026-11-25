@@ -2,9 +2,10 @@ package mcpremote
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"regexp"
+
+	"github.com/onegator/gator/internal/server/netguard"
 )
 
 // Auth of a remote server.
@@ -27,28 +28,15 @@ func ValidName(s string) bool { return namePattern.MatchString(s) && s != "gator
 func ValidToolName(s string) bool { return toolPattern.MatchString(s) }
 
 // CheckURL holds an address the server will send credentials to: https, or plain http to this
-// machine only (a server on localhost, a test).
-func CheckURL(raw string) error {
+// machine where the policy allows private addresses (development, tests). Which addresses a name
+// may resolve to is the policy's dialer's to check, when the connection is made.
+func CheckURL(raw string, p netguard.Policy) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return fmt.Errorf("%w: %q is not a server's address", ErrInvalid, raw)
 	}
-	switch u.Scheme {
-	case "https":
-		return nil
-	case "http":
-		if Loopback(u.Hostname()) {
-			return nil
-		}
+	if err := p.CheckScheme(u); err != nil {
+		return fmt.Errorf("%w: %v (plain http only to localhost, in development)", ErrInvalid, err)
 	}
-	return fmt.Errorf("%w: %q must be https (plain http only to localhost)", ErrInvalid, raw)
-}
-
-// Loopback says whether host is this machine.
-func Loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return nil
 }

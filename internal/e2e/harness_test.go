@@ -37,6 +37,7 @@ import (
 	"github.com/onegator/gator/internal/server/marketplace/marketplacetest"
 	"github.com/onegator/gator/internal/server/mcp"
 	"github.com/onegator/gator/internal/server/mcpremote"
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
@@ -45,6 +46,10 @@ import (
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
+
+// testNet lets the server reach the tests' fakes, which listen on loopback; what it refuses
+// without this is netguard's own test.
+var testNet = netguard.Policy{AllowPrivate: true}
 
 type harness struct {
 	t       *testing.T
@@ -107,7 +112,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	svc.UseBrain(knows.Packer, knows.Legacy)
 	// Remote MCP servers; one that signs in with OAuth signs in at the fake provider, and comes back
 	// through the plugins' /connect/callback.
-	remote := mcpremote.New(pool, mcpremote.Deps{Keys: keys, BreakerThreshold: 3, BreakerCooldown: time.Hour, PublicURL: fakePublicURL,
+	remote := mcpremote.New(pool, mcpremote.Deps{Keys: keys, Net: testNet, BreakerThreshold: 3, BreakerCooldown: time.Hour, PublicURL: fakePublicURL,
 		OAuthHTTP: oauth.httpClient(), Apps: func(provider string) (mcpremote.OAuthApp, bool) {
 			c, ok := oauth.client(provider)
 			return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret}, ok
@@ -147,7 +152,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	starter := marketplacetest.New(t)
 	starter.Starter()
 	market := marketplace.New(pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: pool}, Plugins: host,
-		PluginDir: filepath.Join(t.TempDir(), "marketplace")})
+		PluginDir: filepath.Join(t.TempDir(), "marketplace"), Net: testNet})
 	if err := market.Start(ctx, marketplace.Builtin{URL: starter.URL, PublicKey: starter.PublicKey}); err != nil {
 		t.Fatal(err)
 	}
