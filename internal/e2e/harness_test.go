@@ -32,6 +32,8 @@ import (
 	"github.com/onegator/gator/internal/server/brain/curator"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/marketplace"
+	"github.com/onegator/gator/internal/server/marketplace/marketplacetest"
 	"github.com/onegator/gator/internal/server/mcp"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -58,6 +60,10 @@ type harness struct {
 	runner  string // runner bearer
 	oauth   *fakeProvider
 	bundled string // the catalogue's one plugin, not installed until a test asks for it
+	market  *marketplace.Module
+	// starter is Gator's own registry for the test: the starter catalogue, in a directory, signed
+	// with a key made for the test.
+	starter *marketplacetest.Registry
 }
 
 const (
@@ -126,9 +132,18 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	curations := conversations.NewCursorConsumer("brain_curator", pool, hub, slog.Default(), 50*time.Millisecond)
 	curations.On(curate, curate.Events()...)
 	go curations.Run(consumers)
+	// Gator's own registry is the starter catalogue in a directory of the test's, as a server
+	// would fetch it from GATOR_MARKETPLACE_URL at start.
+	starter := marketplacetest.New(t)
+	starter.Starter()
+	market := marketplace.New(pool, marketplace.Deps{})
+	if err := market.Start(ctx, marketplace.Builtin{URL: starter.URL, PublicKey: starter.PublicKey}); err != nil {
+		t.Fatal(err)
+	}
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Automations: autos, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows,
-		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc})}
+		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
+		Marketplace: market}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
@@ -144,7 +159,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.

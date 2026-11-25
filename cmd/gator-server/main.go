@@ -28,6 +28,7 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/knowledge"
+	"github.com/onegator/gator/internal/server/marketplace"
 	"github.com/onegator/gator/internal/server/mcp"
 	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
@@ -52,7 +53,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gator-server <serve|migrate|migrate-down|admin create-admin <email> [name]|admin issue-runner-token <name>|backup now|restore <file>|secrets new-key [id]|secrets check|version>")
+		return errors.New("usage: gator-server <serve|migrate|migrate-down|admin create-admin <email> [name]|admin issue-runner-token <name>|backup now|restore <file>|secrets new-key [id]|secrets check|marketplace …|version>")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -77,6 +78,8 @@ func run(args []string) error {
 		return serve(ctx)
 	case "knowledge":
 		return knowledgeCmd(args[1:])
+	case "marketplace":
+		return marketplaceCmd(args[1:])
 	case "secrets":
 		return secretsCmd(args[1:])
 	case "admin":
@@ -251,6 +254,15 @@ func serve(ctx context.Context) error {
 	// A person's focus is worked out from their work, and theirs alone.
 	go knows.Focus.Run(ctx, time.Hour)
 
+	// Agents, skills, integrations and processes come from registries: Gator's own, fetched now so
+	// a fresh server has a catalogue, and the company's. Nothing installed updates by itself.
+	market := marketplace.New(db.Pool, marketplace.Deps{})
+	go func() {
+		if err := market.Start(ctx, marketplace.BuiltinFromEnv(os.Getenv)); err != nil && ctx.Err() == nil {
+			log.Warn("marketplace: Gator's registry could not be fetched; the catalogue waits for a fetch", "err", err)
+		}
+	}()
+
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
 		Quality: scorecards, Automations: autos,
@@ -262,6 +274,8 @@ func serve(ctx context.Context) error {
 		// The agents who answer in them.
 		Agents: team,
 		Brain:  knows,
+		// Packages from registries, installed with the permissions a person accepted.
+		Marketplace: market,
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),

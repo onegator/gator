@@ -316,6 +316,22 @@ type Incident struct {
 	ClosedAt       pgtype.Timestamptz `json:"closed_at"`
 }
 
+type Installation struct {
+	ID                  pgtype.UUID        `json:"id"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	RegistryID          pgtype.UUID        `json:"registry_id"`
+	Kind                string             `json:"kind"`
+	Name                string             `json:"name"`
+	Version             string             `json:"version"`
+	Checksum            string             `json:"checksum"`
+	TargetID            pgtype.UUID        `json:"target_id"`
+	AcceptedPermissions []byte             `json:"accepted_permissions"`
+	Installed           []byte             `json:"installed"`
+	InstalledBy         pgtype.UUID        `json:"installed_by"`
+	InstalledAt         pgtype.Timestamptz `json:"installed_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Job struct {
 	ID                pgtype.UUID        `json:"id"`
 	TaskID            pgtype.UUID        `json:"task_id"`
@@ -414,6 +430,30 @@ type LoginCode struct {
 	RedirectUri   string             `json:"redirect_uri"`
 	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type MarketplaceItem struct {
+	RegistryID pgtype.UUID        `json:"registry_id"`
+	Kind       string             `json:"kind"`
+	Name       string             `json:"name"`
+	Version    string             `json:"version"`
+	Manifest   []byte             `json:"manifest"`
+	Checksum   string             `json:"checksum"`
+	Files      []byte             `json:"files"`
+	Listed     bool               `json:"listed"`
+	FetchedAt  pgtype.Timestamptz `json:"fetched_at"`
+}
+
+type MarketplaceRegistry struct {
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	Url        string             `json:"url"`
+	PublicKey  string             `json:"public_key"`
+	Builtin    bool               `json:"builtin"`
+	FetchedAt  pgtype.Timestamptz `json:"fetched_at"`
+	FetchError string             `json:"fetch_error"`
+	CreatedBy  pgtype.UUID        `json:"created_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type Membership struct {
@@ -701,6 +741,18 @@ type Runner struct {
 	RetiredAt       pgtype.Timestamptz `json:"retired_at"`
 	Placement       string             `json:"placement"`
 	OwnerID         pgtype.UUID        `json:"owner_id"`
+}
+
+type Skill struct {
+	ID          pgtype.UUID        `json:"id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	Name        string             `json:"name"`
+	Version     string             `json:"version"`
+	Description string             `json:"description"`
+	Files       []byte             `json:"files"`
+	Source      []byte             `json:"source"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Task struct {

@@ -30,6 +30,7 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/limits"
+	"github.com/onegator/gator/internal/server/marketplace"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
@@ -77,6 +78,9 @@ type Server struct {
 	Brain *brain.Module
 	// MCP serves the gator-brain MCP server at /mcp, for jobs' and people's tokens; nil: no /mcp.
 	MCP http.Handler
+	// Marketplace is where agents, skills, integrations and processes come from; nil: its
+	// endpoints answer 503.
+	Marketplace *marketplace.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)

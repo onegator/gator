@@ -1,0 +1,73 @@
+package marketplace
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/onegator/gator/internal/server/store/db"
+)
+
+// DefaultURL is Gator's own registry, and DefaultPublicKey the key its index is signed with. The
+// private key never leaves its maintainers.
+const (
+	DefaultURL       = "https://github.com/onegator/gator-marketplace"
+	DefaultPublicKey = "ed25519:n5hZvq3lwgn0Q1GakLg8p9MWKrhmS8VrBFu7wNOwNqk="
+)
+
+// Module is the marketplace as the server wires it.
+type Module struct {
+	Catalog *Catalog
+}
+
+// Deps are what the module is built from; zero values take the defaults.
+type Deps struct {
+	Fetcher Fetcher // default: DefaultFetcher
+	Limits  Limits  // default: DefaultLimits
+	Kinds   Kinds   // default: every kind this server knows
+}
+
+// DefaultKinds are the kinds a registry may offer.
+func DefaultKinds() Kinds {
+	return KindsOf(Agent{}, Skill{}, Integration{}, Process{}, Knowledge{})
+}
+
+// New builds the module.
+func New(pool *pgxpool.Pool, deps Deps) *Module {
+	if deps.Fetcher == nil {
+		deps.Fetcher = DefaultFetcher
+	}
+	if deps.Limits == (Limits{}) {
+		deps.Limits = DefaultLimits
+	}
+	if deps.Kinds == nil {
+		deps.Kinds = DefaultKinds()
+	}
+	q := db.New(pool)
+	return &Module{Catalog: NewCatalog(q, deps.Fetcher, deps.Kinds, deps.Limits)}
+}
+
+// Start puts Gator's own registry in place and fetches it, so a fresh server has a catalogue.
+// A fetch that fails is recorded on the registry and tried again when a person asks.
+func (m *Module) Start(ctx context.Context, b Builtin) error {
+	r, err := m.Catalog.EnsureBuiltin(ctx, b)
+	if err != nil {
+		return err
+	}
+	_, err = m.Catalog.refresh(ctx, r.ID)
+	return err
+}
+
+// BuiltinFromEnv reads Gator's own registry from the server's environment:
+// GATOR_MARKETPLACE_URL (default DefaultURL) and GATOR_MARKETPLACE_PUBLIC_KEY (default
+// DefaultPublicKey). A server pointed at a mirror says the mirror's key, or the same key.
+func BuiltinFromEnv(getenv func(string) string) Builtin {
+	b := Builtin{Name: "gator", URL: getenv("GATOR_MARKETPLACE_URL"), PublicKey: getenv("GATOR_MARKETPLACE_PUBLIC_KEY")}
+	if b.URL == "" {
+		b.URL = DefaultURL
+	}
+	if b.PublicKey == "" {
+		b.PublicKey = DefaultPublicKey
+	}
+	return b
+}

@@ -1675,8 +1675,74 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AgentTurn" } } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /registries:
+    get:
+      operationId: listRegistries
+      description: "Where the marketplace comes from: Gator's own registry (GATOR_MARKETPLACE_URL) first, then the company's. Anyone signed in."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Registry" } } } } }
+    post:
+      operationId: addRegistry
+      description: "Add a company's own registry: a git repository (or a directory on the server) with index.json and, when it has a key, index.json.sig. Workspace admins only."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewRegistry" } } }
+      responses:
+        "201": { description: added, content: { application/json: { schema: { $ref: "#/components/schemas/Registry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /registries/{registryId}:
+    delete:
+      operationId: deleteRegistry
+      description: "Remove a registry nothing is installed from. Gator's own stays (409). Workspace admins only."
+      parameters: [ { $ref: "#/components/parameters/registryId" } ]
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /registries/{registryId}/fetch:
+    post:
+      operationId: fetchRegistry
+      description: >
+        Fetch a registry and cache every package that verifies: the index's signature (when the registry has a key) first,
+        then each package's files against its checksum and the server's limits. A bad signature takes nothing (400); a
+        package that fails, or a version already published with other files, is turned away on its own and listed under
+        rejected. Nothing installed changes. Workspace admins only.
+      parameters: [ { $ref: "#/components/parameters/registryId" } ]
+      responses:
+        "200": { description: fetched, content: { application/json: { schema: { $ref: "#/components/schemas/RegistryFetch" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /marketplace:
+    get:
+      operationId: listMarketplace
+      description: "The catalogue of every registry, each package at its newest version. With projectId, what that project has installed of each (and whether an update waits) and what it lacks to run it."
+      parameters:
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [agent, skill, integration, process, knowledge] } }
+        - { name: q, in: query, required: false, description: "words in the name, display name or description", schema: { type: string } }
+        - { name: phase, in: query, required: false, description: "a phase of the life of software: idea, discovery, planning, implementation, verification, release, monitoring", schema: { type: string } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/MarketplaceItem" } } } } }
+  /marketplace/{kind}/{name}:
+    get:
+      operationId: getMarketplacePackage
+      description: "One package: its manifest (README, example prompt, permissions, requirements), every version offered and its files."
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [agent, skill, integration, process, knowledge] } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: registryId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: version, in: query, required: false, description: "default: the newest", schema: { type: string } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MarketplaceDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   parameters:
+    registryId: { name: registryId, in: path, required: true, schema: { type: string, format: uuid } }
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -3220,3 +3286,108 @@ components:
       properties:
         message: { $ref: "#/components/schemas/Message" }
         conversation: { $ref: "#/components/schemas/Conversation" }
+    Registry:
+      type: object
+      required: [id, name, url, signed, builtin, fetchError, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string }
+        publicKey: { type: string, description: "the keys its index is signed with (ed25519:<base64>, comma-separated)" }
+        signed: { type: boolean, description: "false: an unsigned registry, whose packages only their checksums vouch for" }
+        builtin: { type: boolean, description: "Gator's own; it follows the server's configuration" }
+        fetchedAt: { type: string, format: date-time }
+        fetchError: { type: string, description: "why the last fetch failed or what it turned away; empty when all was well" }
+        createdAt: { type: string, format: date-time }
+    NewRegistry:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string, description: "lowercase letters, digits and dashes" }
+        url: { type: string, description: "a git repository, or file:// a directory on the server" }
+        publicKey: { type: string, description: "ed25519:<base64>; empty: an unsigned registry" }
+    RegistryFetch:
+      type: object
+      required: [registry, fetched, rejected]
+      properties:
+        registry: { $ref: "#/components/schemas/Registry" }
+        fetched: { type: array, items: { $ref: "#/components/schemas/PackageRef" } }
+        rejected: { type: array, items: { $ref: "#/components/schemas/RejectedPackage" } }
+    PackageRef:
+      type: object
+      required: [kind, name, version]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+    RejectedPackage:
+      type: object
+      required: [kind, name, version, reason]
+      properties:
+        kind: { type: string }
+        name: { type: string }
+        version: { type: string }
+        reason: { type: string }
+    PackageManifest:
+      type: object
+      description: "What a package says about itself, the same for every kind."
+      required: [kind, name, version, displayName, description, permissions, requires]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        displayName: { type: string }
+        description: { type: string }
+        phases: { type: array, items: { type: string } }
+        icon: { type: string, description: "a file of the package (assets/icon.png) or an SF Symbol" }
+        examplePrompt: { type: string }
+        readme: { type: string, description: "only in a package's details" }
+        permissions: { type: array, items: { type: string }, description: "what installing it lets it do, one line each; installing accepts exactly these" }
+        requires: { $ref: "#/components/schemas/PackageRequires" }
+        detail: { type: object, additionalProperties: true, description: "the kind's own manifest (agent.yaml, SKILL.md frontmatter, integration.yaml, process.yaml, pack.json), only in a package's details" }
+    PackageRequires:
+      type: object
+      properties:
+        capabilities: { type: array, items: { type: string }, description: "plugin capabilities: vcs, ci, deploy, monitoring, tracker …" }
+        mcp: { type: array, items: { type: string }, description: "remote MCP servers by name" }
+        skills: { type: array, items: { type: string }, description: "skills it uses and does not bring" }
+    MarketplaceItem:
+      type: object
+      required: [registryId, registryName, manifest, checksum, versions]
+      properties:
+        registryId: { type: string, format: uuid }
+        registryName: { type: string }
+        manifest: { $ref: "#/components/schemas/PackageManifest" }
+        checksum: { type: string }
+        versions: { type: array, items: { type: string }, description: "every version offered, newest first" }
+        installed: { $ref: "#/components/schemas/InstalledRef" }
+        missing: { type: array, items: { type: string }, description: "with projectId: what the project lacks to run it (capabilities, MCP servers, skills)" }
+    InstalledRef:
+      type: object
+      description: "What a project (or the workspace) has installed of a package, and whether a newer version waits for a person."
+      required: [installationId, version, updateAvailable]
+      properties:
+        installationId: { type: string, format: uuid }
+        version: { type: string }
+        updateAvailable: { type: boolean }
+        workspace: { type: boolean, description: "installed for the whole workspace rather than this project" }
+    MarketplaceDetail:
+      type: object
+      required: [registryId, registryName, manifest, checksum, files, versions]
+      properties:
+        registryId: { type: string, format: uuid }
+        registryName: { type: string }
+        manifest: { $ref: "#/components/schemas/PackageManifest" }
+        checksum: { type: string }
+        files: { type: array, items: { type: string }, description: "the package's files, by path" }
+        versions: { type: array, items: { $ref: "#/components/schemas/PackageVersion" } }
+        installed: { $ref: "#/components/schemas/InstalledRef" }
+        missing: { type: array, items: { type: string } }
+    PackageVersion:
+      type: object
+      required: [version, checksum, listed, permissions]
+      properties:
+        version: { type: string }
+        checksum: { type: string }
+        listed: { type: boolean, description: "false: the registry no longer offers it; it stays where it is installed" }
+        permissions: { type: array, items: { type: string } }
