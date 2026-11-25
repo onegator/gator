@@ -490,6 +490,8 @@ func (s *session) lease(ctx context.Context, free int) ([]leasedJob, error) {
 				if !slices.Contains(loggedIn, j.Backend) {
 					continue
 				}
+			case s.owner.Valid && j.PayerID != s.owner:
+				continue // a person's login goes to their own machine or a shared runner, never another's
 			case !s.caps.PayerLogins:
 				continue // it would run on this runner's own login
 			}

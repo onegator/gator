@@ -82,6 +82,11 @@ WHERE j.status = 'queued'
   AND (sqlc.narg(only_job)::uuid IS NULL OR j.id = sqlc.narg(only_job)::uuid)
   AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
        OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
+  -- A person's own login goes only to their own machine or a shared runner, whoever queued the
+  -- job: the autopilot's work, a summary or an automation's job paid by Bob never reaches Ann's
+  -- Mac, whose agent could read it. A payer with no login for the backend brings none.
+  AND (sqlc.narg(owner)::uuid IS NULL OR j.payer_id IS NULL OR j.payer_id = sqlc.narg(owner)::uuid
+       OR NOT EXISTS (SELECT 1 FROM user_credentials c WHERE c.user_id = j.payer_id AND c.backend = j.backend))
   -- A runner older than protocol v3 runs every job as a phase; it gets only those.
   AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
   -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
@@ -170,7 +175,8 @@ WHERE id IN (
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             -- The runner's own login matters only to a job that does not bring its payer's.
             AND (COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
-                 OR ((r.capabilities->>'payer_logins')::boolean IS TRUE AND j.payer_id IS NOT NULL AND EXISTS (
+                 OR ((r.capabilities->>'payer_logins')::boolean IS TRUE AND j.payer_id IS NOT NULL
+                     AND (r.owner_id IS NULL OR r.owner_id = j.payer_id) AND EXISTS (
                      SELECT 1 FROM user_credentials c
                      WHERE c.user_id = j.payer_id AND c.backend = j.backend AND c.status <> 'error')))
             AND (j.kind = 'phase' OR r.protocol_version >= 3)

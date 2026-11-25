@@ -194,3 +194,65 @@ func TestNoMachineForAJobThatWaitsForALogin(t *testing.T) {
 		}
 	}
 }
+
+// A job nobody asked for in person — the autopilot's, a summary's — but paid for by Bob is never
+// offered to Ann's Mac with Bob's login; Bob's own machine and a shared runner take it.
+func TestAPayersLoginGoesOnlyToTheirOwnOrASharedRunner(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	_, logins, bob := f.payersJob(t) // Bob's own job, with his login in place
+	if _, err := f.pool.Exec(ctx, "UPDATE jobs SET status = 'stopped' WHERE payer_id = $1", bob); err != nil {
+		t.Fatal(err)
+	}
+	task, err := f.m.process.Create(ctx, process.CreateParams{ProjectID: f.project, Kind: "bug", Title: "Bob's " + suffix()}, process.Actor{Kind: process.ActorUser, ID: bob})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.allowAgents(t, task.ID)
+	job, err := f.m.CreateJob(ctx, task.ID, NewJob{Role: "implementer", Backend: f.backend, CreatedBy: process.Actor{Kind: process.ActorSystem}})
+	if err != nil || job.PayerID != bob {
+		t.Fatalf("job %v payer %v", err, job.PayerID)
+	}
+	f.m.cfg.Credentials = logins
+	runner := func(owner pgtype.UUID) *session {
+		s := f.session(t)
+		s.caps.PayerLogins, s.owner = true, owner
+		return s
+	}
+	if got, err := runner(randomUUID()).lease(ctx, 2); err != nil || len(got) != 0 {
+		t.Fatalf("Ann's Mac was offered Bob's login: %v %v", got, err)
+	}
+	// Past the database's filter too: the session itself refuses.
+	if got, err := f.q.LeaseCandidates(ctx, db.LeaseCandidatesParams{Backends: []string{f.backend}, Projects: []pgtype.UUID{f.project},
+		Placement: proto.PlacementLocal, Owner: randomUUID(), ReadOnly: []string{f.backend}, NoTools: []string{f.backend}, Slots: 10}); err != nil || len(got) != 0 {
+		t.Fatalf("candidates for Ann's Mac: %v %v", len(got), err)
+	}
+	if got, err := runner(bob).lease(ctx, 2); err != nil || len(got) != 1 {
+		t.Fatalf("Bob's own Mac: %v %v", got, err)
+	}
+}
+
+// The session refuses a payer's login for another person's machine even when the database offers it.
+func TestTheSessionRefusesAnotherPersonsLogin(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	job, _, _ := f.payersJob(t)
+	// The login is not for this backend in the database, so the filter lets the job through;
+	// the fake still chooses it.
+	if _, err := f.pool.Exec(ctx, "UPDATE user_credentials SET backend = 'elsewhere' WHERE user_id = $1", job.PayerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, "UPDATE jobs SET created_by_kind = 'system', created_by = NULL WHERE id = $1", job.ID); err != nil {
+		t.Fatal(err)
+	}
+	s := f.session(t)
+	s.caps.PayerLogins, s.owner = true, randomUUID()
+	if got, err := s.lease(ctx, 2); err != nil || len(got) != 0 {
+		t.Fatalf("leased %v %v", got, err)
+	}
+	shared := f.session(t)
+	shared.caps.PayerLogins = true
+	if got, err := shared.lease(ctx, 2); err != nil || len(got) != 1 {
+		t.Fatalf("a shared runner: %v %v", got, err)
+	}
+}
