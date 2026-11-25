@@ -165,7 +165,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
-	root.Mount("/connect", host.ConnectHandler())
+	root.Mount("/connect", auth.Authenticate(auth.Tokens{Pool: pool}, false, slog.Default())(host.ConnectHandler()))
 	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)
 

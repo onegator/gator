@@ -105,9 +105,12 @@ WHERE pp.token_expires_at IS NOT NULL AND pp.token_expires_at < sqlc.arg(before)
 ORDER BY pp.token_expires_at LIMIT 50;
 
 -- name: InsertPluginConnectState :exec
-INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, target)
+INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, target, authorize_url)
 VALUES (sqlc.arg(hash), sqlc.arg(project_id), sqlc.arg(plugin_name), sqlc.narg(user_id), sqlc.arg(verifier), sqlc.arg(return_to),
-        sqlc.arg(expires_at), sqlc.arg(target));
+        sqlc.arg(expires_at), sqlc.arg(target), sqlc.arg(authorize_url));
+
+-- name: GetPluginConnectState :one
+SELECT * FROM plugin_connect_states WHERE hash = $1 AND expires_at > now();
 
 -- name: TakePluginConnectState :one
 -- Single use: the row goes as it is read, so a replayed callback finds nothing.

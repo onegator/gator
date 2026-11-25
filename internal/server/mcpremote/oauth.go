@@ -3,7 +3,6 @@ package mcpremote
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -124,15 +123,10 @@ func (o *OAuth) Connect(ctx context.Context, p auth.Principal, project pgtype.UU
 	if err != nil {
 		return "", err
 	}
-	_ = o.store.DeleteExpiredPluginConnectStates(ctx)
 	state, verifier := randomToken(), oauth2.GenerateVerifier()
-	sum := sha256.Sum256([]byte(state))
-	if err := o.store.InsertPluginConnectState(ctx, db.InsertPluginConnectStateParams{Hash: sum[:], ProjectID: project, PluginName: name,
-		UserID: p.UserID, Verifier: verifier, ReturnTo: returnTo, Target: plugins.TargetMCP,
-		ExpiresAt: pgtype.Timestamptz{Time: o.now().Add(connectTTL), Valid: true}}); err != nil {
-		return "", err
-	}
-	return cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("resource", spec.Discovered.Resource)), nil
+	authorize := cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("resource", spec.Discovered.Resource))
+	return plugins.SaveConnect(ctx, o.store, o.publicURL, state, db.InsertPluginConnectStateParams{ProjectID: project, PluginName: name,
+		UserID: p.UserID, Verifier: verifier, ReturnTo: returnTo, Target: plugins.TargetMCP, AuthorizeUrl: authorize})
 }
 
 // CompleteConnect implements plugins.Connector: the provider sent the browser back with a code,

@@ -2917,7 +2917,7 @@ components:
       type: object
       required: [url]
       properties:
-        url: { type: string, description: "the provider's sign-in page; open it in a browser" }
+        url: { type: string, description: "where the person's browser starts: Gator's /connect/start, which ties the connection to that browser and sends it on to the provider's sign-in page; a callback from any other browser is refused" }
     PluginImport:
       type: object
       required: [created, existing]

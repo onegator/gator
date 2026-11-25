@@ -162,6 +162,28 @@ func (q *Queries) GetPluginByName(ctx context.Context, name string) (Plugin, err
 	return i, err
 }
 
+const getPluginConnectState = `-- name: GetPluginConnectState :one
+SELECT hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, created_at, target, authorize_url FROM plugin_connect_states WHERE hash = $1 AND expires_at > now()
+`
+
+func (q *Queries) GetPluginConnectState(ctx context.Context, hash []byte) (PluginConnectState, error) {
+	row := q.db.QueryRow(ctx, getPluginConnectState, hash)
+	var i PluginConnectState
+	err := row.Scan(
+		&i.Hash,
+		&i.ProjectID,
+		&i.PluginName,
+		&i.UserID,
+		&i.Verifier,
+		&i.ReturnTo,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.Target,
+		&i.AuthorizeUrl,
+	)
+	return i, err
+}
+
 const getProjectPlugin = `-- name: GetProjectPlugin :one
 SELECT pp.id, pp.project_id, pp.config, pp.secrets, pp.enabled, pp.disabled_reason,
        p.name AS plugin_name, p.command, p.manifest, p.enabled AS plugin_enabled, pr.slug AS project_slug
@@ -293,20 +315,21 @@ func (q *Queries) InsertPluginCall(ctx context.Context, arg InsertPluginCallPara
 }
 
 const insertPluginConnectState = `-- name: InsertPluginConnectState :exec
-INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, target)
+INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, target, authorize_url)
 VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8)
+        $7, $8, $9)
 `
 
 type InsertPluginConnectStateParams struct {
-	Hash       []byte             `json:"hash"`
-	ProjectID  pgtype.UUID        `json:"project_id"`
-	PluginName string             `json:"plugin_name"`
-	UserID     pgtype.UUID        `json:"user_id"`
-	Verifier   string             `json:"verifier"`
-	ReturnTo   string             `json:"return_to"`
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
-	Target     string             `json:"target"`
+	Hash         []byte             `json:"hash"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	PluginName   string             `json:"plugin_name"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	Verifier     string             `json:"verifier"`
+	ReturnTo     string             `json:"return_to"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	Target       string             `json:"target"`
+	AuthorizeUrl string             `json:"authorize_url"`
 }
 
 func (q *Queries) InsertPluginConnectState(ctx context.Context, arg InsertPluginConnectStateParams) error {
@@ -319,6 +342,7 @@ func (q *Queries) InsertPluginConnectState(ctx context.Context, arg InsertPlugin
 		arg.ReturnTo,
 		arg.ExpiresAt,
 		arg.Target,
+		arg.AuthorizeUrl,
 	)
 	return err
 }
@@ -715,7 +739,7 @@ func (q *Queries) SetProjectPluginSecrets(ctx context.Context, arg SetProjectPlu
 }
 
 const takePluginConnectState = `-- name: TakePluginConnectState :one
-DELETE FROM plugin_connect_states WHERE hash = $1 AND expires_at > now() RETURNING hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, created_at, target
+DELETE FROM plugin_connect_states WHERE hash = $1 AND expires_at > now() RETURNING hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, created_at, target, authorize_url
 `
 
 // Single use: the row goes as it is read, so a replayed callback finds nothing.
@@ -732,6 +756,7 @@ func (q *Queries) TakePluginConnectState(ctx context.Context, hash []byte) (Plug
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.Target,
+		&i.AuthorizeUrl,
 	)
 	return i, err
 }

@@ -321,7 +321,8 @@ func serve(ctx context.Context) error {
 	// The only public endpoint: plugin webhooks. Plugins verify the sender's signature.
 	root.Mount("/hooks", pluginHost.Hooks())
 	// Where a provider sends the browser back after "Connect GitHub"; the state is the proof.
-	root.Mount("/connect", pluginHost.ConnectHandler())
+	// A browser signed in to Gator must be the person who started the connection.
+	root.Mount("/connect", auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log)(pluginHost.ConnectHandler()))
 	adminRouter := chi.NewRouter()
 	adminRouter.Use(auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log), auth.RequireAuth, auth.RequireWorkspaceAdmin)
 	adminRouter.Mount("/", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())

@@ -578,15 +578,16 @@ type PluginCall struct {
 }
 
 type PluginConnectState struct {
-	Hash       []byte             `json:"hash"`
-	ProjectID  pgtype.UUID        `json:"project_id"`
-	PluginName string             `json:"plugin_name"`
-	UserID     pgtype.UUID        `json:"user_id"`
-	Verifier   string             `json:"verifier"`
-	ReturnTo   string             `json:"return_to"`
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	Target     string             `json:"target"`
+	Hash         []byte             `json:"hash"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	PluginName   string             `json:"plugin_name"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	Verifier     string             `json:"verifier"`
+	ReturnTo     string             `json:"return_to"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Target       string             `json:"target"`
+	AuthorizeUrl string             `json:"authorize_url"`
 }
 
 type PluginKv struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/oauth2"
 
+	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/plugin"
 )
@@ -146,15 +148,7 @@ func (h *Host) Connect(ctx context.Context, projectID, userID pgtype.UUID, name,
 	if err != nil {
 		return "", err
 	}
-	q := db.New(h.pool)
-	_ = q.DeleteExpiredPluginConnectStates(ctx)
 	state, verifier := randomToken(), oauth2.GenerateVerifier()
-	if err := q.InsertPluginConnectState(ctx, db.InsertPluginConnectStateParams{
-		Hash: hashState(state), ProjectID: projectID, PluginName: name, UserID: userID, Verifier: verifier,
-		ReturnTo: returnTo, ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(connectStateTTL), Valid: true}, Target: TargetPlugin,
-	}); err != nil {
-		return "", err
-	}
 	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier)}
 	scopes := m.Connect.Scopes
 	if client, _ := h.cfg.OAuthClient(m.Connect.ProviderName(name)); len(client.Scopes) > 0 {
@@ -170,7 +164,50 @@ func (h *Host) Connect(ctx context.Context, projectID, userID pgtype.UUID, name,
 	for k, v := range m.Connect.Params {
 		opts = append(opts, oauth2.SetAuthURLParam(k, v))
 	}
-	return cfg.AuthCodeURL(state, opts...), nil
+	return SaveConnect(ctx, db.New(h.pool), h.cfg.PublicURL, state, db.InsertPluginConnectStateParams{ProjectID: projectID, PluginName: name,
+		UserID: userID, Verifier: verifier, ReturnTo: returnTo, Target: TargetPlugin, AuthorizeUrl: cfg.AuthCodeURL(state, opts...)})
+}
+
+// connectStore keeps connection states. *db.Queries is one.
+type connectStore interface {
+	InsertPluginConnectState(ctx context.Context, arg db.InsertPluginConnectStateParams) error
+	DeleteExpiredPluginConnectStates(ctx context.Context) error
+}
+
+// SaveConnect keeps a connection's state, under the hash of state, and answers where the person's
+// browser starts: Gator's /connect/start, which ties the connection to that browser (a cookie) and
+// only then sends it to the provider's address. A callback from a browser that did not start the
+// connection is refused, so nobody can hand a person a sign-in that lands in their own project.
+func SaveConnect(ctx context.Context, q connectStore, publicURL, state string, st db.InsertPluginConnectStateParams) (string, error) {
+	_ = q.DeleteExpiredPluginConnectStates(ctx)
+	st.Hash = hashState(state)
+	st.ExpiresAt = pgtype.Timestamptz{Time: time.Now().Add(connectStateTTL), Valid: true}
+	if err := q.InsertPluginConnectState(ctx, st); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(publicURL, "/") + "/connect/start?state=" + url.QueryEscape(state), nil
+}
+
+// connectCookie ties a connection to the browser that started it.
+const connectCookie = "gator_connect"
+
+// connectStart serves GET /connect/start: the browser gets the state in a cookie only Gator reads,
+// and goes on to the provider. A browser signed in to Gator as someone else is refused.
+func (h *Host) connectStart(w http.ResponseWriter, r *http.Request) {
+	state := r.URL.Query().Get("state")
+	st, err := db.New(h.pool).GetPluginConnectState(r.Context(), hashState(state))
+	if err != nil || st.AuthorizeUrl == "" {
+		connectAnswer(w, http.StatusBadRequest, "This link has expired", "Start again from the project's settings in Gator.")
+		return
+	}
+	if p, ok := auth.FromContext(r.Context()); ok && (p.Kind != auth.KindUser || p.UserID != st.UserID) {
+		connectAnswer(w, http.StatusForbidden, "Not yours", "Somebody else started this connection; start your own from Gator.")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: connectCookie, Value: state, Path: "/connect", MaxAge: int(connectStateTTL.Seconds()),
+		HttpOnly: true, Secure: strings.HasPrefix(h.cfg.PublicURL, "https://"), SameSite: http.SameSiteLaxMode})
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, st.AuthorizeUrl, http.StatusFound)
 }
 
 // Targets of a connection: what plugin_connect_states.plugin_name names.
@@ -189,6 +226,7 @@ type Connector interface {
 // needs no Gator token: the single-use state is the proof, and it names the project.
 func (h *Host) ConnectHandler() http.Handler {
 	r := chi.NewRouter()
+	r.Get("/start", h.connectStart)
 	r.Get("/callback", h.connectCallback)
 	return r
 }
@@ -210,6 +248,12 @@ func connectAnswer(w http.ResponseWriter, status int, title, detail string) {
 func (h *Host) connectCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	qv := r.URL.Query()
+	if c, err := r.Cookie(connectCookie); err != nil || c.Value == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(qv.Get("state"))) != 1 {
+		connectAnswer(w, http.StatusBadRequest, "This sign-in did not start here",
+			"Connect from the project's settings in Gator, in this browser.")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: connectCookie, Path: "/connect", MaxAge: -1})
 	st, err := db.New(h.pool).TakePluginConnectState(ctx, hashState(qv.Get("state")))
 	if errors.Is(err, pgx.ErrNoRows) {
 		connectAnswer(w, http.StatusBadRequest, "This link has expired",
@@ -218,6 +262,10 @@ func (h *Host) connectCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		connectAnswer(w, http.StatusInternalServerError, "Something went wrong", "Try again in a moment.")
+		return
+	}
+	if p, ok := auth.FromContext(ctx); ok && (p.Kind != auth.KindUser || p.UserID != st.UserID) {
+		connectAnswer(w, http.StatusForbidden, "Not yours", "Somebody else started this connection; start your own from Gator.")
 		return
 	}
 	finish := func(status int, failure string) {

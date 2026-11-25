@@ -138,14 +138,9 @@ func (h *harness) connectThrough(project, server string, authorize func(code, ch
 	if code := h.do("POST", "/projects/"+project+"/mcp-servers/"+server+"/connect", gen.PluginConnectRequest{ReturnTo: ptr("gator://marketplace")}, &s); code != 200 {
 		h.t.Fatalf("connect: %d", code)
 	}
-	u, _ := url.Parse(s.Url)
+	u, cookie := h.browse(s.Url)
 	authorize("the-code", u.Query().Get("code_challenge"))
-	res, err := noRedirect.Get(h.srv.URL + "/connect/callback?code=the-code&state=" + url.QueryEscape(u.Query().Get("state")))
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	res.Body.Close()
-	return u, res
+	return u, h.callback("code=the-code&state="+url.QueryEscape(u.Query().Get("state")), cookie)
 }
 
 // A hosted MCP server that is its own authorization server is connected the way the MCP spec says:
