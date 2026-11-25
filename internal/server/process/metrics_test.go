@@ -150,3 +150,19 @@ func TestTaskStates(t *testing.T) {
 		}
 	}
 }
+
+// Allowing agents (and admitting outside work) is written as a "create" line in the phase the task
+// is in: a note, not a second visit, and the time before it is still the phase's.
+func TestAllowingAgentsIsNoSecondVisit(t *testing.T) {
+	t0 := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	at := func(min int) pgtype.Timestamptz { return ts(t0.Add(time.Duration(min) * time.Minute)) }
+	trs := []db.PhaseTransition{
+		{Kind: "create", ToPhase: "planning", CreatedAt: at(0)},
+		{Kind: "create", ToPhase: "planning", CreatedAt: at(15), Reason: new(AllowedAgentsReason)},
+		{Kind: "advance", ToPhase: "implementation", CreatedAt: at(30)},
+	}
+	m := ComputeMetrics(db.Task{CreatedAt: at(0)}, trs, nil, nil, map[string]Owner{"planning": OwnerRunner}, t0.Add(40*time.Minute))
+	if pl := m.Phases[0]; pl.Phase != "planning" || pl.Visits != 1 || !near(pl.Seconds, 30*60) {
+		t.Fatalf("planning: %+v", pl)
+	}
+}

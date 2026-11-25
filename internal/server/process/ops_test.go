@@ -240,3 +240,25 @@ func TestApproveWaitingHoldsOnlyForThatWait(t *testing.T) {
 		t.Fatalf("gate %+v %v", g, err)
 	}
 }
+
+// The repro: a task, agents allowed on it, its metrics — one visit, the whole time.
+func TestMetricsAfterAllowingAgents(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	project, user := newProject(t, pool)
+	svc := service(t, pool)
+	task, err := svc.Create(ctx, CreateParams{ProjectID: project, Kind: "bug", Title: "allow"}, Actor{Kind: ActorUser, ID: user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AllowAgents(ctx, task.ID, Actor{Kind: ActorUser, ID: user}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := svc.Metrics(ctx, task.ID, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Phases) != 1 || m.Phases[0].Visits != 1 || m.Phases[0].Seconds < 59 {
+		t.Fatalf("phases %+v", m.Phases)
+	}
+}

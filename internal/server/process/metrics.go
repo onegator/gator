@@ -134,7 +134,11 @@ func ComputeMetrics(task db.Task, trs []db.PhaseTransition, usage []db.UsageReco
 		at := tr.CreatedAt.Time
 		switch tr.Kind {
 		case "create":
-			enter(tr.ToPhase, at)
+			// Allowing agents and admitting outside work are written as "create" lines in the
+			// phase the task is in: a note, not a visit, and the time before it stays counted.
+			if cur != tr.ToPhase {
+				enter(tr.ToPhase, at)
+			}
 		case "advance", "rollback":
 			closeSegment(at)
 			enter(tr.ToPhase, at)
