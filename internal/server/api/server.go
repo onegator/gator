@@ -25,6 +25,7 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
@@ -72,6 +73,8 @@ type Server struct {
 	// Agents are the project's members that answer in conversations; nil: their endpoints
 	// answer 503.
 	Agents *agents.Module
+	// Brain is what the team and its agents know; nil: its endpoints answer 503.
+	Brain *brain.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)

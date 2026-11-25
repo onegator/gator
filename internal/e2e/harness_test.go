@@ -28,6 +28,7 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/plugins"
@@ -47,6 +48,7 @@ type harness struct {
 	plugins *plugins.Host
 	quality *quality.Service
 	autos   *automations.Service
+	brain   *brain.Module
 	svc     *process.Service
 	admin   string // user bearer
 	runner  string // runner bearer
@@ -111,8 +113,10 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
+	// What the team and its agents know, read under the same rules as conversations.
+	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Automations: autos, Hub: hub, Log: slog.Default(),
-		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team}
+		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
@@ -128,7 +132,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, admin: admin, runner: runner, oauth: oauth, bundled: bundled}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, admin: admin, runner: runner, oauth: oauth, bundled: bundled}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.

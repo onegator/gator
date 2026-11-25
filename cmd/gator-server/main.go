@@ -21,6 +21,7 @@ import (
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/backup"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
@@ -230,6 +231,9 @@ func serve(ctx context.Context) error {
 	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
 	go notifier.WithChat(chat.Access).Run(ctx)
 
+	// What the team and its agents know: one store, read under the same rules everywhere.
+	knows := brain.New(db.Pool, brain.Deps{Conversations: chat.Access})
+
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
 		Quality: scorecards, Automations: autos,
@@ -240,6 +244,7 @@ func serve(ctx context.Context) error {
 		Conversations: chat,
 		// The agents who answer in them.
 		Agents: team,
+		Brain:  knows,
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:

@@ -442,6 +442,93 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProductEntry" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /brain:
+    get:
+      operationId: searchBrain
+      description: >
+        Search the Brain: what the caller may read, by words (websearch syntax) or, without q, the newest first.
+        The same rules as the MCP server's brain_search, which answers the same hits. A person's private context
+        is theirs alone; a proposal from a private conversation is read only by that conversation's readers.
+      parameters:
+        - { name: q, in: query, required: false, schema: { type: string } }
+        - { name: scope, in: query, required: false, schema: { $ref: "#/components/schemas/BrainScope" } }
+        - { name: kind, in: query, required: false, schema: { $ref: "#/components/schemas/BrainKind" } }
+        - { name: status, in: query, required: false, schema: { $ref: "#/components/schemas/BrainStatus" } }
+        - { name: project, in: query, required: false, description: "one project and what is above it", schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainHit" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createBrainEntry
+      description: >
+        Write an entry. Whoever may approve in its scope (a project's members, workspace admins for the workspace,
+        a person for their own context) writes it approved unless they ask to propose; anyone else who may write
+        there proposes it.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewBrainEntry" } } }
+      responses:
+        "201": { description: written, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /brain/proposals:
+    get:
+      operationId: listBrainProposals
+      description: What waits for a person's verdict, oldest first, within what the caller may read.
+      parameters:
+        - { name: project, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainEntry" } } } } }
+  /brain/{brainEntryId}:
+    get:
+      operationId: getBrainEntry
+      description: An entry with every version, its links and where it was used (packed, searched, cited by jobs).
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: reviseBrainEntry
+      description: A change is a new version (supersedes the old one once approved); the old version stays.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BrainPatch" } } }
+      responses:
+        "200": { description: the new version, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /brain/{brainEntryId}/approve:
+    post:
+      operationId: approveBrainEntry
+      description: Approve a proposal; it reaches prompts from now on, and the versions before it stop being true.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /brain/{brainEntryId}/reject:
+    post:
+      operationId: rejectBrainEntry
+      description: Turn a proposal down. It stays, rejected, so the same thing is not proposed again unnoticed.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /brain/{brainEntryId}/archive:
+    post:
+      operationId: archiveBrainEntry
+      description: Archive an entry that no longer holds; it stays readable and stops reaching prompts.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /presets:
     get:
       operationId: listProjectPresets
@@ -1539,6 +1626,7 @@ components:
     memberId: { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
     emoji: { name: emoji, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 64 } }
     attachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    brainEntryId: { name: brainEntryId, in: path, required: true, schema: { type: string, format: uuid } }
     listLimit: { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
     listOffset: { name: offset, in: query, required: false, description: "rows to skip, for the next page", schema: { type: integer, minimum: 0 } }
   responses:
@@ -2240,6 +2328,123 @@ components:
       type: object
       properties:
         key: { type: string, description: "component key, or absent to clear" }
+    BrainScope: { type: string, enum: [workspace, project, component, user, agent] }
+    BrainKind:
+      type: string
+      enum: [vision, principle, persona, glossary, decision, lesson, roadmap, convention, runbook, fact, expertise, focus, preference]
+    BrainStatus: { type: string, enum: [proposed, approved, rejected, superseded, archived] }
+    BrainVisibility: { type: string, enum: [private, scope, project, workspace], description: "scope: the scope's own rule; a person's entry is theirs unless project or workspace" }
+    BrainSource:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, description: "manual | message | task | job | plugin | import | pack" }
+        id: { type: string }
+        url: { type: string }
+        excerpt: { type: string, description: "a quote of the source; never kept for a private conversation" }
+        name: { type: string, description: "the plugin or pack it came from" }
+    BrainEntry:
+      type: object
+      required: [id, lineage, scope, kind, title, content, visibility, status, version, confidence, source, private, createdByKind, validFrom, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        lineage: { type: string, format: uuid, description: "shared by every version of one entry" }
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        projectId: { type: string, format: uuid }
+        componentKey: { type: string }
+        userId: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        topic: { type: string, description: "a convention's shelf: language, architecture, requirements, testing, security" }
+        title: { type: string }
+        content: { type: string }
+        visibility: { $ref: "#/components/schemas/BrainVisibility" }
+        status: { $ref: "#/components/schemas/BrainStatus" }
+        version: { type: integer }
+        supersedes: { type: string, format: uuid, description: the version before this one }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time, description: "when it stopped being true (superseded, archived)" }
+        confidence: { type: string, enum: [stated, inferred] }
+        source: { $ref: "#/components/schemas/BrainSource" }
+        sourceTaskId: { type: string, format: uuid }
+        sourceConversationId: { type: string, format: uuid }
+        private: { type: boolean, description: "came from a private conversation: until approved, only its readers see it" }
+        createdByKind: { type: string, description: "user | runner | plugin | system" }
+        createdBy: { type: string, format: uuid }
+        approvedBy: { type: string, format: uuid }
+        approvedAt: { type: string, format: date-time }
+        archivedAt: { type: string, format: date-time, description: folded into a condensed entry }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BrainHit:
+      type: object
+      required: [id, title, excerpt, scope, kind, status, version, source]
+      description: one search result, the same for the REST API and the MCP server's brain_search
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        excerpt: { type: string }
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        status: { $ref: "#/components/schemas/BrainStatus" }
+        version: { type: integer }
+        projectId: { type: string, format: uuid }
+        componentKey: { type: string }
+        source: { $ref: "#/components/schemas/BrainSource" }
+        rank: { type: number, format: float }
+    BrainLinkInput:
+      type: object
+      required: [targetKind, targetId]
+      properties:
+        targetKind: { type: string, enum: [entry, component, task, conversation] }
+        targetId: { type: string }
+        relation: { type: string, enum: [relates, depends_on, contradicts, implements], default: relates }
+    BrainLink:
+      allOf:
+        - $ref: "#/components/schemas/BrainLinkInput"
+        - type: object
+          required: [relation, createdAt]
+          properties:
+            createdAt: { type: string, format: date-time }
+    BrainCitation:
+      type: object
+      required: [jobId, taskId, role, how, at]
+      properties:
+        jobId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        role: { type: string }
+        how: { type: string, enum: [packed, searched, cited] }
+        at: { type: string, format: date-time }
+    BrainDetail:
+      type: object
+      required: [entry, versions, links, citations]
+      properties:
+        entry: { $ref: "#/components/schemas/BrainEntry" }
+        versions: { type: array, items: { $ref: "#/components/schemas/BrainEntry" }, description: "every version, newest first" }
+        links: { type: array, items: { $ref: "#/components/schemas/BrainLink" } }
+        citations: { type: array, items: { $ref: "#/components/schemas/BrainCitation" } }
+    NewBrainEntry:
+      type: object
+      required: [scope, kind, title, content]
+      properties:
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        title: { type: string }
+        content: { type: string }
+        projectId: { type: string, format: uuid, description: "for project, component and agent entries, and a person's entry shared with a project" }
+        componentKey: { type: string }
+        agentId: { type: string, format: uuid }
+        topic: { type: string, enum: [language, architecture, requirements, testing, security] }
+        visibility: { $ref: "#/components/schemas/BrainVisibility" }
+        propose: { type: boolean, description: "propose it even if you may approve it" }
+        links: { type: array, items: { $ref: "#/components/schemas/BrainLinkInput" } }
+    BrainPatch:
+      type: object
+      properties:
+        title: { type: string }
+        content: { type: string }
+        visibility: { $ref: "#/components/schemas/BrainVisibility" }
+        propose: { type: boolean }
     ProductEntry:
       type: object
       required: [id, kind, title, content, version, status, createdAt]
