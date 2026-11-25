@@ -133,7 +133,7 @@ func (s *Starter) start(ctx context.Context, r Request, home db.Conversation, tu
 	if err != nil {
 		return turn, err
 	}
-	grant := TierFor(r.Agent, task)
+	grant := GrantFor(r, task)
 	if !turn.ReplyMessageID.Valid {
 		msg, err := s.voice.Say(ctx, home, conversations.Speech{Agent: r.Agent.ID, Turn: turn.ID,
 			Body: Reading(r.Agent), Status: conversations.StatusStreaming, ClientID: "turn:" + conversations.UUIDString(turn.ID)})
@@ -174,7 +174,7 @@ func (s *Starter) finish(ctx context.Context, r Request, home db.Conversation, t
 	if err != nil {
 		return err
 	}
-	if !TierFor(r.Agent, task).NeedsConsent {
+	if !GrantFor(r, task).NeedsConsent {
 		return nil
 	}
 	return s.consent.AskConsent(ctx, turn, home, task)

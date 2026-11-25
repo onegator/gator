@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,6 +43,16 @@ func decode[T any](raw json.RawMessage) (T, error) {
 }
 
 func (i *instance) core(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+	for _, x := range i.h.cfg.Extensions {
+		serve, ok := x.Methods[method]
+		if !ok {
+			continue
+		}
+		if x.Capability != "" && !slices.Contains(i.b.manifest.Capabilities, x.Capability) {
+			return nil, plugin.Errorf(plugin.CodeForbidden, "%s needs the %s capability", method, x.Capability)
+		}
+		return serve(ctx, i.b.projectID, i.b.name, raw)
+	}
 	q := db.New(i.h.pool)
 	switch method {
 	case plugin.CoreTaskCreate:

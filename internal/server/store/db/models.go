@@ -288,6 +288,44 @@ type EventCursor struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ExternalConversationRef struct {
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Provider       string             `json:"provider"`
+	ExternalRef    string             `json:"external_ref"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type ExternalIdentity struct {
+	ID          pgtype.UUID        `json:"id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	Provider    string             `json:"provider"`
+	ExternalID  string             `json:"external_id"`
+	DisplayName string             `json:"display_name"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	LinkedAt    pgtype.Timestamptz `json:"linked_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ExternalLinkCode struct {
+	Hash      []byte             `json:"hash"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Provider  string             `json:"provider"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type ExternalMessageRef struct {
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	Provider    string             `json:"provider"`
+	ExternalRef string             `json:"external_ref"`
+	MessageID   pgtype.UUID        `json:"message_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type Gate struct {
 	TaskID          pgtype.UUID        `json:"task_id"`
 	Phase           string             `json:"phase"`

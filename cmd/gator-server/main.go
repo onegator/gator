@@ -25,6 +25,7 @@ import (
 	"github.com/onegator/gator/internal/server/backup"
 	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/brain/curator"
+	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
@@ -176,8 +177,14 @@ func serve(ctx context.Context) error {
 	// private addresses unless the operator says otherwise.
 	outbound := netguard.FromEnv(os.Getenv)
 	remote := mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log, PublicURL: cfg.PublicURL, Apps: oauthApps, Net: outbound})
+	// Messaging plugins (Slack, GitHub comments) bring outside conversations in and mirror ours out,
+	// through the core's rules: their own project, what they connected, untrusted words, no echo.
+	bridge := bridges.New(db.Pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access,
+		Roles: auth.Authorizer{Pool: db.Pool}, Approver: svc})
 	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins,
-		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth}}
+		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
+		Extensions: []plugins.Extension{{Capability: bridge.Capability(), Methods: bridge.Methods()}},
+		EventHooks: []plugins.EventHook{bridge}, AllowPrivateOutbound: outbound.AllowPrivate}
 	pluginCfg.LoadEnv()
 	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
@@ -293,6 +300,8 @@ func serve(ctx context.Context) error {
 		Marketplace: market,
 		// Remote MCP servers agents reach through the proxy; their credentials stay here.
 		Remote: remote,
+		// Links between people and their accounts on the bridges.
+		Bridges: bridge,
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),

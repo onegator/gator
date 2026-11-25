@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -86,6 +87,7 @@ type packStore interface {
 	GetConversationSummary(ctx context.Context, conversationID pgtype.UUID) (db.ConversationSummary, error)
 	GetUser(ctx context.Context, id pgtype.UUID) (db.User, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
+	GetExternalIdentity(ctx context.Context, id pgtype.UUID) (db.ExternalIdentity, error)
 }
 
 // Packer builds the conversation package of a turn. It only reads: keeping the summary fresh is
@@ -296,7 +298,14 @@ func (n *namer) who(ctx context.Context, m db.Message) (string, error) {
 	case AuthorPlugin:
 		s = "a plugin"
 	case AuthorExternal:
+		// The bridge it came through, never the name it gave itself there: a display name is the
+		// outside's words too, and it is not fenced.
 		s = "someone outside the workspace"
+		if id, err := n.store.GetExternalIdentity(ctx, m.AuthorID); err == nil && names.Valid(id.Provider) {
+			s = "someone on " + id.Provider + ", outside the workspace"
+		} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
 	}
 	n.seen[key] = s
 	return s, nil

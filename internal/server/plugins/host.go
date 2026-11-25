@@ -80,6 +80,33 @@ type Config struct {
 	// Connectors finish connections of other targets that come back to /connect/callback (a
 	// remote MCP server's OAuth), by target.
 	Connectors map[string]Connector
+	// Extensions are core methods served outside this package, each for the plugins that declare
+	// its capability (messaging: bridges.Service.Methods). A new kind of plugin is one more here.
+	Extensions []Extension
+	// EventHooks carry outbox events to plugins of a capability through hooks they choose
+	// (messaging: messagePosted, messageEdited).
+	EventHooks []EventHook
+	// AllowPrivateOutbound passes GATOR_OUTBOUND_ALLOW_PRIVATE=1 to plugins, which hold their own
+	// requests to netguard's rules: a test's fake API, a company network.
+	AllowPrivateOutbound bool
+}
+
+// Extension is core methods for the plugins that declare Capability, each served as the plugin
+// and project the call came from.
+type Extension struct {
+	Capability string
+	Methods    map[string]func(ctx context.Context, project pgtype.UUID, plugin string, params json.RawMessage) (any, error)
+}
+
+// EventHook carries outbox events of some types to the plugins of a project that declare a
+// capability. Deliver decides, for one plugin, whether and through which hook it hears the event;
+// call reaches that plugin (and does nothing for a hook it does not handle).
+type EventHook interface {
+	Events() []string
+	Capability() string
+	Project(ctx context.Context, e events.Event) (pgtype.UUID, bool, error)
+	Deliver(ctx context.Context, e events.Event, project pgtype.UUID, plugin string,
+		call func(ctx context.Context, method string, params, out any) error) error
 }
 
 // BrainProposer stores a plugin's proposal in its project's Brain. brain.PluginProposals is one.
@@ -243,10 +270,19 @@ const cursorName = "plugins"
 // hookEvents are the domain events plugins hear about.
 var hookEvents = []string{"task.created", "task.phase_changed", "task.closed", "gate.approved", "job.finished"}
 
+// eventTypes are hookEvents and those of the event hooks.
+func (h *Host) eventTypes() []string {
+	out := append([]string{}, hookEvents...)
+	for _, eh := range h.cfg.EventHooks {
+		out = append(out, eh.Events()...)
+	}
+	return out
+}
+
 // drain delivers events after the cursor, at least once: a crash between delivery and the
 // cursor update repeats a batch, which hooks must tolerate.
 func (h *Host) drain(ctx context.Context) {
-	events.DrainCursor(ctx, h.pool, cursorName, hookEvents, func(r db.EventsAfterRow) {
+	events.DrainCursor(ctx, h.pool, cursorName, h.eventTypes(), func(r db.EventsAfterRow) {
 		if h.active() {
 			h.onEvent(ctx, events.Event{ID: r.ID, Type: r.Type, Aggregate: r.Aggregate, AggregateID: uuidString(r.AggregateID), Payload: r.Payload})
 		}
@@ -397,6 +433,9 @@ func (i *instance) run(ctx context.Context) {
 func (i *instance) env() ([]string, []string, error) {
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TMPDIR=" + os.TempDir(),
 		"LANG=C.UTF-8", "GATOR_PLUGIN_PROJECT=" + i.b.slug}
+	if i.h.cfg.AllowPrivateOutbound {
+		env = append(env, "GATOR_OUTBOUND_ALLOW_PRIVATE=1")
+	}
 	if i.b.secrets == "" {
 		return env, nil, nil
 	}

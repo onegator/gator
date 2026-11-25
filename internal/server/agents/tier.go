@@ -23,3 +23,13 @@ func TierFor(agent db.Agent, task db.Task) Grant {
 	}
 	return Grant{Tier: TierChat, NeedsConsent: true}
 }
+
+// GrantFor is TierFor for a request: what somebody outside the workspace asks is answered in
+// chat, and nobody is asked for consent on their behalf — words from outside never let an agent
+// work, whatever a person allowed on the task for people's asks.
+func GrantFor(r Request, task db.Task) Grant {
+	if r.External() {
+		return Grant{Tier: TierChat}
+	}
+	return TierFor(r.Agent, task)
+}

@@ -73,6 +73,7 @@ type Core struct {
 	logs      []plugin.LogParams
 	calls     []Call
 	brain     []plugin.BrainProposeParams
+	msg       messaging
 }
 
 // NewCore creates an empty project.
@@ -259,6 +260,9 @@ func decode[T any](raw json.RawMessage) (T, error) {
 func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if res, ok, err := c.handleMessaging(method, raw); ok {
+		return res, err
+	}
 	notFound := func(id string) error {
 		return plugin.Errorf(plugin.CodeNotFound, "task %s not found in this project", id)
 	}

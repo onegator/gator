@@ -26,6 +26,7 @@ import (
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
@@ -85,6 +86,9 @@ type Server struct {
 	// Remote is the remote MCP servers agents reach through Gator's proxy (/mcp/proxy/<name>);
 	// nil: no proxy, and their endpoints answer 503.
 	Remote *mcpremote.Module
+	// Bridges are the messaging plugins' side of the core (account links); nil: their endpoints
+	// answer 503.
+	Bridges *bridges.Service
 }
 
 var _ gen.ServerInterface = (*Server)(nil)

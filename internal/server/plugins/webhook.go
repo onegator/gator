@@ -99,7 +99,8 @@ func (h *Host) webhook(w http.ResponseWriter, r *http.Request) {
 			query[k] = v[0]
 		}
 	}
-	err = h.call(ctx, i, plugin.MethodWebhook, plugin.WebhookParams{DeliveryID: delivery, Headers: headers, Body: body, Query: query}, nil)
+	var reply plugin.WebhookResult
+	err = h.call(ctx, i, plugin.MethodWebhook, plugin.WebhookParams{DeliveryID: delivery, Headers: headers, Body: body, Query: query}, &reply)
 	if err != nil {
 		// Let the sender retry: forget the delivery.
 		_ = q.ReleaseWebhookDelivery(ctx, db.ReleaseWebhookDeliveryParams{ProjectPluginID: row.ID, DeliveryID: delivery})
@@ -116,5 +117,34 @@ func (h *Host) webhook(w http.ResponseWriter, r *http.Request) {
 		hookJSON(w, status, map[string]string{"error": err.Error()})
 		return
 	}
+	if reply.Body != "" || reply.Status != 0 {
+		writeReply(w, reply)
+		return
+	}
 	hookJSON(w, http.StatusOK, map[string]string{"status": "ok", "delivery_id": delivery})
+}
+
+// maxReplyBytes bounds what a plugin answers a sender.
+const maxReplyBytes = 64 << 10
+
+// writeReply is a plugin's own answer to the sender: a success, as JSON or plain text, never
+// anything a browser would render.
+func writeReply(w http.ResponseWriter, r plugin.WebhookResult) {
+	status := r.Status
+	if status < 200 || status > 299 {
+		status = http.StatusOK
+	}
+	ct := "application/json"
+	if r.ContentType == "text/plain" {
+		ct = "text/plain; charset=utf-8"
+	}
+	body := r.Body
+	if len(body) > maxReplyBytes || (ct == "application/json" && body != "" && !json.Valid([]byte(body))) {
+		hookJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
 }

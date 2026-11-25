@@ -3,6 +3,7 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,6 +17,11 @@ import (
 
 // onEvent forwards domain events to the plugins of the task's project.
 func (h *Host) onEvent(ctx context.Context, e events.Event) {
+	for _, eh := range h.cfg.EventHooks {
+		if slices.Contains(eh.Events(), e.Type) {
+			h.deliver(ctx, eh, e)
+		}
+	}
 	q := db.New(h.pool)
 	switch e.Type {
 	case "task.created", "task.phase_changed", "gate.approved":
@@ -100,6 +106,35 @@ func (h *Host) onEvent(ctx context.Context, e events.Event) {
 			h.callLogged(ctx, i, plugin.MethodJobFinish, plugin.JobFinishParams{Task: taskRef(t), Job: jobRef(j), Receipt: j.Receipt})
 		})
 	}
+}
+
+// deliver hands one event to an event hook for each running plugin of its project that declares
+// the hook's capability. A plugin that fails is logged; the event is not delivered again.
+func (h *Host) deliver(ctx context.Context, eh EventHook, e events.Event) {
+	project, ok, err := eh.Project(ctx, e)
+	if err != nil || !ok {
+		if err != nil && ctx.Err() == nil {
+			h.log.Warn("event hook", "event", e.Type, "err", err)
+		}
+		return
+	}
+	var insts []*instance
+	for _, i := range h.forProject(project, "") {
+		if slices.Contains(i.b.manifest.Capabilities, eh.Capability()) {
+			insts = append(insts, i)
+		}
+	}
+	h.each(insts, func(i *instance) {
+		call := func(ctx context.Context, method string, params, out any) error {
+			if !i.b.manifest.HasHook(method) {
+				return nil
+			}
+			return h.call(ctx, i, method, params, out)
+		}
+		if err := eh.Deliver(ctx, e, project, i.b.name, call); err != nil && ctx.Err() == nil {
+			i.log().Warn("plugin hook failed", "event", e.Type, "err", err)
+		}
+	})
 }
 
 // each runs fn for every instance at once, so one slow plugin does not hold up the others.

@@ -115,11 +115,13 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	return nil
 }
 
-// asks says whether a message can ask an agent anything: words a person or an agent wrote, still
-// there. Cards, Gator's own lines, plugins and the outside world do not call agents.
+// asks says whether a message can ask an agent anything: words a person, an agent or somebody
+// outside on a bridge wrote, still there. Cards, Gator's own lines and plugins do not call agents;
+// what an outside author asks is answered in chat (GrantFor), never with work.
 func asks(m db.Message) bool {
 	return !m.DeletedAt.Valid && m.Kind == "text" && m.Status == conversations.StatusFinal &&
-		(m.AuthorKind == conversations.AuthorUser || m.AuthorKind == conversations.AuthorAgent)
+		(m.AuthorKind == conversations.AuthorUser || m.AuthorKind == conversations.AuthorAgent ||
+			m.AuthorKind == conversations.AuthorExternal)
 }
 
 // asked are the agents a message asks: those it mentions and, for a person's message in a DM,

@@ -170,6 +170,34 @@ not exist.
 | `brain.propose` | `{kind, title, content, scope?, component?, source_id, url?, excerpt?}` → `{entry_id, created}`. Proposes something worth remembering to the project's Brain: an ADR in the repository is a `decision`, an error that keeps coming back a `runbook` (kinds: decision, lesson, runbook, fact, glossary, convention; scope `project` or `component`). Always a proposal a person approves before any prompt carries it; the same `source_id` is proposed once, so name the version (a file's blob sha) when a new version should be proposed again |
 | `incident.upsert`, `release.record` | answer -32001 until M6 |
 
+### Messaging (bridges)
+
+A plugin that declares the `messaging` capability is a bridge: it carries what is said in a
+team's chat (Slack) or a code host's comments into the project's conversations, and back. Only
+such a plugin may call these methods (others get -32003) or declare the `messagePosted` and
+`messageEdited` hooks (the manifest is refused otherwise).
+
+| Method | Params → result |
+|---|---|
+| `conversation.find_or_create` | `{external_ref, kind, name?, topic?, parent_ref?, task_id?}` → `{conversation_id, created}`. `kind` is `channel` (the project's channel called `name`, made if missing; a private or archived one is refused), `thread` (the thread under the message whose outside reference is `parent_ref`, which came through this bridge) or `task` (the task's thread). The same `external_ref` again answers the same conversation |
+| `message.post` | `{conversation_id, body, author: {external_id, display_name}, external_ref, mentions?}` → `{message_id, replayed, author_kind}`. Only in a conversation this bridge connected (itself, or the conversation its root lives in). The author is the person their account is linked to, when that person may write there, else an outside identity (`external`) of this project and bridge. `mentions` are agent handles: an outside author's ask is answered in chat, never with work, and agents read it fenced as untrusted. The same `external_ref` again answers the same message |
+| `message.update` | `{external_ref, body}` → null. A message this bridge brought in, edited outside |
+| `member.link` | `{external_id, display_name?, code?}` → `{user_id?, name?, linked}`. With a code the person made in Gator (`POST /api/v1/projects/{id}/external-links`, ten minutes, once, for this project and this plugin), links the account; without, answers who it is linked to. An email address never links an account. Tries are limited per account |
+| `card.action` | `{message_id, action, actor: {external_id}}` → `{done, message}`. A button on a card this bridge mirrored (`approve` on a pending decision card), done for the linked person with their role in the project (member or more); anyone else gets `done: false` and a sentence to show |
+
+`external_id` must name the account unambiguously in the plugin's own namespace: a Slack user is
+`T0123/U0456` (team and user), never the user id alone. The core keys identities by project and
+plugin, so the same account in two projects is two identities.
+
+Hooks: `messagePosted` and `messageEdited` get `{conversation, message}` for a message in a
+conversation the bridge connected, open to the project, that did not come in through this bridge
+(no echo). `conversation` carries the bridge's own references (`external_ref`, `parent_ref` of a
+thread's root message, `root_ref`); `message` carries `author_name`, `body`, `status` (`streaming`
+while an agent writes), `card_type`/`card`, the `actions` a bridge may offer, its `external_ref`
+once mirrored and `reply_to` (the outside reference of the message an agent's answer answers, when
+that came through this bridge). Answer `{external_ref}` of the copy you made; later edits carry it.
+An answer being written is sent at most every 2 s, and always once it is final.
+
 ## Webhooks
 
 `POST /hooks/<project-slug>/<plugin>` is the only endpoint that needs no Gator token. The
@@ -182,6 +210,9 @@ these protections:
   from `X-Gator-Delivery`, else from the body's SHA-256. A delivery id that was already handled
   gets 200 `{"status":"duplicate"}` without calling the plugin.
 - **Headers:** `Authorization`, `Cookie` and `Proxy-Authorization` are never forwarded.
+- **Replies:** a plugin that answers `webhook` with `{status?, content_type?, body}` has that sent
+  back (2xx only, `application/json` or `text/plain`, at most 64 KiB): Slack's URL verification
+  echoes a challenge. In Go, set `Handlers.WebhookReply` instead of `Webhook`.
 - **Answers:** the answer tells the sender whether to retry. A failed call forgets the
   delivery id, so the sender's retry is processed.
 

@@ -1839,6 +1839,40 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SkillInfo" } } } } }
         "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/external-links:
+    post:
+      operationId: createExternalLinkCode
+      description: >
+        Make a code that links an account on a bridge (a messaging plugin: slack, github) to the caller, in this project.
+        The person types it where the bridge hears it ("/gator link GTR-…" in Slack); it works once, for ten minutes,
+        and is shown only here. Until linked, what that account says is an outside identity's: agents hear it in chat
+        and it approves nothing. An email address never links an account. At most ten codes an hour.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewExternalLink" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/ExternalLinkCode" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/external-identities:
+    get:
+      operationId: listExternalIdentities
+      description: "The outside accounts the project's bridges have heard from, and the people they are linked to. For the project's members and viewers."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ExternalIdentity" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /external-identities/{identityId}/link:
+    delete:
+      operationId: unlinkExternalIdentity
+      description: "Take a link away: the person it links to may, and a project admin. The account speaks as an outside identity again."
+      parameters: [ { name: identityId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ExternalIdentity" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/mcp-servers:
     get:
       operationId: listProjectMcpServers
@@ -1975,6 +2009,32 @@ components:
         X-Has-More: { schema: { type: boolean } }
       content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } }
   schemas:
+    NewExternalLink:
+      type: object
+      required: [provider]
+      properties:
+        provider: { type: string, description: "the bridge's plugin name: slack, github" }
+    ExternalLinkCode:
+      type: object
+      required: [code, provider, expiresAt]
+      properties:
+        code: { type: string, description: "GTR-XXXX-XXXX-XXXX-XXXX; shown once" }
+        provider: { type: string }
+        expiresAt: { type: string, format: date-time }
+    ExternalIdentity:
+      type: object
+      description: "An account on a bridge, as one project knows it: the same Slack user in two projects is two identities."
+      required: [id, projectId, provider, externalId, displayName, linked, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        provider: { type: string, description: "the bridge (plugin) that vouches for it" }
+        externalId: { type: string, description: "in the provider's namespace: T0123/U0456 for Slack" }
+        displayName: { type: string, description: "as the outside gave it; outside words, not verified" }
+        linked: { type: boolean }
+        userId: { type: string, format: uuid, description: "the person it is linked to" }
+        linkedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
     Error:
       type: object
       required: [error]

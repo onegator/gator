@@ -54,6 +54,10 @@ type Speech struct {
 type Origin struct {
 	Turn string `json:"turn,omitempty"`
 	Job  string `json:"job,omitempty"`
+	// Provider is the bridge a message came in through, and ExternalRef where it is outside: a
+	// bridge never hears back what it brought in.
+	Provider    string `json:"provider,omitempty"`
+	ExternalRef string `json:"external_ref,omitempty"`
 }
 
 // OriginOf reads a message's origin.

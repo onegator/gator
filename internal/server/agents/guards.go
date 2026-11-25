@@ -158,7 +158,7 @@ func likelyTier(ctx context.Context, tasks taskReader, r Request) (string, error
 		}
 		task = t
 	}
-	return TierFor(r.Agent, task).Tier, nil
+	return GrantFor(r, task).Tier, nil
 }
 
 // chainCounter answers how many turns a chain has had. *db.Queries is one.

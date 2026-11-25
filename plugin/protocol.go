@@ -39,7 +39,7 @@ const (
 // Hooks are the core → plugin methods a manifest may declare.
 var Hooks = []string{MethodWebhook, MethodPhaseTransition, MethodGateEvaluate, MethodArtifactApproved,
 	MethodRelease, MethodIncidentClosed, MethodSchedule, MethodRenderUI, MethodJobPrepare, MethodJobFinish,
-	MethodQualityEvaluate, MethodTurnEnding, MethodImport, MethodTaskClosed}
+	MethodQualityEvaluate, MethodTurnEnding, MethodImport, MethodTaskClosed, MethodMessagePosted, MethodMessageEdited}
 
 // Plugin → core methods.
 const (
@@ -61,7 +61,7 @@ const (
 )
 
 // Capabilities a plugin can declare; the core asks for capabilities, never for plugin names.
-var Capabilities = []string{"tracker", "vcs", "ci", "monitoring", "deploy", "notify"}
+var Capabilities = []string{"tracker", "vcs", "ci", "monitoring", "deploy", "notify", CapabilityMessaging}
 
 // Manifest describes a plugin. The plugin returns it from initialize.
 type Manifest struct {
@@ -159,6 +159,10 @@ func (m Manifest) Validate() error {
 		if schema, err = ParseConfigSchema(m.ConfigSchema); err != nil {
 			return err
 		}
+	}
+	// A bridge's hooks carry what people say; a plugin hears them only as a declared bridge.
+	if (m.HasHook(MethodMessagePosted) || m.HasHook(MethodMessageEdited)) && !contains(m.Capabilities, CapabilityMessaging) {
+		return fmt.Errorf("manifest: messagePosted and messageEdited need the %s capability", CapabilityMessaging)
 	}
 	if c := m.Connect; c != nil {
 		if !strings.HasPrefix(c.AuthorizeURL, "https://") || !strings.HasPrefix(c.TokenURL, "https://") {
