@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -655,5 +656,42 @@ func TestAFinishedReviewIsPostedOnThePullRequest(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the task links the posted review: %+v", rep.Artifacts)
+	}
+}
+
+// An architecture decision record that lands on the default branch is proposed to the Brain as a
+// decision, once per version of the file; a push to another branch, or of other files, is not.
+func TestADecisionRecordOnTheDefaultBranchIsProposedToTheBrain(t *testing.T) {
+	adr := "# ADR 1: Use Postgres\n\nStatus: accepted\n\nThe workload is relational and we already run one.\n"
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" || r.URL.Path != "/repos/acme/app/contents/docs/adr/0001-postgres.md" || r.URL.Query().Get("ref") != "c0ffee" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"path": "docs/adr/0001-postgres.md", "sha": "blob1", "encoding": "base64",
+			"html_url": "https://github.com/acme/app/blob/main/docs/adr/0001-postgres.md",
+			"content":  base64.StdEncoding.EncodeToString([]byte(adr))})
+	}))
+	t.Cleanup(gh.Close)
+	push := func(ref string, expect ...string) string {
+		body, _ := json.Marshal(map[string]any{"ref": ref, "after": "c0ffee",
+			"repository": map[string]any{"full_name": "acme/app", "default_branch": "main"},
+			"commits": []map[string]any{{"added": []string{"docs/adr/0001-postgres.md"}, "modified": []string{"README.md"}},
+				{"modified": []string{"docs/adr/0001-postgres.md", "docs/adr/notes.txt"}}}})
+		exp, _ := json.Marshal(expect)
+		return fmt.Sprintf(`{"hook": "webhook", "body": %s, "headers": {"X-GitHub-Event": "push"},
+			"sign": {"header": "X-Hub-Signature-256", "secret": "webhook_secret", "prefix": "sha256="}, "expect_core": %s}`, body, exp)
+	}
+	s := scenario(t, `{"config": {"repo": "acme/app", "api_url": %q}, "secrets": {"token": "ghp-test", "webhook_secret": "s"},
+		"steps": [%s, %s, %s]}`, gh.URL, push("refs/heads/main", "brain.propose"), push("refs/heads/ada/draft"), push("refs/heads/main", "brain.propose"))
+	rep := run(t, s)
+	if len(rep.Brain) != 1 {
+		t.Fatalf("one proposal per version of the record: %+v", rep.Brain)
+	}
+	p := rep.Brain[0]
+	if p.Kind != "decision" || p.Title != "ADR 1: Use Postgres" || !strings.Contains(p.Content, "workload is relational") ||
+		p.SourceID != "adr:acme/app:docs/adr/0001-postgres.md@blob1" || !strings.HasSuffix(p.URL, "0001-postgres.md") {
+		t.Fatalf("proposal: %+v", p)
 	}
 }

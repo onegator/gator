@@ -54,6 +54,7 @@ const (
 	CoreIncidentClose  = "incident.close"  // M6
 	CoreReleaseRecord  = "release.record"  // M6
 	CoreReviewRequest  = "review.request"
+	CoreBrainPropose   = "brain.propose"
 	CoreKVGet          = "kv.get"
 	CoreKVPut          = "kv.put"
 	CoreLog            = "log"
@@ -453,6 +454,29 @@ type TaskCreateParams struct {
 	Description  string            `json:"description,omitempty"`
 	Urgency      int               `json:"urgency,omitempty"`
 	ExternalRefs map[string]string `json:"external_refs,omitempty"`
+}
+
+// BrainProposeParams proposes something worth remembering to the project's Brain: an
+// architecture decision recorded in the repository, a runbook for an error that keeps coming
+// back. It is always a proposal: a person approves it before any prompt carries it. Kind is
+// decision, lesson, runbook, fact, glossary or convention; Scope is project (the default) or
+// component, with Component its key. SourceID names what it came from in the plugin's own terms
+// ("adr:docs/adr/0001-postgres.md@<sha>"): the same SourceID is proposed once.
+type BrainProposeParams struct {
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+	Scope     string `json:"scope,omitempty"`
+	Component string `json:"component,omitempty"`
+	SourceID  string `json:"source_id"`
+	URL       string `json:"url,omitempty"`
+	Excerpt   string `json:"excerpt,omitempty"`
+}
+
+// BrainProposeResult says which entry the proposal is, and whether this call made it.
+type BrainProposeResult struct {
+	EntryID string `json:"entry_id,omitempty"`
+	Created bool   `json:"created"`
 }
 
 // TaskFindParams finds the newest task of the project with external_refs[Key] == Value.

@@ -146,7 +146,22 @@ func serve(ctx context.Context) error {
 	// The catalogue of things Gator does for a project by itself once a person switches them on.
 	autos := automations.New(db.Pool, svc, hub, log)
 	go autos.Run(ctx)
-	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos}
+	// People talk in a project's channels; the consumer keeps them in step with the project.
+	// Files people send are kept in a bucket or a directory, or not at all.
+	blobs, err := conversations.BlobStoreFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if blobs == nil {
+		log.Warn("attachments not configured (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*)")
+	}
+	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs,
+		// What the Brain was proposed from a task, one card a day in its thread.
+		CardSources: []conversations.CardSource{curator.NewCards(dbq.New(db.Pool))}})
+	// What the team and its agents know: one store, read under the same rules everywhere.
+	knows := brain.New(db.Pool, brain.Deps{Conversations: chat.Access})
+	// Plugins propose to the Brain too (brain.propose), as proposals a person approves.
+	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins}
 	pluginCfg.LoadEnv()
 	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
@@ -204,18 +219,6 @@ func serve(ctx context.Context) error {
 		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
 
-	// People talk in a project's channels; the consumer keeps them in step with the project.
-	// Files people send are kept in a bucket or a directory, or not at all.
-	blobs, err := conversations.BlobStoreFromEnv(os.Getenv)
-	if err != nil {
-		return err
-	}
-	if blobs == nil {
-		log.Warn("attachments not configured (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*)")
-	}
-	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs,
-		// What the Brain was proposed from a task, one card a day in its thread.
-		CardSources: []conversations.CardSource{curator.NewCards(dbq.New(db.Pool))}})
 	go chat.Consumer(hub, log, 0).Run(ctx)
 	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
 	// within the limits of a chain of delegations and the project's budget.
@@ -235,8 +238,6 @@ func serve(ctx context.Context) error {
 	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
 	go notifier.WithChat(chat.Access).Run(ctx)
 
-	// What the team and its agents know: one store, read under the same rules everywhere.
-	knows := brain.New(db.Pool, brain.Deps{Conversations: chat.Access})
 	// What a thread settled is proposed to the Brain once it goes quiet or its task closes.
 	curate := curator.New(dbq.New(db.Pool), team.Curations, chat.Packer, chat.Access, knows.Service, log)
 	curations := conversations.NewCursorConsumer("brain_curator", db.Pool, hub, log, 0)

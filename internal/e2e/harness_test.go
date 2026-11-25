@@ -92,7 +92,11 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	}
 	oauth := newFakeProvider(t)
 	catalogue, bundled := catalogueDir(t)
-	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{CallTimeout: 2 * time.Second,
+	// Conversations, and what the team and its agents know, read under the same rules.
+	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
+		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool))}})
+	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
+	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{Brain: knows.Plugins, CallTimeout: 2 * time.Second,
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
 		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
 		CatalogueDir: catalogue, PublicURL: fakePublicURL, HooksURL: fakeHooksURL,
@@ -108,8 +112,6 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	}
 	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
 	// Conversations and the agents who answer in them, each following the outbox on its own.
-	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
-		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool))}})
 	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default()})
 	mgr.UseBriefer(team.Briefer)
 	consumers, stopConsumers := context.WithCancel(context.Background())
@@ -118,8 +120,6 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
-	// What the team and its agents know, read under the same rules as conversations.
-	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
 	// The curator follows the outbox on its own; sweeping for quiet threads is a test's to ask.
 	curate := curator.New(db.New(pool), team.Curations, chat.Packer, chat.Access, knows.Service, slog.Default())
 	curations := conversations.NewCursorConsumer("brain_curator", pool, hub, slog.Default(), 50*time.Millisecond)

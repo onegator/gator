@@ -14,6 +14,8 @@ type Module struct {
 	Finder  Finder
 	// Legacy is the product context's and the knowledge shelves' old doors, over the Brain.
 	Legacy Legacy
+	// Plugins is the door plugins propose through (brain.propose).
+	Plugins PluginProposals
 }
 
 // Deps are what the Brain needs from the rest of the server.
@@ -35,11 +37,13 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	if searcher == nil {
 		searcher = NewFTS(q)
 	}
+	svc := NewService(PoolTx(pool), q, policy, DefaultSources(), deps.Effects...)
 	return &Module{
 		Policy:  policy,
 		Readers: NewReaders(q),
-		Service: NewService(PoolTx(pool), q, policy, DefaultSources(), deps.Effects...),
+		Service: svc,
 		Finder:  NewFinder(searcher, policy),
 		Legacy:  NewLegacy(q),
+		Plugins: NewPluginProposals(q, svc),
 	}
 }

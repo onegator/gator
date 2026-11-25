@@ -99,13 +99,14 @@ type StepResult struct {
 
 // Report is a scenario run: the manifest, each step and the core's final state.
 type Report struct {
-	Manifest  plugin.Manifest            `json:"manifest"`
-	Steps     []StepResult               `json:"steps"`
-	Tasks     []Task                     `json:"tasks"`
-	Checks    map[string][]plugin.Check  `json:"checks"`
-	Artifacts []Artifact                 `json:"artifacts"`
-	KV        map[string]json.RawMessage `json:"kv"`
-	Logs      []plugin.LogParams         `json:"logs"`
+	Manifest  plugin.Manifest             `json:"manifest"`
+	Steps     []StepResult                `json:"steps"`
+	Tasks     []Task                      `json:"tasks"`
+	Checks    map[string][]plugin.Check   `json:"checks"`
+	Artifacts []Artifact                  `json:"artifacts"`
+	KV        map[string]json.RawMessage  `json:"kv"`
+	Logs      []plugin.LogParams          `json:"logs"`
+	Brain     []plugin.BrainProposeParams `json:"brain,omitempty"`
 }
 
 // Failed reports whether any step missed its expectation.
@@ -138,6 +139,7 @@ func Run(ctx context.Context, command []string, s Scenario, stderr io.Writer, ti
 		rep.Steps = append(rep.Steps, p.play(ctx, n, step, s.Secrets))
 	}
 	rep.Tasks, rep.Checks, rep.Artifacts, rep.KV, rep.Logs = core.Tasks(), core.AllChecks(), core.Artifacts(), core.KV(), core.Logs()
+	rep.Brain = core.Brain()
 	return rep, nil
 }
 

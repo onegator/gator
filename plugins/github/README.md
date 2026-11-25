@@ -14,13 +14,14 @@ installation tokens and one app-wide webhook, comes later.
 | `issues` edited | the task takes the issue's title and body |
 | `issues` closed | closes the task, unless the task has Gator's pull request: that one says "Closes #n", and the task finishes by its own process (a release may still be ahead) |
 | a task closes | closes its issue as completed, if it is still open |
-| the plugin starts | registers the repository webhook (Issues, Pull requests, Check runs), or rewrites the one it made, when the server knows its public address (`GATOR_HOOKS_URL` or `GATOR_PUBLIC_URL`) |
+| the plugin starts | registers the repository webhook (Issues, Pull requests, Check runs, Pushes), or rewrites the one it made, when the server knows its public address (`GATOR_HOOKS_URL` or `GATOR_PUBLIC_URL`) |
 | a worker job finishes with commits | opens a pull request from the job's branch with the job's report, `Closes #<issue>` and a `gator:<phase>` label. A retry refreshes the existing pull request. |
 | `pull_request` events | records the pull request on the task (artifact, state for the chip) |
 | `check_run` events | sets `github/<check>` on the gate while the task is in `check_phase` (default Implementation); a failing check blocks the gate, a passing one unblocks it |
 | a task enters `check_phase` | reports the pull request's current check runs |
 | a phase change | moves the `gator:<phase>` label on the issue and the pull request |
 | a task opens in a client | a GitHub tab with links, and chips for the issue and the pull request |
+| `push` to the base branch adding or changing `docs/adr/*.md` | proposes each architecture decision record to the project's Brain as a decision (title from its first heading), once per version of the file; a person approves it |
 
 Deliveries for other repositories are logged and ignored. A bad signature is refused with
 400. GitHub does not retry a 400, and a refusal does not count toward disabling the plugin.
@@ -46,7 +47,7 @@ or with a token that may not manage webhooks, add it in the repository settings:
 - **Payload URL:** `https://<gator>/hooks/<project-slug>/github`
 - **Content type:** `application/json`
 - **Secret:** the same value as `webhook_secret`
-- **Events:** Issues, Pull requests and Check runs
+- **Events:** Issues, Pull requests, Check runs and Pushes
 
 ## Limits
 

@@ -62,7 +62,7 @@ var manifest = plugin.Manifest{
 }
 
 // webhookEvents are the deliveries this plugin reads.
-var webhookEvents = []string{"issues", "pull_request", "check_run"}
+var webhookEvents = []string{"issues", "pull_request", "check_run", "push"}
 
 // maxImport bounds one import. A repository with thousands of open issues is a backlog, not a
 // queue of work, and a board flooded with it would be worse than one that asks to filter.
@@ -182,6 +182,8 @@ func (g *gh) webhook(ctx context.Context, core *plugin.Core, p plugin.WebhookPar
 		return g.onPullRequest(ctx, core, repo, env.Action, p.Body)
 	case "check_run":
 		return g.onCheckRun(ctx, core, repo, p.Body)
+	case "push":
+		return g.onPush(ctx, core, repo, p.Body)
 	}
 	return nil
 }

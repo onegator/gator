@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/automations"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/process"
@@ -73,6 +74,14 @@ type Config struct {
 	// Automations decides what a project does with a pull request a plugin reports, or a new
 	// incident. Optional: without it no automation runs on a plugin's behalf.
 	Automations *automations.Service
+	// Brain takes what plugins propose to it (brain.propose). Optional: without it the method
+	// answers that the Brain is not there.
+	Brain BrainProposer
+}
+
+// BrainProposer stores a plugin's proposal in its project's Brain. brain.PluginProposals is one.
+type BrainProposer interface {
+	Propose(ctx context.Context, project pgtype.UUID, plugin string, p brain.PluginProposal) (db.BrainEntry, bool, error)
 }
 
 // LoadEnv fills the settings that come from the server's environment and are the plugins'
