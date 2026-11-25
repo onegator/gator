@@ -249,3 +249,14 @@ agenta pyta przed działaniem, więc same odpowiedzi na prośby nie są obietnic
 - **Punkt 3 (UI wyboru backendu w profilu agenta)** należy do fazy 6; `docs/openapi.yaml` opisuje
   wszystko, czego potrzebuje (`AgentPolicy.backend`, agent zdalny, eksponowanie, klienci A2A, kody
   powiązań i tożsamości z zewnątrz).
+- **Po przeglądzie** (szczegóły w commicie): komenda dozwolona w read-only ACP to sama nazwa z PATH
+  (`./gator-cli` z repozytorium jest odrzucane), a dopuszczenie narzędzia MCP po tytule dotyczy tylko
+  wywołań bez rodzaju albo `other`; łańcuch delegacji zaczęty przez kogoś z zewnątrz zostaje w `chat`
+  na każdym hopie (`Request.FromOutside`, dispatcher idzie po `parent_turn_id`), a budżet klienta A2A
+  liczy cały łańcuch; każda tożsamość z zewnątrz ma dzienny budżet (strażnik `OutsideBudget`, $2 albo
+  budżet klienta A2A); plugin bez własnego nagłówka dostawy (Slack) jest deduplikowany tylko po hashu
+  body (`X-Gator-Delivery` nie robi z replayu nowej dostawy); Approve ze Slacka działa tylko, gdy task
+  wciąż czeka na tę samą bramkę (klucz karty = faza i chwila wejścia); podpis odpowiedzi w GitHubie
+  nie woła `@handle`; karta A2A musi wskazywać endpoint na swoim hoście (tam idzie token), a ten sam
+  `messageId` do innego agenta to inne pytanie.
+

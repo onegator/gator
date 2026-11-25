@@ -189,22 +189,27 @@ func (q *Queries) EndA2ACall(ctx context.Context, arg EndA2ACallParams) error {
 }
 
 const externalCostSince = `-- name: ExternalCostSince :one
-SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id JOIN agent_turns t ON t.id = j.turn_id
-                  WHERE t.requested_by_kind = 'external' AND t.requested_by = $1 AND u.created_at >= $2), 0)
-      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j JOIN agent_turns t ON t.id = j.turn_id
-                  WHERE t.requested_by_kind = 'external' AND t.requested_by = $1
-                    AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8
+WITH RECURSIVE asked AS (
+    SELECT t.id FROM agent_turns t WHERE t.requested_by_kind = 'external' AND t.requested_by = $2
+    UNION
+    SELECT c.id FROM agent_turns c JOIN asked a ON c.parent_turn_id = a.id
+)
+SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+                  WHERE j.turn_id IN (SELECT id FROM asked) AND u.created_at >= $1), 0)
+      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
+                  WHERE j.turn_id IN (SELECT id FROM asked) AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8
 `
 
 type ExternalCostSinceParams struct {
-	IdentityID pgtype.UUID        `json:"identity_id"`
 	Since      pgtype.Timestamptz `json:"since"`
+	IdentityID pgtype.UUID        `json:"identity_id"`
 }
 
-// What the turns somebody outside asked for spent since a moment, or may still spend (jobs queued
-// and running at their cap).
+// What somebody outside asked for spent since a moment, or may still spend: the turns they asked for
+// and every turn agents delegated from those, finished jobs as they cost, jobs queued and running
+// at their cap.
 func (q *Queries) ExternalCostSince(ctx context.Context, arg ExternalCostSinceParams) (float64, error) {
-	row := q.db.QueryRow(ctx, externalCostSince, arg.IdentityID, arg.Since)
+	row := q.db.QueryRow(ctx, externalCostSince, arg.Since, arg.IdentityID)
 	var column_1 float64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -238,6 +243,28 @@ SELECT id, project_id, name, token_id, identity_id, daily_budget_usd, per_minute
 
 func (q *Queries) GetA2AClient(ctx context.Context, id pgtype.UUID) (A2aClient, error) {
 	row := q.db.QueryRow(ctx, getA2AClient, id)
+	var i A2aClient
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.TokenID,
+		&i.IdentityID,
+		&i.DailyBudgetUsd,
+		&i.PerMinute,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
+const getA2AClientByIdentity = `-- name: GetA2AClientByIdentity :one
+SELECT id, project_id, name, token_id, identity_id, daily_budget_usd, per_minute, created_by, created_at, revoked_at FROM a2a_clients WHERE identity_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1
+`
+
+func (q *Queries) GetA2AClientByIdentity(ctx context.Context, identityID pgtype.UUID) (A2aClient, error) {
+	row := q.db.QueryRow(ctx, getA2AClientByIdentity, identityID)
 	var i A2aClient
 	err := row.Scan(
 		&i.ID,

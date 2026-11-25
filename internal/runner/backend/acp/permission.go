@@ -58,7 +58,9 @@ func (p Permissions) Decide(call permissionToolCall) Verdict {
 			return Verdict{Allow: true, Reason: "read-only: " + cmd}
 		}
 		return Verdict{Reason: "read-only: commands other than " + strings.Join(p.Access.Commands, ", ") + " are refused"}
-	case p.ownMCP(call.Title):
+	case (call.Kind == "" || call.Kind == kindOther) && p.ownMCP(call.Title):
+		// Only a call the agent does not name as editing, deleting or moving may be one of the
+		// job's MCP tools: a title is the agent's free text, and an edit's is a path.
 		return Verdict{Allow: true, Reason: "read-only: the job's MCP server"}
 	}
 	kind := call.Kind
@@ -84,8 +86,12 @@ func (p Permissions) allowedCommand(raw json.RawMessage) (string, bool) {
 			return "", false
 		}
 	}
-	name := filepath.Base(words[0])
-	return name, slices.Contains(p.Access.Commands, name)
+	// By its name alone, found on PATH (where the executor puts the runner's own gator-cli first):
+	// ./gator-cli or tools/gator-cli could be a file the repository brought.
+	if strings.ContainsRune(words[0], '/') {
+		return "", false
+	}
+	return words[0], slices.Contains(p.Access.Commands, words[0])
 }
 
 // commandWords reads the command of an execute tool call, which agents send as {"command":

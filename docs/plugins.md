@@ -207,7 +207,9 @@ these protections:
 - **Body size:** at most 1 MiB, otherwise 413.
 - **Rate limit:** 10 requests per second, burst 20, for each project and plugin; otherwise 429.
 - **One delivery, one run:** the delivery id comes from the manifest's `delivery_header`, else
-  from `X-Gator-Delivery`, else from the body's SHA-256. A delivery id that was already handled
+  for a plugin that names a header but whose delivery lacks it from `X-Gator-Delivery`, else (always
+  for a plugin that names none, such as Slack, whose signature covers only the body) from the body's
+  SHA-256: a header the signature does not cover cannot make a replay a new delivery. A delivery id that was already handled
   gets 200 `{"status":"duplicate"}` without calling the plugin.
 - **Headers:** `Authorization`, `Cookie` and `Proxy-Authorization` are never forwarded.
 - **Replies:** a plugin that answers `webhook` with `{status?, content_type?, body}` has that sent

@@ -91,7 +91,7 @@ func (f *fakeSlackAPI) posted() []map[string]any {
 const slackSecret = "e2e-signing-secret"
 
 // slack sends a request to the project's Slack hook as Slack would: signed at ts with secret.
-func (h *harness) slack(slug, contentType string, body []byte, ts int64, secret string) (int, string) {
+func (h *harness) slack(slug, contentType string, body []byte, ts int64, secret string, extra ...string) (int, string) {
 	h.t.Helper()
 	stamp := strconv.FormatInt(ts, 10)
 	m := hmac.New(sha256.New, []byte(secret))
@@ -101,6 +101,9 @@ func (h *harness) slack(slug, contentType string, body []byte, ts int64, secret 
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("X-Slack-Request-Timestamp", stamp)
 	req.Header.Set("X-Slack-Signature", "v0="+hex.EncodeToString(m.Sum(nil)))
+	for i := 0; i+1 < len(extra); i += 2 {
+		req.Header.Set(extra[i], extra[i+1])
+	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		h.t.Fatal(err)
@@ -166,6 +169,10 @@ func TestSlackBridgeEndToEnd(t *testing.T) {
 	}
 	if code, out := h.slack(slug, "application/json", ask, now, slackSecret); code != 200 || !strings.Contains(out, "duplicate") {
 		t.Fatalf("the same request again: %d %s", code, out)
+	}
+	// A header the signature does not cover does not make the replay a new delivery.
+	if code, out := h.slack(slug, "application/json", ask, now, slackSecret, "X-Gator-Delivery", "fresh-1"); code != 200 || !strings.Contains(out, "duplicate") {
+		t.Fatalf("a replay with a new delivery id: %d %s", code, out)
 	}
 	eng := ""
 	_ = h.pool.QueryRow(t.Context(), `SELECT id::text FROM conversations WHERE project_id = $1 AND kind = 'channel' AND name = 'eng'`, p.Id.String()).Scan(&eng)

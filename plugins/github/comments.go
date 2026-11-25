@@ -163,7 +163,7 @@ func (g *gh) answered(ctx context.Context, core *plugin.Core, p plugin.MessageHo
 	if r := []rune(body); len(r) > maxReply {
 		body = string(r[:maxReply]) + "…"
 	}
-	text := fmt.Sprintf("%s\n\n— %s via Gator · the whole thread: `%s`\n%s", neutralize(body), m.AuthorName, m.URL, replyMarker)
+	text := fmt.Sprintf("%s\n\n— %s via Gator · the whole thread: `%s`\n%s", neutralize(body), neutralize(m.AuthorName), m.URL, replyMarker)
 	id, err := g.client(core).Comment(ctx, number, text)
 	if err != nil {
 		return plugin.MessageHookResult{}, asPluginErr(err)

@@ -130,7 +130,7 @@ func TestAnAnswerComesBackAsAComment(t *testing.T) {
 		t.Fatalf("result %+v, posted %q", r, posted)
 	}
 	body := posted[0]
-	if strings.Contains(body, "@octocat") || strings.Contains(body, "fixes #3") || strings.Contains(body, " @acme/team") ||
+	if strings.Contains(body, "@reviewer") || strings.Contains(body, "@octocat") || strings.Contains(body, "fixes #3") || strings.Contains(body, " @acme/team") ||
 		!strings.Contains(body, replyMarker) || !strings.Contains(body, "gator://conversations/c?seq=4") {
 		t.Errorf("comment %q", body)
 	}

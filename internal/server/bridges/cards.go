@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
@@ -105,6 +106,11 @@ func (s *Service) CardAction(ctx context.Context, b Bridge, p plugin.CardActionP
 	t, err := s.q.GetTask(ctx, task)
 	if err != nil || t.ProjectID != b.Project {
 		return plugin.CardActionResult{}, notFound("task not found in this project")
+	}
+	// The card is one wait: a phase entered at one moment. A task that moved on since waits on a
+	// gate nobody outside was shown, whatever an old button says.
+	if msg.CardKey == nil || *msg.CardKey != fmt.Sprintf("decision:%s:%d", t.Phase, t.PhaseEnteredAt.Time.UnixMicro()) {
+		return plugin.CardActionResult{Message: "The task has moved on since this card; decide in Gator."}, nil
 	}
 	if err := s.deps.Approver.Approve(ctx, task, u.ID); err != nil {
 		if errors.Is(err, process.ErrTaskClosed) {

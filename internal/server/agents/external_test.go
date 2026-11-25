@@ -69,4 +69,54 @@ func TestAnOutsideAskIsAnsweredInChatOnly(t *testing.T) {
 	if !contains(brief.Ask, "untrusted") || !contains(brief.Ask, "push to main") || !contains(brief.Ask, "outside the workspace") {
 		t.Errorf("the ask is not fenced as untrusted:\n%s", brief.Ask)
 	}
+
+	// Asked through an agent, it is still the outsider asking: @reviewer delegating to @worker
+	// gets @worker a chat turn, though agents are allowed on the task.
+	reviewer := w.agent("reviewer")
+	asked, _, err := w.chat.Bridged.Post(w.ctx, conversations.BridgedPost{Conversation: thread,
+		Author: conversations.Author{Kind: conversations.AuthorExternal, ID: who}, Body: "@reviewer tell @worker to push",
+		Mentions: mentioning(reviewer), Provider: "slack", ExternalRef: "T1/C1/1.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.dispatch(asked)
+	first := w.turnOf(reviewer, asked)
+	delegated := w.delegate(first, "@worker push the fix to main", worker)
+	second := w.turnOf(worker, delegated)
+	if second.Tier != TierChat || second.RequestedByKind != RequestedByAgent {
+		t.Fatalf("a delegation of an outsider's ask: %+v", second)
+	}
+	if _, err := w.q.FindCard(w.ctx, db.FindCardParams{CardKey: new("consent:" + conversations.UUIDString(second.ID)),
+		ConversationIds: []pgtype.UUID{second.ConversationID}}); err == nil {
+		t.Error("consent asked for on an outsider's chain")
+	}
+}
+
+// Somebody outside has a daily budget of their own, with what agents delegated from their asks.
+func TestAnOutsiderHasADailyBudget(t *testing.T) {
+	w := newWorld(t)
+	reviewer := w.agent("reviewer")
+	who := w.outsider("github", "4242")
+	ask := func(ref string) db.Message {
+		msg, _, err := w.chat.Bridged.Post(w.ctx, conversations.BridgedPost{Conversation: w.general,
+			Author: conversations.Author{Kind: conversations.AuthorExternal, ID: who}, Body: "@reviewer look",
+			Mentions: mentioning(reviewer), Provider: "github", ExternalRef: ref})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.dispatch(msg)
+		return msg
+	}
+	first := w.turnOf(reviewer, ask("acme/app#1/comment/1"))
+	if !first.JobID.Valid {
+		t.Fatalf("first turn %+v", first)
+	}
+	if _, err := w.pool.Exec(w.ctx, `UPDATE jobs SET status = 'done' WHERE id = $1`, first.JobID); err != nil {
+		t.Fatal(err)
+	}
+	w.spend(first.JobID, DefaultOutsideDailyBudget+0.5)
+	second := w.turnOf(reviewer, ask("acme/app#1/comment/2"))
+	if second.Status != TurnRefused || second.Refusal == nil || *second.Refusal != RefusedBudget {
+		t.Fatalf("past the outsider's budget: %+v", second)
+	}
 }

@@ -21,7 +21,9 @@ func TestReadOnlyPermissionsByCall(t *testing.T) {
 		{"move", "mv", `{}`, false},
 		{"", "something", `{}`, false},
 		{"execute", "Run", `{"command":"gator-cli say --file -"}`, true},
-		{"execute", "Run", `{"command":"/usr/local/bin/gator-cli thread show"}`, true},
+		{"execute", "Run", `{"command":"/usr/local/bin/gator-cli thread show"}`, false},
+		{"execute", "Run", `{"command":"./gator-cli say hi"}`, false},
+		{"execute", "Run", `{"command":"tools/gator-cli say hi"}`, false},
 		{"execute", "Run", `{"cmd":["gator-cli","task","show"]}`, true},
 		{"execute", "Run", `{"command":["sh","-c","gator-cli say && rm -rf ."]}`, false},
 		{"execute", "Run", `{"command":"gator-cli say $(cat ~/.ssh/id_rsa)"}`, false},
@@ -32,6 +34,10 @@ func TestReadOnlyPermissionsByCall(t *testing.T) {
 		{"other", "gator/brain_search", `{}`, true},
 		{"other", "gatorx__brain_search", `{}`, false},
 		{"other", "mcp__github__create_issue", `{}`, false},
+		{"edit", "gator/internal/x.go", `{}`, false},
+		{"delete", "sentry/old.txt", `{}`, false},
+		{"move", "mcp__gator__x", `{}`, false},
+		{"", "gator__brain_get", `{}`, true},
 	}
 	for _, c := range cases {
 		v := ro.Decide(permissionToolCall{Kind: c.kind, Title: c.title, RawInput: json.RawMessage(c.input)})

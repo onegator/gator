@@ -410,9 +410,11 @@ func TestCardActionNeedsALinkedMember(t *testing.T) {
 	slack := Bridge{Project: p, Provider: "slack"}
 	conv := w.channel(slack, "T1/C1", "eng")
 	var task pgtype.UUID
-	if err := w.pool.QueryRow(w.ctx, `INSERT INTO tasks(project_id,kind,title,phase) VALUES($1,'feature','t','planning') RETURNING id`, p).Scan(&task); err != nil {
+	var entered time.Time
+	if err := w.pool.QueryRow(w.ctx, `INSERT INTO tasks(project_id,kind,title,phase) VALUES($1,'feature','t','planning') RETURNING id, phase_entered_at`, p).Scan(&task, &entered); err != nil {
 		t.Fatal(err)
 	}
+	cardKey := fmt.Sprintf("decision:planning:%d", entered.UnixMicro())
 	data, _ := json.Marshal(map[string]any{"state": "pending", "actions": []string{"approve", "rollback"},
 		"ref": map[string]any{"kind": "task", "id": conversations.UUIDString(task), "taskId": conversations.UUIDString(task)}})
 	var card db.Message
@@ -422,7 +424,7 @@ func TestCardActionNeedsALinkedMember(t *testing.T) {
 			return err
 		}
 		card, err = q.InsertMessage(w.ctx, db.InsertMessageParams{ConversationID: conv, Seq: seq, AuthorKind: "system", Kind: "card",
-			Body: "Waiting: approve the plan", CardType: new("decision"), Card: data, CardKey: new("decision:x"), Origin: []byte("{}"), Status: "final"})
+			Body: "Waiting: approve the plan", CardType: new("decision"), Card: data, CardKey: &cardKey, Origin: []byte("{}"), Status: "final"})
 		return err
 	})
 	if err != nil {
@@ -469,6 +471,13 @@ func TestCardActionNeedsALinkedMember(t *testing.T) {
 	link("T1/U3", member)
 	if r := press("T1/U3"); !r.Done || len(w.approve.calls) != 1 || !strings.HasSuffix(w.approve.calls[0], conversations.UUIDString(member.UserID)) {
 		t.Errorf("member approval %+v %v", r, w.approve.calls)
+	}
+	// A task that moved on is not approved by an old card.
+	if _, err := w.pool.Exec(w.ctx, `UPDATE tasks SET phase = 'design', phase_entered_at = now() WHERE id = $1`, task); err != nil {
+		t.Fatal(err)
+	}
+	if r := press("T1/U3"); r.Done || len(w.approve.calls) != 1 {
+		t.Errorf("an old card approved a new gate: %+v", r)
 	}
 	// Only the actions a bridge may draw: rolling back is done in Gator.
 	r, err := w.svc.CardAction(w.ctx, slack, plugin.CardActionParams{MessageID: conversations.UUIDString(card.ID), Action: "rollback",

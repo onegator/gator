@@ -286,3 +286,46 @@ func ownPolicy(a db.Agent) Policy {
 
 // PolicyOf is an agent's own policy.
 func PolicyOf(a db.Agent) Policy { return ownPolicy(a) }
+
+// outsideSpender answers what somebody outside asked for spent, and the budget an A2A client was
+// given. *db.Queries is one.
+type outsideSpender interface {
+	ExternalCostSince(ctx context.Context, arg db.ExternalCostSinceParams) (float64, error)
+	GetA2AClientByIdentity(ctx context.Context, identityID pgtype.UUID) (db.A2aClient, error)
+}
+
+// DefaultOutsideDailyBudget is what one outside identity (a Slack user, a GitHub commenter) may have
+// agents spend in a UTC day, with every turn delegated from its asks; an A2A client has its own.
+const DefaultOutsideDailyBudget = 2.0
+
+// OutsideBudget refuses a turn somebody outside asked for once what they asked for today has spent
+// their budget: anyone who can comment on a public repository can ask, and nobody pays for them.
+type OutsideBudget struct {
+	Spent   outsideSpender
+	Default float64
+	Now     func() time.Time
+}
+
+// Check implements Guard.
+func (g OutsideBudget) Check(ctx context.Context, r Request) (*Refusal, error) {
+	if r.RequestedByKind != RequestedByExternal || !r.RequestedBy.Valid {
+		return nil, nil // a delegation is held by its chain's budget, and counted for the outsider
+	}
+	limit := g.Default
+	if c, err := g.Spent.GetA2AClientByIdentity(ctx, r.RequestedBy); err == nil {
+		limit = c.DailyBudgetUsd
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	now := time.Now
+	if g.Now != nil {
+		now = g.Now
+	}
+	day := now().UTC().Truncate(24 * time.Hour)
+	spent, err := g.Spent.ExternalCostSince(ctx, db.ExternalCostSinceParams{IdentityID: r.RequestedBy, Since: pgtype.Timestamptz{Time: day, Valid: true}})
+	if err != nil || spent < limit {
+		return nil, err
+	}
+	return &Refusal{Code: RefusedBudget, Say: fmt.Sprintf(
+		"@%s does not answer this today: what was asked from outside spent $%.2f of its $%.2f a day.", r.Agent.Handle, spent, limit)}, nil
+}

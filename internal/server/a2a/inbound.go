@@ -385,7 +385,7 @@ func (in *Inbound) send(ctx context.Context, c rpcCall, raw json.RawMessage) (an
 	}
 	posted, err := in.bridge.Post(ctx, b, plugin.MessagePostParams{ConversationID: conv.ConversationID, Body: text,
 		Author:      plugin.ExternalAuthor{ExternalID: "client/" + c.client.Name, DisplayName: c.client.Name},
-		ExternalRef: "client/" + c.client.Name + "/" + p.Message.MessageID, Mentions: []string{c.agent.Handle}})
+		ExternalRef: "client/" + c.client.Name + "/" + c.agent.Handle + "/" + p.Message.MessageID, Mentions: []string{c.agent.Handle}})
 	if err != nil {
 		return nil, internal(err)
 	}

@@ -33,13 +33,18 @@ SELECT * FROM a2a_clients WHERE project_id = $1 ORDER BY revoked_at IS NOT NULL,
 UPDATE a2a_clients SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 RETURNING *;
 
 -- name: ExternalCostSince :one
--- What the turns somebody outside asked for spent since a moment, or may still spend (jobs queued
--- and running at their cap).
-SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id JOIN agent_turns t ON t.id = j.turn_id
-                  WHERE t.requested_by_kind = 'external' AND t.requested_by = sqlc.arg(identity_id) AND u.created_at >= sqlc.arg(since)), 0)
-      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j JOIN agent_turns t ON t.id = j.turn_id
-                  WHERE t.requested_by_kind = 'external' AND t.requested_by = sqlc.arg(identity_id)
-                    AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8;
+-- What somebody outside asked for spent since a moment, or may still spend: the turns they asked for
+-- and every turn agents delegated from those, finished jobs as they cost, jobs queued and running
+-- at their cap.
+WITH RECURSIVE asked AS (
+    SELECT t.id FROM agent_turns t WHERE t.requested_by_kind = 'external' AND t.requested_by = sqlc.arg(identity_id)
+    UNION
+    SELECT c.id FROM agent_turns c JOIN asked a ON c.parent_turn_id = a.id
+)
+SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
+                  WHERE j.turn_id IN (SELECT id FROM asked) AND u.created_at >= sqlc.arg(since)), 0)
+      + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
+                  WHERE j.turn_id IN (SELECT id FROM asked) AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8;
 
 -- name: CreateA2ATask :one
 INSERT INTO a2a_tasks (client_id, project_id, agent_id, message_id, context_id)
@@ -71,3 +76,6 @@ WHERE turn_id = sqlc.arg(turn_id);
 
 -- name: GetA2ACall :one
 SELECT * FROM a2a_calls WHERE turn_id = $1;
+
+-- name: GetA2AClientByIdentity :one
+SELECT * FROM a2a_clients WHERE identity_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1;

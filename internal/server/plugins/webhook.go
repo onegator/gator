@@ -66,12 +66,14 @@ func (h *Host) webhook(w http.ResponseWriter, r *http.Request) {
 		hookJSON(w, http.StatusBadRequest, map[string]string{"error": "unreadable body"})
 		return
 	}
+	// A plugin that names a delivery header has its sender's id (or X-Gator-Delivery). One that
+	// names none (Slack) is signed over the body only: a header the signature does not cover could
+	// make a replay look new, so its delivery is its body.
 	delivery := ""
 	if m.Webhook != nil && m.Webhook.DeliveryHeader != "" {
-		delivery = r.Header.Get(m.Webhook.DeliveryHeader)
-	}
-	if delivery == "" {
-		delivery = r.Header.Get("X-Gator-Delivery")
+		if delivery = r.Header.Get(m.Webhook.DeliveryHeader); delivery == "" {
+			delivery = r.Header.Get("X-Gator-Delivery")
+		}
 	}
 	if delivery == "" {
 		sum := sha256.Sum256(body)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -131,6 +132,11 @@ func (r *Remote) Create(ctx context.Context, p auth.Principal, project pgtype.UU
 	if err != nil {
 		return db.Agent{}, err
 	}
+	// The credential goes where the card says the agent is; a card that sends it to another host
+	// than its own is not taken.
+	if c, e := url.Parse(cardURL); e != nil || !strings.EqualFold(c.Host, hostOf(card.URL)) {
+		return db.Agent{}, fmt.Errorf("%w: the card's endpoint is on another host than the card", ErrInvalid)
+	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = oneLine(card.Name, 80)
@@ -163,6 +169,14 @@ func (r *Remote) Create(ctx context.Context, p auth.Principal, project pgtype.UU
 		return db.Agent{}, fmt.Errorf("%w: @%s is taken where people would mention it", ErrConflict, in.Handle)
 	}
 	return a, err
+}
+
+func hostOf(s string) string {
+	u, err := url.Parse(s)
+	if err != nil {
+		return ""
+	}
+	return u.Host
 }
 
 // oneLine keeps one line of at most n characters of an outside text.
