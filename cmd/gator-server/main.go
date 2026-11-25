@@ -10,21 +10,32 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/onegator/gator/internal/server/a2a"
 	"github.com/onegator/gator/internal/server/admin"
+	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/backup"
+	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/brain/curator"
+	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/knowledge"
+	"github.com/onegator/gator/internal/server/marketplace"
+	"github.com/onegator/gator/internal/server/mcp"
+	"github.com/onegator/gator/internal/server/mcpremote"
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -48,7 +59,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gator-server <serve|migrate|migrate-down|admin create-admin <email> [name]|admin issue-runner-token <name>|backup now|restore <file>|secrets new-key [id]|secrets check|version>")
+		return errors.New("usage: gator-server <serve|migrate|migrate-down|admin create-admin <email> [name]|admin issue-runner-token <name>|backup now|restore <file>|secrets new-key [id]|secrets check|marketplace …|version>")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -73,6 +84,8 @@ func run(args []string) error {
 		return serve(ctx)
 	case "knowledge":
 		return knowledgeCmd(args[1:])
+	case "marketplace":
+		return marketplaceCmd(args[1:])
 	case "secrets":
 		return secretsCmd(args[1:])
 	case "admin":
@@ -142,7 +155,38 @@ func serve(ctx context.Context) error {
 	// The catalogue of things Gator does for a project by itself once a person switches them on.
 	autos := automations.New(db.Pool, svc, hub, log)
 	go autos.Run(ctx)
-	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos}
+	// People talk in a project's channels; the consumer keeps them in step with the project.
+	// Files people send are kept in a bucket or a directory, or not at all.
+	blobs, err := conversations.BlobStoreFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if blobs == nil {
+		log.Warn("attachments not configured (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*)")
+	}
+	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs,
+		// What the Brain was proposed from a task, one card a day in its thread.
+		CardSources: []conversations.CardSource{curator.NewCards(dbq.New(db.Pool))}})
+	// What the team and its agents know: one store, read under the same rules everywhere.
+	knows := brain.New(db.Pool, brain.Deps{Conversations: chat.Access})
+	// Jobs are handed their part of it, and the knowledge shelves are read from it.
+	svc.UseBrain(knows.Packer, knows.Legacy)
+	// Plugins propose to the Brain too (brain.propose), as proposals a person approves.
+	// Remote MCP servers agents reach through Gator's proxy; their credentials stay here, and one
+	// that signs in with OAuth is connected through the plugins' /connect/callback.
+	// The server's own requests to remote servers, providers, registries and downloads stay off
+	// private addresses unless the operator says otherwise.
+	outbound := netguard.FromEnv(os.Getenv)
+	remote := mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log, PublicURL: cfg.PublicURL, Apps: oauthApps, Net: outbound})
+	// Messaging plugins (Slack, GitHub comments) bring outside conversations in and mirror ours out,
+	// through the core's rules: their own project, what they connected, untrusted words, no echo.
+	bridge := bridges.New(db.Pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access,
+		Roles: auth.Authorizer{Pool: db.Pool}, Approver: svc, Linkers: plugins.Linkers{Pool: db.Pool}})
+	go bridge.Run(ctx, time.Hour)
+	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins,
+		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
+		Extensions: []plugins.Extension{{Capability: bridge.Capability(), Methods: bridge.Methods()}},
+		EventHooks: []plugins.EventHook{bridge}, AllowPrivateOutbound: outbound.AllowPrivate}
 	pluginCfg.LoadEnv()
 	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
@@ -155,11 +199,11 @@ func serve(ctx context.Context) error {
 	}
 	notifier := notify.New(db.Pool, svc, sender, hub, log, 0)
 	// Finished work proposes what the product learned; a person approves it.
-	curator := product.NewCurator(db.Pool, hub, log, 0)
+	learner := product.NewCuratorFor(db.Pool, knows.Service, hub, log, 0)
 	// Once a project has learned more than a prompt can carry, a curator proposes a shorter
 	// version of it; the originals are archived, never deleted.
-	condenser := product.NewCondenser(curator, svc, 0, 0)
-	go curator.Run(ctx)
+	condenser := product.NewCondenser(learner, svc, 0, 0)
+	go learner.Run(ctx)
 
 	bc := backup.LoadConfig()
 	scorecards := quality.New(db.Pool, svc, pluginHost, log)
@@ -191,34 +235,65 @@ func serve(ctx context.Context) error {
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
 		Preparer:       pluginHost,
 		Judge:          pluginHost,
+		// An automation's work is its agent's: error triage has @triage on the incident.
+		Authors: automations.Authors{},
+		// What every job is handed of the Brain, and cites of it, is recorded.
+		Brain: knows.Citations,
 		// Every job gets an identity of its own to talk back with, revoked when it ends.
 		AgentTokens: auth.Tokens{Pool: db.Pool},
 		// A cloud job no connected runner can take gets a machine of its own, when configured.
 		Provisioner: cloud.Provisioner, RunnerTokens: auth.Tokens{Pool: db.Pool},
 		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
+
+	go chat.Consumer(hub, log, 0).Run(ctx)
+	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
+	// within the limits of a chain of delegations and the project's budget.
+	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Roles: auth.Authorizer{Pool: db.Pool}, Log: log})
+	runnerMgr.UseBriefer(team.Briefer)
+	// Agents outside Gator, through A2A: a remote agent's turn is a task sent to its card's
+	// endpoint (through netguard), and the project's clients call the agents it exposes at /a2a.
+	farAgents := a2a.NewRemote(a2a.RemoteDeps{Queries: dbq.New(db.Pool), Keys: keyring, Client: a2a.Client{HTTP: outbound.Client(2 * time.Minute)},
+		Roles: auth.Authorizer{Pool: db.Pool}, Voice: team.Voice, Open: chat.Access, Packer: chat.Packer, Log: log})
+	team.AnswerElsewhere(agents.KindRemote, farAgents)
+	go farAgents.Run(ctx, 2*time.Second)
+	a2aIn := a2a.NewInbound(a2a.InboundDeps{Pool: db.Pool, Bridge: bridge, Tokens: auth.Tokens{Pool: db.Pool},
+		Roles: auth.Authorizer{Pool: db.Pool}, PublicURL: cfg.PublicURL})
+	go team.Consumer(hub, log, 0).Run(ctx)
+	go team.Streamer(hub, log, 0).Run(ctx)
+	go team.Sweeper(log).Run(ctx, time.Minute)
 	go runnerMgr.Run(ctx)
 	if os.Getenv("GATOR_AUTOPILOT") != "0" {
 		go runnerMgr.RunAutopilot(ctx)
 		log.Info("autopilot on: entering a runner phase queues a job")
 	}
-
-	// People talk in a project's channels; the consumer keeps them in step with the project.
-	// Files people send are kept in a bucket or a directory, or not at all.
-	blobs, err := conversations.BlobStoreFromEnv(os.Getenv)
-	if err != nil {
-		return err
-	}
-	if blobs == nil {
-		log.Warn("attachments not configured (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*)")
-	}
-	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs})
-	go chat.Consumer(hub, log, 0).Run(ctx)
 	if chat.Attachments != nil {
 		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
 	}
 	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
 	go notifier.WithChat(chat.Access).Run(ctx)
+
+	// What a thread settled is proposed to the Brain once it goes quiet or its task closes.
+	curate := curator.New(dbq.New(db.Pool), curator.PoolTx(db.Pool), team.Curations, chat.Packer, chat.Access, knows.Service, log)
+	curations := conversations.NewCursorConsumer("brain_curator", db.Pool, hub, log, 0)
+	curations.On(curate, curate.Events()...)
+	go curations.Run(ctx)
+	go curate.Run(ctx, curator.DefaultEvery)
+	// A person's focus is worked out from their work, and theirs alone.
+	go knows.Focus.Run(ctx, time.Hour)
+
+	// Agents, skills, integrations and processes come from registries: Gator's own, fetched now so
+	// a fresh server has a catalogue, and the company's. Nothing installed updates by itself.
+	// Native plugins from a registry are built for this platform, checked against their sha256 and
+	// kept next to the bundled ones, where the catalogue does not look.
+	market := marketplace.New(db.Pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: db.Pool},
+		Plugins: pluginHost, PluginDir: marketplacePluginDir(pluginCfg.CatalogueDir),
+		Net: outbound, AllowFileDownloads: os.Getenv("GATOR_MARKETPLACE_ALLOW_FILE") == "1"})
+	go func() {
+		if err := market.Start(ctx, marketplace.BuiltinFromEnv(os.Getenv)); err != nil && ctx.Err() == nil {
+			log.Warn("marketplace: Gator's registry could not be fetched; the catalogue waits for a fetch", "err", err)
+		}
+	}()
 
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
@@ -228,6 +303,20 @@ func serve(ctx context.Context) error {
 		PublicURL: cfg.PublicURL,
 		// Channels, DMs and threads, with the same access rules for the API, the WebSocket and search.
 		Conversations: chat,
+		// The agents who answer in them.
+		Agents: team,
+		Brain:  knows,
+		// Packages from registries, installed with the permissions a person accepted.
+		Marketplace: market,
+		// Remote MCP servers agents reach through the proxy; their credentials stay here.
+		Remote: remote,
+		// Links between people and their accounts on the bridges.
+		Bridges: bridge,
+		// Agents outside Gator, both ways.
+		A2A: &a2a.Module{Remote: farAgents, Inbound: a2aIn},
+		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
+		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
+			Talk: team.Talk, Tasks: svc, Log: log}),
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:
@@ -252,8 +341,12 @@ func serve(ctx context.Context) error {
 	root.Mount("/", apiServer.Router())
 	// The only public endpoint: plugin webhooks. Plugins verify the sender's signature.
 	root.Mount("/hooks", pluginHost.Hooks())
+	// A2A: the cards of the agents projects expose, and their JSON-RPC endpoint for the projects'
+	// clients, whose tokens reach nothing else.
+	root.Mount(auth.A2APath, auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log)(a2aIn.Handler()))
 	// Where a provider sends the browser back after "Connect GitHub"; the state is the proof.
-	root.Mount("/connect", pluginHost.ConnectHandler())
+	// A browser signed in to Gator must be the person who started the connection.
+	root.Mount("/connect", auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log)(pluginHost.ConnectHandler()))
 	adminRouter := chi.NewRouter()
 	adminRouter.Use(auth.Authenticate(apiServer.Tokens, cfg.DevAuth, log), auth.RequireAuth, auth.RequireWorkspaceAdmin)
 	adminRouter.Mount("/", (&admin.Handler{Pool: db.Pool, Process: svc}).Router())
@@ -281,6 +374,30 @@ func serve(ctx context.Context) error {
 		}
 		return httpErr
 	}
+}
+
+// marketplacePluginDir is where native plugins from the marketplace go: GATOR_PLUGIN_DIR/marketplace,
+// or nowhere when the server has no plugin directory.
+func marketplacePluginDir(catalogue string) string {
+	if catalogue == "" {
+		return ""
+	}
+	return filepath.Join(catalogue, "marketplace")
+}
+
+// oauthApps are the server's OAuth apps for remote MCP servers, from the environment as plugins'
+// are (GATOR_<PROVIDER>_CLIENT_ID, _CLIENT_SECRET, _SCOPES), each usable only at the authorization
+// server hosts the operator lists for it (GATOR_<PROVIDER>_OAUTH_HOSTS); without them, remote
+// servers register clients of their own.
+func oauthApps(provider string) (mcpremote.OAuthApp, bool) {
+	c, ok := plugins.OAuthClientFromEnv(provider)
+	app := mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret, Scopes: c.Scopes}
+	for h := range strings.SplitSeq(os.Getenv("GATOR_"+strings.ToUpper(strings.ReplaceAll(provider, "-", "_"))+"_OAUTH_HOSTS"), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			app.Hosts = append(app.Hosts, h)
+		}
+	}
+	return app, ok && len(app.Hosts) > 0
 }
 
 func parseLevel(s string) slog.Level {

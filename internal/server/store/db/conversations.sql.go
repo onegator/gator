@@ -430,6 +430,26 @@ func (q *Queries) JoinDefaultChannel(ctx context.Context, arg JoinDefaultChannel
 	return err
 }
 
+const keyShareProject = `-- name: KeyShareProject :exec
+SELECT 1 FROM projects WHERE id = $1 FOR KEY SHARE
+`
+
+// Taken before a conversation's own locks when a transaction will insert rows that point at the
+// project: the same order a deletion of the project cascades in, so the two cannot deadlock.
+func (q *Queries) KeyShareProject(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, keyShareProject, id)
+	return err
+}
+
+const keyShareTask = `-- name: KeyShareTask :exec
+SELECT 1 FROM tasks WHERE id = $1 FOR KEY SHARE
+`
+
+func (q *Queries) KeyShareTask(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, keyShareTask, id)
+	return err
+}
+
 const linkTaskConversation = `-- name: LinkTaskConversation :one
 UPDATE conversations SET kind = 'task', task_id = $1, project_id = $2
 WHERE id = $3 AND kind = 'thread'
@@ -622,6 +642,54 @@ func (q *Queries) ListMemberConversations(ctx context.Context, arg ListMemberCon
 			&i.RootArchived,
 			&i.RootRole,
 			&i.Joined,
+			&i.LastReadSeq,
+			&i.Notify,
+			&i.UnreadMentions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMembershipsIn = `-- name: ListMembershipsIn :many
+SELECT cm.conversation_id, cm.last_read_seq, cm.notify,
+       (SELECT count(*) FROM message_mentions mm JOIN messages m ON m.id = mm.message_id
+        WHERE m.conversation_id = cm.conversation_id AND mm.member_kind = 'user' AND mm.member_id = $1
+          AND m.seq > cm.last_read_seq AND m.deleted_at IS NULL)::bigint AS unread_mentions
+FROM conversation_members cm
+WHERE cm.member_kind = 'user' AND cm.member_id = $1 AND cm.conversation_id = ANY($2::uuid[])
+`
+
+type ListMembershipsInParams struct {
+	UserID          pgtype.UUID   `json:"user_id"`
+	ConversationIds []pgtype.UUID `json:"conversation_ids"`
+}
+
+type ListMembershipsInRow struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	LastReadSeq    int64       `json:"last_read_seq"`
+	Notify         string      `json:"notify"`
+	UnreadMentions int64       `json:"unread_mentions"`
+}
+
+// A person's standing in several conversations at once — joined, read up to, unread mentions — for
+// a page of results (search) without a query per row.
+func (q *Queries) ListMembershipsIn(ctx context.Context, arg ListMembershipsInParams) ([]ListMembershipsInRow, error) {
+	rows, err := q.db.Query(ctx, listMembershipsIn, arg.UserID, arg.ConversationIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMembershipsInRow
+	for rows.Next() {
+		var i ListMembershipsInRow
+		if err := rows.Scan(
+			&i.ConversationID,
 			&i.LastReadSeq,
 			&i.Notify,
 			&i.UnreadMentions,

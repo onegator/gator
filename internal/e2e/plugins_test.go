@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/plugins"
 )
 
 var echo struct {
@@ -389,5 +390,25 @@ func TestTogglingAPluginKeepsItsSettings(t *testing.T) {
 	}
 	if !slices.Contains(v.SecretsSet, "token") {
 		t.Fatalf("the toggle lost the secret: %+v", v.SecretsSet)
+	}
+}
+
+// A delivery is remembered for DeliveryMemory, then forgotten by the host's janitor.
+func TestOldDeliveriesAreForgotten(t *testing.T) {
+	h := newHarness(t)
+	p := h.echoProject(map[string]any{"greeting": "hi"})
+	body := jsonBody(map[string]any{"id": "77", "title": "Old"})
+	if code, _ := h.hook(p.slug, "old-1", body, nil); code != 200 {
+		t.Fatal(code)
+	}
+	if _, err := h.pool.Exec(t.Context(), `UPDATE webhook_deliveries SET received_at = now() - interval '31 days' WHERE delivery_id = 'old-1'`); err != nil {
+		t.Fatal(err)
+	}
+	h.plugins.PruneDeliveries(t.Context(), time.Now().Add(-plugins.DeliveryMemory))
+	if n := h.count(`SELECT count(*) FROM webhook_deliveries WHERE delivery_id = 'old-1'`); n != 0 {
+		t.Fatalf("%d old deliveries left", n)
+	}
+	if code, out := h.hook(p.slug, "old-1", body, nil); code != 200 || out["status"] != "ok" {
+		t.Fatalf("a forgotten delivery: %d %v", code, out)
 	}
 }

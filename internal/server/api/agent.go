@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/jobscope"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -21,8 +24,10 @@ import (
 // Every call here is about the job's own task, and every call is written into the job's events,
 // where a person watching the work sees it.
 
-// agentJob resolves the job behind a job token, or answers the caller and returns false.
-func (s *Server) agentJob(w http.ResponseWriter, r *http.Request) (db.Job, bool) {
+// agentJob resolves the job behind a job token for one command, or answers the caller and
+// returns false. What a job may call is its kind's (scopeOf), checked here on the server: the
+// runner limits the agent's tools, but the token is what reaches Gator.
+func (s *Server) agentJob(w http.ResponseWriter, r *http.Request, cmd agentCommand) (db.Job, bool) {
 	p, ok := auth.FromContext(r.Context())
 	if !ok || p.Kind != auth.KindJob || !p.JobID.Valid {
 		writeError(w, http.StatusForbidden, "this is for a job's own identity", "forbidden")
@@ -33,11 +38,13 @@ func (s *Server) agentJob(w http.ResponseWriter, r *http.Request) (db.Job, bool)
 		s.fail(w, err)
 		return db.Job{}, false
 	}
-	switch job.Status {
-	case "queued", "leased", "running", "stalled":
-	default:
+	if !jobscope.Active(job.Status) {
 		// The token is revoked when a job ends, so this is a race, not a hole. Say so plainly.
 		writeError(w, http.StatusForbidden, "this job has finished", "forbidden")
+		return db.Job{}, false
+	}
+	if !scopeOf(job)[cmd] {
+		writeError(w, http.StatusForbidden, "a "+job.Kind+" job may not "+string(cmd), "forbidden")
 		return db.Job{}, false
 	}
 	return job, true
@@ -67,7 +74,7 @@ func taskLink(id pgtype.UUID) string { return "gator://tasks/" + toUUID(id).Stri
 
 // AgentTask answers what this job is about.
 func (s *Server) AgentTask(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdTaskShow)
 	if !ok {
 		return
 	}
@@ -97,7 +104,7 @@ func (s *Server) AgentTask(w http.ResponseWriter, r *http.Request) {
 // AgentBlocked stops the task with the agent's reason. An agent that cannot go on should say
 // so: the alternative is an hour of guessing, paid for, ending in a report nobody can use.
 func (s *Server) AgentBlocked(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdTaskBlocked)
 	if !ok {
 		return
 	}
@@ -114,7 +121,7 @@ func (s *Server) AgentBlocked(w http.ResponseWriter, r *http.Request) {
 // inbox the same way every other decision does — and, like every other block, a phase timeout
 // eventually calls it out rather than letting it wait for ever.
 func (s *Server) AgentQuestion(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdAsk)
 	if !ok {
 		return
 	}
@@ -153,7 +160,7 @@ func (s *Server) blockOnAgent(w http.ResponseWriter, r *http.Request, job db.Job
 // AgentPutArtifact records a document for the job's phase before the job ends, so work survives
 // a job that later fails.
 func (s *Server) AgentPutArtifact(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdArtifactPut)
 	if !ok {
 		return
 	}
@@ -181,7 +188,7 @@ func (s *Server) AgentPutArtifact(w http.ResponseWriter, r *http.Request) {
 // decides what the product knows about itself, and an agent reading outside words must not be
 // able to write into the documents every later prompt carries.
 func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdProductPropose)
 	if !ok {
 		return
 	}
@@ -194,12 +201,22 @@ func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "an entry needs a title and content", "invalid")
 		return
 	}
-	entry, err := db.New(s.Pool).CreateProductEntry(r.Context(), db.CreateProductEntryParams{
-		ProjectID: job.ProjectID, Kind: string(in.Kind), Title: title, Content: content,
-		Status: "proposed", SourceTaskID: job.TaskID, CreatedByKind: "runner",
-	})
+	reader, ok := s.jobReader(w, r, job)
+	if !ok {
+		return
+	}
+	d := brain.Draft{Scope: brain.ScopeProject, Project: job.ProjectID, Kind: string(in.Kind), Title: title, Content: content, Task: job.TaskID}
+	if s.Agents != nil {
+		origin, err := s.Agents.Talk.OriginOf(r.Context(), job)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		d.Conversation, d.Private = origin.Conversation, origin.Private
+	}
+	entry, err := s.Brain.Service.Write(r.Context(), reader, d)
 	if err != nil {
-		s.fail(w, err)
+		s.failBrain(w, err)
 		return
 	}
 	s.note(r, job, "product propose", map[string]any{"kind": string(in.Kind), "title": title})
@@ -209,7 +226,7 @@ func (s *Server) AgentProposeProduct(w http.ResponseWriter, r *http.Request) {
 
 // AgentCatalogue answers what the project is made of.
 func (s *Server) AgentCatalogue(w http.ResponseWriter, r *http.Request) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdCatalogueShow)
 	if !ok {
 		return
 	}
@@ -224,7 +241,7 @@ func (s *Server) AgentCatalogue(w http.ResponseWriter, r *http.Request) {
 
 // AgentKnowledge searches this project's documents for words the job's package did not carry.
 func (s *Server) AgentKnowledge(w http.ResponseWriter, r *http.Request, params gen.AgentKnowledgeParams) {
-	job, ok := s.agentJob(w, r)
+	job, ok := s.agentJob(w, r, cmdKnowledge)
 	if !ok {
 		return
 	}
@@ -237,16 +254,49 @@ func (s *Server) AgentKnowledge(w http.ResponseWriter, r *http.Request, params g
 	if params.Limit != nil && *params.Limit > 0 {
 		limit = *params.Limit
 	}
-	rows, err := db.New(s.Pool).SearchProjectDocuments(r.Context(), db.SearchProjectDocumentsParams{
-		ProjectID: job.ProjectID, Query: query, MaxRows: int32(limit)})
-	if err != nil {
-		s.fail(w, err)
+	reader, ok := s.jobReader(w, r, job)
+	if !ok {
 		return
 	}
-	out := make([]gen.AgentDocument, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, gen.AgentDocument{Kind: row.Kind, Title: fmt.Sprint(row.Title), Body: row.Content})
+	hits, err := s.Brain.Finder.Find(r.Context(), reader, brain.Query{Text: query, Project: job.ProjectID, Limit: limit})
+	if err != nil {
+		s.failBrain(w, err)
+		return
+	}
+	if err := s.Brain.Citations.Used(r.Context(), job.ID, brain.HowSearched, brain.IDs(hits)); err != nil {
+		s.Log.Warn("recording what an agent looked up", "job", job.ID, "err", err)
+	}
+	out := make([]gen.AgentDocument, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, toAgentDocument(h.Entry))
 	}
 	s.note(r, job, "knowledge search", map[string]any{"query": query, "found": len(out)})
 	writeJSON(w, http.StatusOK, out)
+}
+
+// jobReader is the job as the Brain's rules see it: a member of its project, lent the private
+// context of the person its turn acts for.
+func (s *Server) jobReader(w http.ResponseWriter, r *http.Request, job db.Job) (brain.Reader, bool) {
+	if s.Brain == nil {
+		writeError(w, http.StatusServiceUnavailable, "the Brain is not enabled on this server", "unavailable")
+		return brain.Reader{}, false
+	}
+	reader, err := s.Brain.Readers.ForJob(r.Context(), job)
+	if err != nil {
+		s.fail(w, err)
+		return brain.Reader{}, false
+	}
+	return reader, true
+}
+
+// toAgentDocument is an entry as gator-cli knowledge search has always shown it: knowledge for a
+// convention, product for the product context, the kind for the rest.
+func toAgentDocument(e db.BrainEntry) gen.AgentDocument {
+	switch {
+	case e.Kind == brain.KindConvention && e.Topic != nil:
+		return gen.AgentDocument{Kind: "knowledge", Title: *e.Topic + ": " + e.Title, Body: e.Content}
+	case e.Scope == brain.ScopeProject && slices.Contains(brain.ProductKinds, e.Kind):
+		return gen.AgentDocument{Kind: "product", Title: brain.ProductKind(e.Kind) + ": " + e.Title, Body: e.Content}
+	}
+	return gen.AgentDocument{Kind: e.Kind, Title: e.Title, Body: e.Content}
 }

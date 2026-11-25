@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +130,41 @@ func TestAnImpossibleWorkspaceProcessIsRefused(t *testing.T) {
 	bad := map[string]any{"templates": map[string]any{"chore": map[string]any{"kind": "chore", "phases": []any{}}}}
 	if code := h.do("PUT", "/workspace/process", gen.ProjectConfig{Config: bad}, nil); code != 400 {
 		t.Fatalf("a template with no phases should be refused, got %d", code)
+	}
+}
+
+// {} is not a configuration, nor a switch: a body without a required field is 400, never a stored
+// null or a silent false.
+func TestRequiredFieldsAreRequired(t *testing.T) {
+	h := newHarness(t)
+	var p gen.Project
+	h.do("POST", "/projects", gen.NewProject{Slug: fmt.Sprintf("rq%d", time.Now().UnixNano()), Name: "Required"}, &p)
+	raw := func(method, path, body string) int {
+		t.Helper()
+		req, _ := http.NewRequest(method, h.srv.URL+"/api/v1"+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+h.admin)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	for _, c := range []struct{ method, path, body string }{
+		{"PUT", "/workspace/process", `{}`},
+		{"PUT", "/workspace/process", `{"config": null}`},
+		{"PUT", "/projects/" + p.Id.String() + "/config", `{}`},
+		{"PUT", "/me/brain/focus", `{}`},
+		{"PUT", "/projects/" + p.Id.String() + "/automations/pr_review", `{}`},
+	} {
+		if code := raw(c.method, c.path, c.body); code != 400 {
+			t.Errorf("%s %s %s: %d", c.method, c.path, c.body, code)
+		}
+	}
+	var ws gen.ProjectConfig
+	h.do("GET", "/workspace/process", nil, &ws)
+	if ws.Config == nil {
+		t.Error("the workspace's process was replaced by null")
 	}
 }

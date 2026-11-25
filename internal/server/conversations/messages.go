@@ -81,6 +81,9 @@ type View struct {
 	ThreadID    pgtype.UUID
 	Reactions   []Reaction
 	Attachments []db.MessageAttachment
+	// Turn is the agent's turn this message is the answer of, with what it cost: what a client
+	// shows under the answer. Nil for anything else.
+	Turn *db.ListTurnsOfRepliesRow
 }
 
 // Reaction is one emoji on a message and who added it.
@@ -133,7 +136,7 @@ func (m *Messages) Post(ctx context.Context, p auth.Principal, conversation pgty
 		return Posted{}, err
 	}
 	var msg db.Message
-	err = store.InTx(ctx, m.pool, func(q *db.Queries) error {
+	err = store.InTxRetry(ctx, m.pool, func(q *db.Queries) error {
 		seq, err := q.NextMessageSeq(ctx, conv.ID)
 		if err != nil {
 			return err
@@ -191,18 +194,34 @@ func (d Draft) validate() error {
 	return nil
 }
 
-// readers keeps the mentioned people who may read the conversation, once each.
+// readers keeps the mentioned members who may be asked here, once each: people who may read the
+// conversation, and agents of its project. Mentioning an agent is asking it.
 func (m *Messages) readers(ctx context.Context, conv db.Conversation, mentions []Member) ([]Member, error) {
 	seen := map[[16]byte]bool{}
 	var out []Member
 	for _, mm := range mentions {
-		if mm.Kind != MemberUser {
-			return nil, invalid("only people are mentioned until agents join conversations")
+		if mm.Kind != MemberUser && mm.Kind != MemberAgent {
+			return nil, invalid("a mention names a person or an agent")
 		}
 		if !mm.ID.Valid || seen[mm.ID.Bytes] {
 			continue
 		}
 		seen[mm.ID.Bytes] = true
+		if mm.Kind == MemberAgent {
+			root, err := m.access.root(ctx, conv)
+			if err != nil {
+				return nil, err
+			}
+			ok, err := agentVisible(ctx, db.New(m.pool), root.ProjectID, mm.ID)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, invalid("no such agent in this conversation's project")
+			}
+			out = append(out, mm)
+			continue
+		}
 		ok, err := m.access.UserCanRead(ctx, conv, mm.ID)
 		if err != nil {
 			return nil, err
@@ -234,11 +253,19 @@ func afterPost(ctx context.Context, q *db.Queries, conv db.Conversation, msg db.
 			return err
 		}
 	}
-	ids := make([]pgtype.UUID, 0, len(mentioned))
+	people, agents := []pgtype.UUID{}, []pgtype.UUID{}
 	for _, mm := range mentioned {
-		ids = append(ids, mm.ID)
+		if mm.Kind == MemberAgent {
+			agents = append(agents, mm.ID)
+		} else {
+			people = append(people, mm.ID)
+		}
 	}
-	return emit(ctx, q, EventMessagePosted, conv.ID, messagePayload(msg, map[string]any{"mentions": uuidStrings(ids)}), ids...)
+	extra := map[string]any{"mentions": uuidStrings(people)}
+	if len(agents) > 0 {
+		extra["agents"] = uuidStrings(agents)
+	}
+	return emit(ctx, q, EventMessagePosted, conv.ID, messagePayload(msg, extra), people...)
 }
 
 // postSystemText writes a line Gator says by itself into conv, in the caller's transaction.
@@ -412,6 +439,13 @@ func describe(ctx context.Context, q *db.Queries, rows []db.Message) ([]View, er
 	}
 	if err := describeAttachments(ctx, q, ids, views, at); err != nil {
 		return nil, err
+	}
+	turns, err := q.ListTurnsOfReplies(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range turns {
+		views[at[t.ReplyMessageID.Bytes]].Turn = &t
 	}
 	return views, nil
 }

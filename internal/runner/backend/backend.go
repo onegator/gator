@@ -22,6 +22,60 @@ type Spec struct {
 	// DenyRead are files the agent must not open: the runner's token file. Backends pass them
 	// to agentenv.Command, which enforces it where the platform can.
 	DenyRead []string
+	// Access is what the agent may do with its tools. The zero value is everything, as a phase
+	// job always could.
+	Access Access
+	// MCP are the MCP servers the session reaches besides the runner's own configuration: Gator's
+	// (the Brain and the agent surface), with the job's own identity.
+	MCP []MCPServer
+	// Skills are the skills the job's agent carries, for a backend that loads skills by itself
+	// (SkillLoader). Any other backend is told of them in its prompt instead.
+	Skills []Skill
+}
+
+// Skill is one skill of the job's agent: an Agent Skills folder (SKILL.md, scripts/,
+// references/, assets/), whole.
+type Skill struct {
+	Name        string
+	Description string
+	Files       []SkillFile
+}
+
+// SkillFile is one file of a skill, at its path inside the skill's folder.
+type SkillFile struct {
+	Path string
+	Data []byte
+}
+
+// SkillLoader is a backend that reads skills by itself: Claude Code, from a plugin directory the
+// runner writes outside the worktree. A backend that is not gets the skills' names and
+// descriptions in its prompt, and reads one through Gator's skill_read tool.
+type SkillLoader interface {
+	LoadsSkills() bool
+}
+
+// LoadsSkills says whether b reads skills by itself.
+func LoadsSkills(b Backend) bool {
+	l, ok := b.(SkillLoader)
+	return ok && l.LoadsSkills()
+}
+
+// MCPServer is one remote MCP server, over Streamable HTTP.
+type MCPServer struct {
+	Name    string
+	URL     string
+	Headers map[string]string
+}
+
+// Access is what an agent may do with its tools, in words every backend can translate into its
+// own flags. It is what the tools allow, not a sandbox: the workspace is made read-only too.
+type Access struct {
+	// ReadOnly gives the agent tools that read, search and fetch, and none that write.
+	ReadOnly bool
+	// NoTools gives it none at all: a model reading what it is given and answering.
+	NoTools bool
+	// Commands are the only commands a read-only agent may run, by name: gator-cli, to talk back.
+	Commands []string
 }
 
 // Emit streams one event.
@@ -50,4 +104,20 @@ type Backend interface {
 	// fixes, and reporting the first as the second sends a person to log in again on a machine
 	// they were already logged in on.
 	AuthState() string
+}
+
+// Limited is a backend that can hold an agent to less than full access. A backend says which
+// limits it can keep; one that cannot keep a limit never runs a job that needs it.
+type Limited interface {
+	Supports(a Access) bool
+}
+
+// Supports says whether b can run an agent with access a: full access always, anything less only
+// where b says it can keep it.
+func Supports(b Backend, a Access) bool {
+	if !a.ReadOnly && !a.NoTools {
+		return true
+	}
+	l, ok := b.(Limited)
+	return ok && l.Supports(a)
 }

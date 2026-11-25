@@ -39,7 +39,7 @@ const (
 // Hooks are the core → plugin methods a manifest may declare.
 var Hooks = []string{MethodWebhook, MethodPhaseTransition, MethodGateEvaluate, MethodArtifactApproved,
 	MethodRelease, MethodIncidentClosed, MethodSchedule, MethodRenderUI, MethodJobPrepare, MethodJobFinish,
-	MethodQualityEvaluate, MethodTurnEnding, MethodImport, MethodTaskClosed}
+	MethodQualityEvaluate, MethodTurnEnding, MethodImport, MethodTaskClosed, MethodMessagePosted, MethodMessageEdited}
 
 // Plugin → core methods.
 const (
@@ -54,13 +54,14 @@ const (
 	CoreIncidentClose  = "incident.close"  // M6
 	CoreReleaseRecord  = "release.record"  // M6
 	CoreReviewRequest  = "review.request"
+	CoreBrainPropose   = "brain.propose"
 	CoreKVGet          = "kv.get"
 	CoreKVPut          = "kv.put"
 	CoreLog            = "log"
 )
 
 // Capabilities a plugin can declare; the core asks for capabilities, never for plugin names.
-var Capabilities = []string{"tracker", "vcs", "ci", "monitoring", "deploy", "notify"}
+var Capabilities = []string{"tracker", "vcs", "ci", "monitoring", "deploy", "notify", CapabilityMessaging}
 
 // Manifest describes a plugin. The plugin returns it from initialize.
 type Manifest struct {
@@ -77,6 +78,9 @@ type Manifest struct {
 	Webhook        *WebhookSpec    `json:"webhook,omitempty"`
 	// Connect lets a person sign in to the outside system instead of pasting a token.
 	Connect *ConnectSpec `json:"connect,omitempty"`
+	// Links says a messaging bridge redeems link codes (member.link): a person can make one for it
+	// in Gator. A bridge that does not is refused a code, which would never work.
+	Links bool `json:"links,omitempty"`
 }
 
 // Schedule asks the core to call the schedule hook every Every (a Go duration, at least 1s).
@@ -125,13 +129,18 @@ func (c ConnectSpec) ProviderName(plugin string) string {
 
 var nameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
+// Reserved are names no plugin may take: the core speaks for them. "a2a" is the provider of A2A
+// clients' identities and conversations, which a plugin of that name would otherwise share.
+var Reserved = []string{"a2a"}
+
 // ValidName reports whether s can name a plugin.
-func ValidName(s string) bool { return nameRe.MatchString(s) }
+func ValidName(s string) bool { return nameRe.MatchString(s) && !slices.Contains(Reserved, s) }
 
 // Validate checks a manifest before the core accepts it.
 func (m Manifest) Validate() error {
-	if !nameRe.MatchString(m.Name) {
-		return fmt.Errorf("manifest: name %q must be lowercase letters, digits and dashes", m.Name)
+	if !ValidName(m.Name) {
+		return fmt.Errorf("manifest: name %q must be lowercase letters, digits and dashes, and not one the core keeps (%s)",
+			m.Name, strings.Join(Reserved, ", "))
 	}
 	if m.Version == "" {
 		return fmt.Errorf("manifest: version is required")
@@ -158,6 +167,13 @@ func (m Manifest) Validate() error {
 		if schema, err = ParseConfigSchema(m.ConfigSchema); err != nil {
 			return err
 		}
+	}
+	// A bridge's hooks carry what people say; a plugin hears them only as a declared bridge.
+	if (m.HasHook(MethodMessagePosted) || m.HasHook(MethodMessageEdited)) && !contains(m.Capabilities, CapabilityMessaging) {
+		return fmt.Errorf("manifest: messagePosted and messageEdited need the %s capability", CapabilityMessaging)
+	}
+	if m.Links && !contains(m.Capabilities, CapabilityMessaging) {
+		return fmt.Errorf("manifest: links needs the %s capability", CapabilityMessaging)
 	}
 	if c := m.Connect; c != nil {
 		if !strings.HasPrefix(c.AuthorizeURL, "https://") || !strings.HasPrefix(c.TokenURL, "https://") {
@@ -453,6 +469,29 @@ type TaskCreateParams struct {
 	Description  string            `json:"description,omitempty"`
 	Urgency      int               `json:"urgency,omitempty"`
 	ExternalRefs map[string]string `json:"external_refs,omitempty"`
+}
+
+// BrainProposeParams proposes something worth remembering to the project's Brain: an
+// architecture decision recorded in the repository, a runbook for an error that keeps coming
+// back. It is always a proposal: a person approves it before any prompt carries it. Kind is
+// decision, lesson, runbook, fact, glossary or convention; Scope is project (the default) or
+// component, with Component its key. SourceID names what it came from in the plugin's own terms
+// ("adr:docs/adr/0001-postgres.md@<sha>"): the same SourceID is proposed once.
+type BrainProposeParams struct {
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+	Scope     string `json:"scope,omitempty"`
+	Component string `json:"component,omitempty"`
+	SourceID  string `json:"source_id"`
+	URL       string `json:"url,omitempty"`
+	Excerpt   string `json:"excerpt,omitempty"`
+}
+
+// BrainProposeResult says which entry the proposal is, and whether this call made it.
+type BrainProposeResult struct {
+	EntryID string `json:"entry_id,omitempty"`
+	Created bool   `json:"created"`
 }
 
 // TaskFindParams finds the newest task of the project with external_refs[Key] == Value.

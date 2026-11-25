@@ -213,3 +213,120 @@ Agenci workspace'u są tylko dla admina workspace'u.
   wątku) to optymalizacja na fazę 3+.
 - **Read-only na prawdę.** Ograniczenie narzędzi CLI to nie sandbox. Uczciwie opisujemy w UI, że
   `chat` = „nie ma narzędzi do zapisu", a nie „nie może zapisać".
+
+## Odstępstwa od planu (zapisane przy implementacji)
+
+- **Migracje**: `00039_agents.sql` (agenci, agenci domyślni, `jobs.agent_id`),
+  `00040_agent_turns.sql` (turny, `jobs.turn_id/tier/kind`, `conversation_summaries`) i — po review —
+  `00041_agents_keep.sql` (agentów się odkłada, `deleted_at`, a turny trzymają się ich `ON DELETE
+  RESTRICT`; blokady uchwytu wg zakresu; `agent_turns.claimed_at`). Fazy 3–5 przesunęły się o jeden. Każda ma krok
+  down; `internal/server/store/migrations_test.go` robi na osobnej bazie wejście na 00038, dane
+  (projekty, taski, joby z rolami), up, down do 00038 i znów up, i sprawdza backfille za każdym razem.
+- **Unikalność uchwytu** pilnuje trigger `agents_handle_visible_once` (BEFORE INSERT/UPDATE): bierze
+  blokadę doradczą na uchwyt i odrzuca (`unique_violation`) uchwyt, który byłby widoczny w projekcie
+  dwa razy — projektowy wobec workspace'owego i odwrotnie. Indeks `agents_handle_idx` jest
+  `(project_id, handle) NULLS NOT DISTINCT`. Skutek: agent workspace'u nie może mieć uchwytu, który ma
+  jakikolwiek projekt (np. `@reviewer`). Testy: kolejność w obie strony i równoległe tworzenie.
+- **Agenci domyślni** powstają w bazie: funkcja `gator_seed_default_agents(project)` i trigger
+  `AFTER INSERT ON projects`, a migracja woła ją dla istniejących projektów. Projekt zrobiony
+  dowolną drogą (API, provisioning, test) ma ich od razu. Lista: `@researcher`, `@planner`, `@worker`,
+  `@reviewer`, `@security` (`security_reviewer`), `@curator`, `@triage` i `@reporter`; dwaj ostatni
+  dostali prompty ról `roles/triage.md` i `roles/reporter.md`, a `agents.Defaults` w Go jest
+  sprawdzane testem wobec bazy. Tier `work` mają `@worker` i `@triage`, reszta `chat`.
+- **Rola → agent**: `AgentForRole` wybiera agenta projektu przed workspace'owym i agenta zrobionego
+  przez ludzi przed wbudowanym. Prompt joba to `instructions` agenta, a gdy puste — prompt jego roli.
+  **Automations** mają autora (`Definition.Author`, w API `author`); error triage robi implementację
+  incydentu agentem `@triage` (`Instead: worker`), dalsze fazy zostają przy agentach ról. Weekly summary
+  pisze serwer, więc `@reporter` jest tylko jego autorem.
+- **`jobs.kind`** (`phase | reply | summary`) jest nową kolumną, bo plan miał `Job.Kind` tylko w proto.
+  Autopilot, inbox i blokada zmiany kindu patrzą tylko na joby `phase`: odpowiedź agenta w wątku nie
+  jest pracą fazy. Reply i summary nie zostawiają artefaktu fazy; reply robi digest i przebudowuje
+  `working_state`, summary niczego. Turn ending (sprzeciwy pluginów) dotyczy tylko jobów `phase`.
+- **`agent_turns`** ma kilka kolumn ponad plan: `project_id`, `parent_turn_id` (kto delegował),
+  `escalated_from` (turn chat, któremu człowiek pozwolił pracować), `tier`, `updated_at`,
+  `finished_at`; CHECK-i na `requested_by_kind` i na zgodność `status='refused'` z `refusal`.
+- **Ask**: faza `answer` ma `gate: human` i `timeout: 0` zamiast `auto`/`1h` — ukryty task zablokowany
+  przez timeout nikomu by się nie pokazał, a test „każda faza ma wyjście” wymaga, by z fazy `auto`
+  wychodził timeout. Faza runnera w szablonie `hidden` nie potrzebuje roli. Wątek pod wiadomością
+  staje się wątkiem aska (`kind='task'`); DM nie może być rozmową taska, więc ask DM-a ma
+  `external_refs.conversation`, a jego karty idą do DM-a. Ask nie ma karty `task` ani `decision`, nie
+  jest na Boardzie, w inboxie ani w liście szablonów; człowiek nie tworzy go przez API (400).
+  „Zrób z tego task” na wątku aska to `process.PromoteAsk` (zmiana kindu mimo wykonanej pracy).
+  Ask w prywatnym kanale idzie dotychczasową ścieżką „apart” (nowy task), by wątek taska był
+  czytelny dla projektu.
+- **Wzmianki agentów** przychodzą jawnie od klienta (`mentions: [{kind: "agent", id}]`), jak ludzi w
+  fazie 1. Agent piszący przez `gator-cli say` wzmiankuje uchwytem `@handle` w treści — uchwyty są
+  unikalne tam, gdzie je widać. Delegacja to wiadomość agenta z `origin.turn`; łańcuch, hop i
+  `on_behalf_of` biorą się z tego turnu. Turn wywołują tylko teksty ludzi i agentów (nie karty,
+  system, pluginy, external). Zdarzenie `message.posted` ma osobno `mentions` (ludzie) i `agents`.
+- **Agent w rozmowie**: dołącza jako członek wątku, w którym odpowiada; `PUT /conversations/{id}/
+  members/agent/{id}` dodaje go do kanału; DM z agentem to `POST /conversations/dm` z `agents`
+  (tylko w projekcie) — każda wiadomość człowieka w takim DM-ie pyta agenta.
+- **Limity** to osobne strażniki (`agents.Guard`), pytane po kolei: wstrzymany, czy człowiek może
+  pisać w rozmowie, hop, ten sam agent dwa razy z rzędu, budżet łańcucha, dzienny budżet projektu.
+  **Hop**: łańcuch ma najwyżej 4 turny (hop 0–3); turn z hopem 4 jest odrzucany („zatrzymuje się na hop
+  4”). **Budżet łańcucha** to 2× `max_cost_usd` turnu proszonego agenta (polityka roli, tieru i
+  własna); agent bez limitu nie ma limitu łańcucha (hop i tak obowiązuje); liczy się koszt
+  zakończonych jobów łańcucha. **Ten sam agent dwa razy z rzędu** = agent wzmiankujący sam siebie
+  ze swojego turnu. **chat → work**: agent `work` pracuje tylko na tasku ze zgodą (00033), kto
+  by go nie poprosił; inaczej odpowiada w `chat` i pojawia się karta consentu. Odpowiedź człowieka
+  zaczyna nowy łańcuch. Odmowa to turn `refused` z kodem i linią systemową w rozmowie, raz.
+- **Polityka turnu**: `policy.tiers.<tier>` (np. `chat.model`) leży nad `policy.roles.<rola>`, a nad
+  nimi `agents.policy` agenta (`process.PolicyForTurn`); joby faz biorą politykę roli i agenta, bez
+  tierów. Summarizer to rola `summarizer` (`policy.roles.summarizer`, prompt `roles/summarizer.md`).
+- **Pakiet rozmowy** (`conversations/context.go`) niesie też wiadomości dopisane po pytaniu, zanim
+  job wystartował (poprawka do jeszcze nie uruchomionego turnu nie wymaga steera). Wątek zaczyna się
+  od wiadomości-korzenia. Streszczenie pisze job `summary` na tym samym tasku, jeden naraz na
+  rozmowę; do czasu, aż jest, tło to pierwsze słowa każdej starszej wiadomości. Pakiet idzie do
+  runnera w `proto.Job.Turn` (pytanie, rozmowa, pytanie znowu), a w `job_context` jest zapisany z
+  `origin: conversation` i liczony w `context_bytes/docs`.
+- **Proto v3**: serwer mówi v3 i v2 (v1 już nie). Runner v2 dostaje tylko joby `phase` (a nie „joby
+  `work` bez kontekstu rozmowy”): odpowiedź `work` uruchomiona jak faza commitowałaby i pushowała bez
+  rozmowy. Odpowiedź, którą mogłyby wziąć tylko runnery v2, jest oznaczana jako `no_runner`.
+- **Read-only `chat`** w Claude Code 2.1.331 (sprawdzone z `claude --help` i nagrane w
+  `testdata/claude-2.1.331-chat-*.ndjson`): `--permission-mode dontAsk --tools Read,Grep,Glob,WebFetch,Bash
+  --allowedTools Read,Grep,Glob,WebFetch,Bash(gator-cli:*) --disallowedTools Edit,Write,NotebookEdit`.
+  Nagranie pokazuje, że Write jest niedostępny, `touch` przez Bash odrzucony, a `gator-cli` działa.
+  Workspace `chat` to `git worktree add --detach` bez gałęzi, z plikami i katalogami bez prawa zapisu;
+  mapowanie tieru na dostęp jest w `executor/access.go`, flagi w `backend/claude/access.go`.
+  **Podpis commitów** daje hook `prepare-commit-msg` spoza checkoutu (przez `GIT_CONFIG_*` w
+  środowisku agenta): `Co-Authored-By: @worker via Gator`, raz na commit, w każdym jobie z agentem.
+- **Strumieniowanie** czyta tekst z `job_events` (prawda w bazie; hub tylko budzi), co 500 ms
+  przepisuje wiadomość agenta (`message.edited`, bez digestu) i wysyła `job.progress`, po którym
+  karta `job` pokazuje liczbę tool calli i ostatni. Koniec turnu (`job.finished` z outboxu) ustawia
+  wiadomość na `final` (odpowiedź), `failed` (dlaczego jej nie ma) albo `final` z dopiskiem przy
+  zatrzymaniu. Wiadomość ma w API pole `turn` (status, tier, koszt, czas) — to „koszt pod wiadomością”.
+  Przepisywana jest tylko wiadomość `streaming`.
+- **Steer**: wiadomość człowieka w rozmowie z aktywnym turnem steruje nim, gdy nie wzmiankuje agentów
+  albo wzmiankuje odpowiadającego; innych wzmiankowanych pyta się jak zwykle. Słowa agentów nigdy
+  nie sterują. **Stop**: `POST /turns/{id}/stop` (każdy, kto może pisać w rozmowie); `GET /turns/{id}`.
+- **`gator-cli task create`** daje kartę `task_proposal`; task tworzy człowiek przez nowy
+  `POST /proposals/{messageId}/accept` (plan nie nazywał endpointu). `say` działa też w jobie fazy (w
+  wątku taska, jako nowy łańcuch).
+- **Karta consentu** ma klucz `consent:<turn>`, a jej przycisk to nowy `POST /turns/{id}/allow`
+  (plan mówił tylko „akceptacja robi allow-agents”): zgoda na tasku w imieniu klikającego członka
+  projektu i turn `work` agenta (`escalated_from`, wyzwalaczem jest karta), przez te same strażniki.
+- **Pauza** dotyczy turnów w rozmowach; joby faz autopilota dalej idą (wyłącza je
+  `autopilot.enabled`), bo wstrzymany agent roli zatrzymałby task po cichu.
+- **Profil agenta** (`GET /agents/{id}`) zamiast „% zaakceptowanych” podaje `doneShare` (część
+  zakończonej pracy, która skończyła się `done`) — artefakty nie są jeszcze powiązane z jobem, który
+  je zrobił. Doszły `GET/POST /workspace/agents` dla agentów workspace'u (tylko admin workspace'u
+  tworzy i edytuje). Wbudowany agent zachowuje uchwyt i rolę; usuwa się tylko własnych (409 dla
+  wbudowanych).
+- **Start turnu** to warunkowe zajęcie (`ClaimTurn`: turn `queued` bez joba, zajęcie wygasa po 2 min),
+  a nie blokada: job jest odnajdywany po `jobs.turn_id`, wiadomość odpowiedzi po `client_id`, a pytanie
+  o consent powtarza się przy każdej dostawie, dopóki karty nie ma. Stop bierze to samo zajęcie. Turn
+  bez joba niczym nie steruje; ponowna dostawa, którą strażnik dziś odrzuca, kończy taki turn jako
+  `refused`; sweeper kończy turny, których żadna dostawa nie wystartowała, i pisze, gdy odpowiedź
+  czeka na runnera.
+- **Po review** (szczegóły w commitach): token joba ma zakres wg kindu, sprawdzany na serwerze (reply:
+  `say`, `thread show`, `task create`, `knowledge search`, `catalogue show`, `product propose`; summary:
+  nic, i nie dostaje tokenu, narzędzi ani checkoutu); słowa z zewnątrz są w znacznikach z nonce
+  pakietu i nie trafiają do streszczeń; treść DM-ów i prywatnych kanałów nie trafia do tytułu aska,
+  instrukcji joba, zapisu kontekstu ani zdarzeń, a job odpowiedzi czyta ten, kto może czytać jego
+  rozmowę; delegacja ma limit szerokości (3 na turn, 8 turnów na łańcuch), budżet łańcucha liczy
+  joby w toku po ich limicie, a agent ma własny dzienny limit (`policy.daily_budget_usd`); `say` z
+  joba fazy zaczyna łańcuch tego joba; checkout `chat` czyta gałąź ostatniej pracy taska, z metadanymi
+  git bez prawa zapisu; backend deklaruje, jakie ograniczenia utrzyma (`backend.Limited`).
+- **Punkt 10**: ekran profilu agenta należy do fazy 6a; `docs/openapi.yaml` opisuje wszystko, czego
+  potrzebuje (`Agent`, `AgentProfile`, `AgentTurn`, `MessageTurn`, karty `consent` i `task_proposal`).

@@ -41,6 +41,11 @@ const usage = `gator-cli — talk back to Gator about the job you are working on
   gator-cli product propose --kind decision|lesson --title TEXT [--content TEXT | --file PATH | -]
   gator-cli catalogue show                the parts this project is made of
   gator-cli knowledge search --query TEXT [--limit N]
+  gator-cli say [--content TEXT | --file PATH | -]
+                                          say something in your conversation; @agent asks another agent
+  gator-cli thread show [--limit N]       more of your conversation than your prompt carried
+  gator-cli task create --kind feature|bug|chore|incident --title TEXT [--content TEXT | --file PATH | -]
+                                          propose a task; a person accepts it
 
 Reads GATOR_URL and GATOR_JOB_TOKEN from the environment; the runner sets both.
 Output is JSON on stdout. Exit codes: 0 ok, 1 your request, 2 network, 3 identity, 4 server, 5 the work moved on.
@@ -140,6 +145,53 @@ func run(args []string) error {
 			return err
 		}
 		return c.post("/agent/product", map[string]any{"kind": *kind, "title": *title, "content": body})
+	case "say ":
+		fs := flag.NewFlagSet("say", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		content := fs.String("content", "", "what to say")
+		file := fs.String("file", "", "read it from a file, or - for stdin")
+		if err := fs.Parse(rest); err != nil {
+			return coded(exitUserErr, "%v", err)
+		}
+		body, err := contentFrom(*content, *file, fs.Args())
+		if err != nil {
+			return err
+		}
+		return c.post("/agent/say", map[string]any{"body": body})
+	case "thread show":
+		fs := flag.NewFlagSet("thread show", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		limit := fs.Int("limit", 50, "how many of the latest messages")
+		if err := fs.Parse(rest); err != nil {
+			return coded(exitUserErr, "%v", err)
+		}
+		return c.get("/agent/thread", url.Values{"limit": {fmt.Sprint(*limit)}})
+	case "task create":
+		fs := flag.NewFlagSet("task create", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		kind := fs.String("kind", "", "feature | bug | chore | incident")
+		title := fs.String("title", "", "one line")
+		content := fs.String("content", "", "what the task is about")
+		file := fs.String("file", "", "read it from a file, or - for stdin")
+		if err := fs.Parse(rest); err != nil {
+			return coded(exitUserErr, "%v", err)
+		}
+		switch *kind {
+		case "feature", "bug", "chore", "incident":
+		default:
+			return coded(exitUserErr, "--kind must be feature, bug, chore or incident")
+		}
+		if strings.TrimSpace(*title) == "" {
+			return coded(exitUserErr, "--title is required")
+		}
+		description := ""
+		if *content != "" || *file != "" || len(fs.Args()) > 0 {
+			var err error
+			if description, err = contentFrom(*content, *file, fs.Args()); err != nil {
+				return err
+			}
+		}
+		return c.post("/agent/tasks", map[string]any{"kind": *kind, "title": *title, "description": description})
 	case "catalogue show":
 		return c.get("/agent/catalogue", nil)
 	case "knowledge search":

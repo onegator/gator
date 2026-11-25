@@ -61,6 +61,9 @@ func (s *Service) Templates(ctx context.Context, projectID pgtype.UUID) ([]Templ
 	out := make([]TemplateView, 0, len(kinds))
 	for _, kind := range kinds {
 		t := catalog[kind]
+		if t.Hidden {
+			continue // opened by Gator itself; nothing a person picks or reads as a process
+		}
 		source := sources[kind]
 		if source == "" {
 			source = SourceDefault

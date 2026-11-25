@@ -8,6 +8,67 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type A2aCall struct {
+	TurnID       pgtype.UUID        `json:"turn_id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	Status       string             `json:"status"`
+	RemoteTaskID string             `json:"remote_task_id"`
+	Attempts     int32              `json:"attempts"`
+	Error        string             `json:"error"`
+	ClaimedAt    pgtype.Timestamptz `json:"claimed_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+}
+
+type A2aClient struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Name           string             `json:"name"`
+	TokenID        pgtype.UUID        `json:"token_id"`
+	IdentityID     pgtype.UUID        `json:"identity_id"`
+	DailyBudgetUsd float64            `json:"daily_budget_usd"`
+	PerMinute      int32              `json:"per_minute"`
+	CreatedBy      pgtype.UUID        `json:"created_by"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type A2aTask struct {
+	ID        pgtype.UUID        `json:"id"`
+	ClientID  pgtype.UUID        `json:"client_id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	AgentID   pgtype.UUID        `json:"agent_id"`
+	MessageID pgtype.UUID        `json:"message_id"`
+	ContextID string             `json:"context_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type Agent struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Handle        string             `json:"handle"`
+	DisplayName   string             `json:"display_name"`
+	Description   string             `json:"description"`
+	Avatar        string             `json:"avatar"`
+	RoleKey       *string            `json:"role_key"`
+	Instructions  string             `json:"instructions"`
+	Tier          string             `json:"tier"`
+	Policy        []byte             `json:"policy"`
+	Tools         []byte             `json:"tools"`
+	Skills        []byte             `json:"skills"`
+	Status        string             `json:"status"`
+	Source        []byte             `json:"source"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
+	Kind          string             `json:"kind"`
+	Remote        []byte             `json:"remote"`
+	RemoteSecrets string             `json:"remote_secrets"`
+	A2aExposed    bool               `json:"a2a_exposed"`
+}
+
 type AgentCall struct {
 	ID        int64              `json:"id"`
 	JobID     pgtype.UUID        `json:"job_id"`
@@ -15,6 +76,30 @@ type AgentCall struct {
 	Command   string             `json:"command"`
 	Detail    []byte             `json:"detail"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentTurn struct {
+	ID               pgtype.UUID        `json:"id"`
+	AgentID          pgtype.UUID        `json:"agent_id"`
+	ProjectID        pgtype.UUID        `json:"project_id"`
+	ConversationID   pgtype.UUID        `json:"conversation_id"`
+	TriggerMessageID pgtype.UUID        `json:"trigger_message_id"`
+	ReplyMessageID   pgtype.UUID        `json:"reply_message_id"`
+	RequestedByKind  string             `json:"requested_by_kind"`
+	RequestedBy      pgtype.UUID        `json:"requested_by"`
+	OnBehalfOf       pgtype.UUID        `json:"on_behalf_of"`
+	ChainID          pgtype.UUID        `json:"chain_id"`
+	ParentTurnID     pgtype.UUID        `json:"parent_turn_id"`
+	EscalatedFrom    pgtype.UUID        `json:"escalated_from"`
+	Hop              int16              `json:"hop"`
+	Tier             string             `json:"tier"`
+	JobID            pgtype.UUID        `json:"job_id"`
+	Status           string             `json:"status"`
+	Refusal          *string            `json:"refusal"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+	ClaimedAt        pgtype.Timestamptz `json:"claimed_at"`
 }
 
 type ApiToken struct {
@@ -61,6 +146,71 @@ type AutomationRun struct {
 	Automation string             `json:"automation"`
 	Subject    string             `json:"subject"`
 	TaskID     pgtype.UUID        `json:"task_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type BrainCitation struct {
+	JobID     pgtype.UUID        `json:"job_id"`
+	EntryID   pgtype.UUID        `json:"entry_id"`
+	How       string             `json:"how"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type BrainCuration struct {
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	UptoSeq        int64              `json:"upto_seq"`
+	JobID          pgtype.UUID        `json:"job_id"`
+	PendingUpto    *int64             `json:"pending_upto"`
+	ClaimedAt      pgtype.Timestamptz `json:"claimed_at"`
+	CuratedAt      pgtype.Timestamptz `json:"curated_at"`
+	Attempts       int32              `json:"attempts"`
+	NextAt         pgtype.Timestamptz `json:"next_at"`
+}
+
+type BrainEntry struct {
+	ID                   pgtype.UUID        `json:"id"`
+	Scope                string             `json:"scope"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	ComponentKey         *string            `json:"component_key"`
+	UserID               pgtype.UUID        `json:"user_id"`
+	AgentID              pgtype.UUID        `json:"agent_id"`
+	Kind                 string             `json:"kind"`
+	Topic                *string            `json:"topic"`
+	Title                string             `json:"title"`
+	Content              string             `json:"content"`
+	Visibility           string             `json:"visibility"`
+	Status               string             `json:"status"`
+	Lineage              pgtype.UUID        `json:"lineage"`
+	Version              int32              `json:"version"`
+	Supersedes           pgtype.UUID        `json:"supersedes"`
+	ValidFrom            pgtype.Timestamptz `json:"valid_from"`
+	ValidUntil           pgtype.Timestamptz `json:"valid_until"`
+	Confidence           string             `json:"confidence"`
+	Source               []byte             `json:"source"`
+	SourceTaskID         pgtype.UUID        `json:"source_task_id"`
+	SourceConversationID pgtype.UUID        `json:"source_conversation_id"`
+	SourcePrivate        bool               `json:"source_private"`
+	Position             int32              `json:"position"`
+	CondensedFrom        []pgtype.UUID      `json:"condensed_from"`
+	ArchivedAt           pgtype.Timestamptz `json:"archived_at"`
+	CreatedByKind        string             `json:"created_by_kind"`
+	CreatedBy            pgtype.UUID        `json:"created_by"`
+	ApprovedBy           pgtype.UUID        `json:"approved_by"`
+	ApprovedAt           pgtype.Timestamptz `json:"approved_at"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BrainFocusOff struct {
+	UserID pgtype.UUID        `json:"user_id"`
+	Since  pgtype.Timestamptz `json:"since"`
+}
+
+type BrainLink struct {
+	EntryID    pgtype.UUID        `json:"entry_id"`
+	TargetKind string             `json:"target_kind"`
+	TargetID   string             `json:"target_id"`
+	Relation   string             `json:"relation"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -141,6 +291,16 @@ type ConversationMember struct {
 	JoinedAt       pgtype.Timestamptz `json:"joined_at"`
 }
 
+type ConversationSummary struct {
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	UptoSeq        int64              `json:"upto_seq"`
+	Summary        string             `json:"summary"`
+	Model          string             `json:"model"`
+	PendingJobID   pgtype.UUID        `json:"pending_job_id"`
+	PendingUptoSeq *int64             `json:"pending_upto_seq"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Device struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`
@@ -166,6 +326,44 @@ type EventCursor struct {
 	Name        string             `json:"name"`
 	LastEventID int64              `json:"last_event_id"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ExternalConversationRef struct {
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Provider       string             `json:"provider"`
+	ExternalRef    string             `json:"external_ref"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type ExternalIdentity struct {
+	ID          pgtype.UUID        `json:"id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	Provider    string             `json:"provider"`
+	ExternalID  string             `json:"external_id"`
+	DisplayName string             `json:"display_name"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	LinkedAt    pgtype.Timestamptz `json:"linked_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ExternalLinkCode struct {
+	Hash      []byte             `json:"hash"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Provider  string             `json:"provider"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type ExternalMessageRef struct {
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	Provider    string             `json:"provider"`
+	ExternalRef string             `json:"external_ref"`
+	MessageID   pgtype.UUID        `json:"message_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type Gate struct {
@@ -194,6 +392,22 @@ type Incident struct {
 	FirstSeenAt    pgtype.Timestamptz `json:"first_seen_at"`
 	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
 	ClosedAt       pgtype.Timestamptz `json:"closed_at"`
+}
+
+type Installation struct {
+	ID                  pgtype.UUID        `json:"id"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	RegistryID          pgtype.UUID        `json:"registry_id"`
+	Kind                string             `json:"kind"`
+	Name                string             `json:"name"`
+	Version             string             `json:"version"`
+	Checksum            string             `json:"checksum"`
+	TargetID            pgtype.UUID        `json:"target_id"`
+	AcceptedPermissions []byte             `json:"accepted_permissions"`
+	Installed           []byte             `json:"installed"`
+	InstalledBy         pgtype.UUID        `json:"installed_by"`
+	InstalledAt         pgtype.Timestamptz `json:"installed_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Job struct {
@@ -225,6 +439,10 @@ type Job struct {
 	ContextDocs       int32              `json:"context_docs"`
 	Objections        int32              `json:"objections"`
 	Placement         string             `json:"placement"`
+	AgentID           pgtype.UUID        `json:"agent_id"`
+	TurnID            pgtype.UUID        `json:"turn_id"`
+	Tier              string             `json:"tier"`
+	Kind              string             `json:"kind"`
 }
 
 type JobContext struct {
@@ -249,10 +467,21 @@ type JobEvent struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-type KnowledgeEntry struct {
+type KnowledgeEntriesLegacy struct {
 	ID        pgtype.UUID        `json:"id"`
 	ProjectID pgtype.UUID        `json:"project_id"`
 	Scope     string             `json:"scope"`
+	Title     string             `json:"title"`
+	Content   string             `json:"content"`
+	Position  int32              `json:"position"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type KnowledgeEntry struct {
+	ID        pgtype.UUID        `json:"id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Scope     *string            `json:"scope"`
 	Title     string             `json:"title"`
 	Content   string             `json:"content"`
 	Position  int32              `json:"position"`
@@ -279,6 +508,67 @@ type LoginCode struct {
 	RedirectUri   string             `json:"redirect_uri"`
 	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type MarketplaceItem struct {
+	RegistryID pgtype.UUID        `json:"registry_id"`
+	Kind       string             `json:"kind"`
+	Name       string             `json:"name"`
+	Version    string             `json:"version"`
+	Manifest   []byte             `json:"manifest"`
+	Checksum   string             `json:"checksum"`
+	Files      []byte             `json:"files"`
+	Listed     bool               `json:"listed"`
+	FetchedAt  pgtype.Timestamptz `json:"fetched_at"`
+}
+
+type MarketplaceRegistry struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Url         string             `json:"url"`
+	PublicKey   string             `json:"public_key"`
+	Builtin     bool               `json:"builtin"`
+	FetchedAt   pgtype.Timestamptz `json:"fetched_at"`
+	Serial      int64              `json:"serial"`
+	IndexDigest string             `json:"index_digest"`
+	FetchError  string             `json:"fetch_error"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type McpCall struct {
+	ID          int64              `json:"id"`
+	McpServerID pgtype.UUID        `json:"mcp_server_id"`
+	ServerName  string             `json:"server_name"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	JobID       pgtype.UUID        `json:"job_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Method      string             `json:"method"`
+	Tool        string             `json:"tool"`
+	Payload     []byte             `json:"payload"`
+	Outcome     string             `json:"outcome"`
+	Error       *string            `json:"error"`
+	ResultBytes int32              `json:"result_bytes"`
+	DurationMs  int32              `json:"duration_ms"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type McpServer struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Name           string             `json:"name"`
+	DisplayName    string             `json:"display_name"`
+	Url            string             `json:"url"`
+	Auth           string             `json:"auth"`
+	Secrets        string             `json:"secrets"`
+	AllowedTools   []string           `json:"allowed_tools"`
+	ReadOnlyTools  []string           `json:"read_only_tools"`
+	Enabled        bool               `json:"enabled"`
+	Oauth          []byte             `json:"oauth"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
+	Source         []byte             `json:"source"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Membership struct {
@@ -370,14 +660,16 @@ type PluginCall struct {
 }
 
 type PluginConnectState struct {
-	Hash       []byte             `json:"hash"`
-	ProjectID  pgtype.UUID        `json:"project_id"`
-	PluginName string             `json:"plugin_name"`
-	UserID     pgtype.UUID        `json:"user_id"`
-	Verifier   string             `json:"verifier"`
-	ReturnTo   string             `json:"return_to"`
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	Hash         []byte             `json:"hash"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	PluginName   string             `json:"plugin_name"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	Verifier     string             `json:"verifier"`
+	ReturnTo     string             `json:"return_to"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	Target       string             `json:"target"`
+	AuthorizeUrl string             `json:"authorize_url"`
 }
 
 type PluginKv struct {
@@ -388,6 +680,24 @@ type PluginKv struct {
 }
 
 type ProductContext struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Kind          string             `json:"kind"`
+	Title         string             `json:"title"`
+	Content       string             `json:"content"`
+	Version       int32              `json:"version"`
+	Status        string             `json:"status"`
+	SourceTaskID  pgtype.UUID        `json:"source_task_id"`
+	CreatedByKind string             `json:"created_by_kind"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	ApprovedBy    pgtype.UUID        `json:"approved_by"`
+	ApprovedAt    pgtype.Timestamptz `json:"approved_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
+	CondensedFrom []pgtype.UUID      `json:"condensed_from"`
+}
+
+type ProductContextLegacy struct {
 	ID            pgtype.UUID        `json:"id"`
 	ProjectID     pgtype.UUID        `json:"project_id"`
 	Kind          string             `json:"kind"`
@@ -548,6 +858,18 @@ type Runner struct {
 	RetiredAt       pgtype.Timestamptz `json:"retired_at"`
 	Placement       string             `json:"placement"`
 	OwnerID         pgtype.UUID        `json:"owner_id"`
+}
+
+type Skill struct {
+	ID          pgtype.UUID        `json:"id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	Name        string             `json:"name"`
+	Version     string             `json:"version"`
+	Description string             `json:"description"`
+	Files       []byte             `json:"files"`
+	Source      []byte             `json:"source"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Task struct {

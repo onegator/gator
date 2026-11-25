@@ -1217,6 +1217,14 @@ func TestOnlyWritersOpenThreads(t *testing.T) {
 		h.do("POST", "/projects/"+c.project.Id.String()+"/tasks", gen.NewTask{Kind: "bug", Title: "x"}, &task)
 	})
 	h.as(c.member, func() { h.do("GET", "/tasks/"+task.Id.String()+"/conversation", nil, nil) })
+	// The consumer has handled task.created once its cursor is past the event; only then is the
+	// thread gone for good (the card alone is there as soon as the GET above wrote it).
+	eventually(t, "the consumer past task.created", func() bool {
+		var n int
+		_ = h.pool.QueryRow(context.Background(), `SELECT count(*) FROM events e, event_cursors c
+			WHERE c.name = 'conversations' AND e.type = 'task.created' AND e.aggregate_id = $1 AND c.last_event_id >= e.id`, task.Id.String()).Scan(&n)
+		return n == 1
+	})
 	if _, err := h.pool.Exec(context.Background(), "DELETE FROM conversations WHERE task_id = $1", task.Id.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -1318,5 +1326,63 @@ func TestSearchReadsPastUnreadableMatches(t *testing.T) {
 	h.as(c.admin, func() { h.do("GET", "/search/messages?limit=1&q="+word, nil, &hits) })
 	if len(hits) != 1 || hits[0].Message.Id != visible.Id {
 		t.Fatalf("hits: %+v", hits)
+	}
+}
+
+// A search hit says where the caller stands in its conversation: joined, read up to, unread — the
+// same as the conversation list, for the whole page at once.
+func TestSearchHitsCarryTheCallersStanding(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("standing")
+	word := fmt.Sprintf("standing%d", time.Now().UnixNano())
+	open := h.channel(c.admin, c.project.Id.String(), "talk", "").Id.String()
+	_, first := h.post(c.admin, open, gen.NewMessage{Body: ptr(word + " one")})
+	h.post(c.admin, open, gen.NewMessage{Body: ptr("two")})
+	h.post(c.admin, open, gen.NewMessage{Body: ptr("three")})
+	// The member joins and reads up to the first message; the viewer never joins.
+	h.as(c.member, func() {
+		h.do("POST", "/conversations/"+open+"/read", gen.ReadMarker{Seq: first.Seq}, nil)
+	})
+	hitFor := func(token string) gen.Conversation {
+		t.Helper()
+		var hits []gen.MessageHit
+		h.as(token, func() { h.do("GET", "/search/messages?q="+url.QueryEscape(word), nil, &hits) })
+		if len(hits) != 1 {
+			t.Fatalf("hits %+v", hits)
+		}
+		return hits[0].Conversation
+	}
+	if m := hitFor(c.member); !m.Joined || m.LastReadSeq != first.Seq || m.Unread != 2 {
+		t.Errorf("member: joined %v read %d unread %d", m.Joined, m.LastReadSeq, m.Unread)
+	}
+	if a := hitFor(c.admin); !a.Joined || a.Unread != 0 {
+		t.Errorf("author: joined %v unread %d", a.Joined, a.Unread)
+	}
+	if v := hitFor(c.viewer); v.Joined || v.Unread != 0 {
+		t.Errorf("viewer: joined %v unread %d", v.Joined, v.Unread)
+	}
+}
+
+// The conversation's detail says how many unread messages mention the caller, as its list does.
+func TestDetailCountsUnreadMentions(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("mentions")
+	ch := h.channel(c.admin, c.project.Id.String(), "pings", "").Id.String()
+	h.as(c.member, func() { h.do("POST", "/conversations/"+ch+"/read", gen.ReadMarker{Seq: 0}, nil) })
+	h.post(c.admin, ch, gen.NewMessage{Body: ptr("@member look"), Mentions: &[]gen.MemberRef{{Kind: gen.MemberRefKindUser, Id: mustOpenUUID(t, c.memberID)}}})
+	var list []gen.Conversation
+	var detail gen.ConversationDetail
+	h.as(c.member, func() {
+		h.do("GET", "/projects/"+c.project.Id.String()+"/conversations", nil, &list)
+		h.do("GET", "/conversations/"+ch, nil, &detail)
+	})
+	listed := int64(-1)
+	for _, x := range list {
+		if x.Id.String() == ch {
+			listed = x.UnreadMentions
+		}
+	}
+	if listed != 1 || detail.UnreadMentions != listed {
+		t.Errorf("list says %d, detail says %d", listed, detail.UnreadMentions)
 	}
 }

@@ -4,9 +4,11 @@ package store
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -51,6 +53,24 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(q *db.Queries) error)
 	return tx.Commit(ctx)
 }
 
+// InTxRetry is InTx, run again (up to three times) when the database chose this transaction to
+// break a deadlock or a serialization failure: nothing of it was committed, so it is safe to repeat.
+func InTxRetry(ctx context.Context, pool *pgxpool.Pool, fn func(q *db.Queries) error) error {
+	var err error
+	for range 3 {
+		if err = InTx(ctx, pool, fn); !Retryable(err) {
+			return err
+		}
+	}
+	return err
+}
+
+// Retryable says whether err is a deadlock (40P01) or a serialization failure (40001).
+func Retryable(err error) bool {
+	pe, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && (pe.Code == "40P01" || pe.Code == "40001")
+}
+
 // Close releases the pool.
 func (s *Store) Close() { s.Pool.Close() }
 
@@ -78,7 +98,9 @@ func Migrate(ctx context.Context, url string) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	if err := goose.UpContext(ctx, db, "migrations"); err != nil {
+	// 00045 is reserved for the Brain's embeddings and not written yet, while 00046 and later are:
+	// whoever adds it applies it to databases already past it, which goose refuses unless told.
+	if err := goose.UpContext(ctx, db, "migrations", goose.WithAllowMissing()); err != nil {
 		return err
 	}
 	return migrateRiver(ctx, url, rivermigrate.DirectionUp)

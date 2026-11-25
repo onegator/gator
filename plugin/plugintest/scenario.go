@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/onegator/gator/plugin"
@@ -28,28 +29,35 @@ type Scenario struct {
 	Secrets map[string]string `json:"secrets"`
 	Tasks   []plugin.TaskRef  `json:"tasks"`
 	Steps   []Step            `json:"steps"`
+	// AllowPrivateOutbound lets the plugin reach a fake API on this machine (see Options).
+	AllowPrivateOutbound bool `json:"allow_private_outbound,omitempty"`
+	// APIHosts lets API address settings name these hosts (see Options).
+	APIHosts string `json:"api_hosts,omitempty"`
 }
 
 // Step is one hook call. Fields apply to the hooks that use them.
 type Step struct {
-	Hook        string            `json:"hook"`
-	Task        string            `json:"task,omitempty"` // id of a seeded or created task
-	From        string            `json:"from,omitempty"`
-	To          string            `json:"to,omitempty"`
-	Rollback    bool              `json:"rollback,omitempty"`
-	Reason      string            `json:"reason,omitempty"`
-	Phase       string            `json:"phase,omitempty"`
-	Name        string            `json:"name,omitempty"` // schedule name
-	Job         *plugin.JobRef    `json:"job,omitempty"`
-	Receipt     json.RawMessage   `json:"receipt,omitempty"`
-	Delivery    string            `json:"delivery,omitempty"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	Query       map[string]string `json:"query,omitempty"`     // the webhook URL's query string
-	Body        json.RawMessage   `json:"body,omitempty"`      // webhook body, sent as these bytes
-	BodyFile    string            `json:"body_file,omitempty"` // or a file next to the scenario
-	Sign        *Signature        `json:"sign,omitempty"`
-	ExpectError bool              `json:"expect_error,omitempty"`
-	ExpectCore  []string          `json:"expect_core,omitempty"` // core methods the plugin must call in this step
+	Hook     string            `json:"hook"`
+	Task     string            `json:"task,omitempty"` // id of a seeded or created task
+	From     string            `json:"from,omitempty"`
+	To       string            `json:"to,omitempty"`
+	Rollback bool              `json:"rollback,omitempty"`
+	Reason   string            `json:"reason,omitempty"`
+	Phase    string            `json:"phase,omitempty"`
+	Name     string            `json:"name,omitempty"` // schedule name
+	Job      *plugin.JobRef    `json:"job,omitempty"`
+	Receipt  json.RawMessage   `json:"receipt,omitempty"`
+	Delivery string            `json:"delivery,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	Query    map[string]string `json:"query,omitempty"`     // the webhook URL's query string
+	Body     json.RawMessage   `json:"body,omitempty"`      // webhook body, sent as these bytes
+	BodyFile string            `json:"body_file,omitempty"` // or a file next to the scenario
+	Sign     *Signature        `json:"sign,omitempty"`
+	// Params are a hook's parameters as they are, for hooks the fields above do not describe
+	// (messagePosted, messageEdited).
+	Params      json.RawMessage `json:"params,omitempty"`
+	ExpectError bool            `json:"expect_error,omitempty"`
+	ExpectCore  []string        `json:"expect_core,omitempty"` // core methods the plugin must call in this step
 }
 
 // Signature adds an HMAC-SHA256 of the webhook body, keyed with a secret setting, the way
@@ -58,6 +66,17 @@ type Signature struct {
 	Header string `json:"header"` // e.g. X-Hub-Signature-256
 	Secret string `json:"secret"` // name of the secret setting holding the key
 	Prefix string `json:"prefix"` // e.g. "sha256="
+	// Scheme "slack" signs v0:<timestamp>:<body> and sends the timestamp in
+	// X-Slack-Request-Timestamp, the way Slack signs a request.
+	Scheme string `json:"scheme,omitempty"`
+}
+
+// SignSlack is Slack's v0 signature of a request body made at timestamp ts.
+func SignSlack(key, ts string, body []byte) string {
+	m := hmac.New(sha256.New, []byte(key))
+	m.Write([]byte("v0:" + ts + ":"))
+	m.Write(body)
+	return "v0=" + hex.EncodeToString(m.Sum(nil))
 }
 
 // Sign returns prefix + hex(HMAC-SHA256(key, body)).
@@ -99,13 +118,14 @@ type StepResult struct {
 
 // Report is a scenario run: the manifest, each step and the core's final state.
 type Report struct {
-	Manifest  plugin.Manifest            `json:"manifest"`
-	Steps     []StepResult               `json:"steps"`
-	Tasks     []Task                     `json:"tasks"`
-	Checks    map[string][]plugin.Check  `json:"checks"`
-	Artifacts []Artifact                 `json:"artifacts"`
-	KV        map[string]json.RawMessage `json:"kv"`
-	Logs      []plugin.LogParams         `json:"logs"`
+	Manifest  plugin.Manifest             `json:"manifest"`
+	Steps     []StepResult                `json:"steps"`
+	Tasks     []Task                      `json:"tasks"`
+	Checks    map[string][]plugin.Check   `json:"checks"`
+	Artifacts []Artifact                  `json:"artifacts"`
+	KV        map[string]json.RawMessage  `json:"kv"`
+	Logs      []plugin.LogParams          `json:"logs"`
+	Brain     []plugin.BrainProposeParams `json:"brain,omitempty"`
 }
 
 // Failed reports whether any step missed its expectation.
@@ -128,7 +148,8 @@ func Run(ctx context.Context, command []string, s Scenario, stderr io.Writer, ti
 	if slug == "" {
 		slug = "demo"
 	}
-	p, err := Start(ctx, command, core, Options{ProjectSlug: slug, Config: s.Config, Secrets: s.Secrets, Stderr: stderr, Timeout: timeout})
+	p, err := Start(ctx, command, core, Options{ProjectSlug: slug, Config: s.Config, Secrets: s.Secrets, Stderr: stderr, Timeout: timeout,
+		AllowPrivateOutbound: s.AllowPrivateOutbound, APIHosts: s.APIHosts})
 	if err != nil {
 		return Report{}, err
 	}
@@ -138,6 +159,7 @@ func Run(ctx context.Context, command []string, s Scenario, stderr io.Writer, ti
 		rep.Steps = append(rep.Steps, p.play(ctx, n, step, s.Secrets))
 	}
 	rep.Tasks, rep.Checks, rep.Artifacts, rep.KV, rep.Logs = core.Tasks(), core.AllChecks(), core.Artifacts(), core.KV(), core.Logs()
+	rep.Brain = core.Brain()
 	return rep, nil
 }
 
@@ -229,7 +251,13 @@ func (p *Process) params(n int, st Step, secrets map[string]string) (any, string
 			if !ok {
 				return nil, fmt.Sprintf("sign: no secret %q in the scenario", st.Sign.Secret)
 			}
-			headers[http.CanonicalHeaderKey(st.Sign.Header)] = Sign(key, body, st.Sign.Prefix)
+			if st.Sign.Scheme == "slack" {
+				ts := strconv.FormatInt(time.Now().Unix(), 10)
+				headers["X-Slack-Request-Timestamp"] = ts
+				headers[http.CanonicalHeaderKey(st.Sign.Header)] = SignSlack(key, ts, body)
+			} else {
+				headers[http.CanonicalHeaderKey(st.Sign.Header)] = Sign(key, body, st.Sign.Prefix)
+			}
 		}
 		delivery := st.Delivery
 		if delivery == "" {
@@ -258,6 +286,12 @@ func (p *Process) params(n int, st Step, secrets map[string]string) (any, string
 			receipt = json.RawMessage(`{"status":"done"}`)
 		}
 		return plugin.JobFinishParams{Task: task, Job: job, Receipt: receipt}, needTask()
+	case plugin.MethodMessagePosted, plugin.MethodMessageEdited:
+		var p plugin.MessageHookParams
+		if err := json.Unmarshal(st.Params, &p); err != nil {
+			return nil, "params: " + err.Error()
+		}
+		return p, ""
 	}
 	return nil, fmt.Sprintf("%s cannot be played yet", st.Hook)
 }

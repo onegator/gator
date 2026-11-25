@@ -82,6 +82,7 @@ func main() {
 					Version     string `json:"version"`
 				} `json:"incident"`
 				Review  *plugin.ReviewRequestParams `json:"review"`
+				Brain   *plugin.BrainProposeParams  `json:"brain"`
 				Resolve string                      `json:"resolve"` // fingerprint of a fault that has stopped
 				Close   string                      `json:"close"`   // task ids
 				Reopen  string                      `json:"reopen"`
@@ -115,6 +116,12 @@ func main() {
 			case b.Retitle != nil:
 				_, err := core.UpdateTask(ctx, plugin.TaskUpdateParams{TaskID: b.Retitle.Task, Title: &b.Retitle.Title, Description: &b.Retitle.Description})
 				return err
+			case b.Brain != nil:
+				res, err := core.ProposeToBrain(ctx, *b.Brain)
+				if err != nil {
+					return err
+				}
+				return core.KVPut(ctx, "brain_created", res.Created)
 			case b.Review != nil:
 				_, err := core.RequestReview(ctx, *b.Review)
 				return err

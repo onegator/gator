@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
@@ -69,11 +70,49 @@ type Service struct {
 	pool      *pgxpool.Pool
 	templates TemplateResolver
 	caps      CapabilityResolver
+	brain     BrainPacker
+	shelves   Shelves
 }
 
-// NewService wires the service.
-func NewService(pool *pgxpool.Pool, templates TemplateResolver, caps CapabilityResolver) *Service {
-	return &Service{pool: pool, templates: templates, caps: caps}
+// Shelves are the conventions written by hand, a project's or the workspace's (no project).
+// brain.Legacy is one.
+type Shelves interface {
+	Shelf(ctx context.Context, project pgtype.UUID) ([]db.BrainEntry, error)
+}
+
+// BrainPacker makes the part of a job's package that comes from the Brain. brain.Packer is one.
+type BrainPacker interface {
+	Pack(ctx context.Context, req brain.Request) ([]brain.Item, error)
+}
+
+// Option changes how the service is wired.
+type Option func(*Service)
+
+// WithBrain packs jobs' Brain context with p and reads the knowledge shelves from shelves, rather
+// than the default ones over the pool.
+func WithBrain(p BrainPacker, shelves Shelves) Option {
+	return func(s *Service) { s.UseBrain(p, shelves) }
+}
+
+// UseBrain is WithBrain for a service made before the Brain (the Brain's rules read
+// conversations, which need the process). Call it before the service is used.
+func (s *Service) UseBrain(p BrainPacker, shelves Shelves) { s.brain, s.shelves = p, shelves }
+
+// NewService wires the service. A job reads the Brain only through what it is handed and its own
+// identity, so the default packer needs no rules about conversations: an agent never reads a
+// proposal.
+func NewService(pool *pgxpool.Pool, templates TemplateResolver, caps CapabilityResolver, opts ...Option) *Service {
+	s := &Service{pool: pool, templates: templates, caps: caps}
+	if pool != nil {
+		// Until the server hands it the Brain's own: a job reads only what is approved, so these
+		// need no rules about conversations.
+		q := db.New(pool)
+		s.brain, s.shelves = brain.NewPacker(q, brain.NewPolicy(nil)), brain.NewLegacy(q, brain.NewPolicy(nil))
+	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // StaticCatalog is a TemplateResolver that ignores the project. Useful for tests and
@@ -123,6 +162,11 @@ type CreateParams struct {
 	// InTx, when set, runs inside the transaction that creates the task, so that what the caller
 	// links to the new task (the conversation it came from) commits or rolls back with it.
 	InTx func(q *db.Queries, task db.Task) error
+	// Hidden says the caller is the part of Gator that opens a hidden kind (an ask); anyone else
+	// asking for one is refused.
+	Hidden bool
+	// ExternalRefs are written on the task as it is created ({"conversation": id}).
+	ExternalRefs map[string]string
 }
 
 // Automated says which automation creates a task. Switching on one that puts agents to work is
@@ -159,6 +203,12 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 	if err != nil {
 		return db.Task{}, err
 	}
+	if m.Hidden() != p.Hidden {
+		if m.Hidden() {
+			return db.Task{}, ErrHiddenKind
+		}
+		return db.Task{}, fmt.Errorf("%w: %q is not a hidden kind", ErrInvalidEdit, p.Kind)
+	}
 	first := m.First()
 	if p.Urgency == 0 {
 		p.Urgency = 3
@@ -176,6 +226,12 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 		}
 		if err := q.UpsertGate(ctx, db.UpsertGateParams{TaskID: task.ID, Phase: first.Name}); err != nil {
 			return err
+		}
+		if len(p.ExternalRefs) > 0 {
+			refs, _ := json.Marshal(p.ExternalRefs)
+			if task, err = q.MergeTaskExternalRefs(ctx, db.MergeTaskExternalRefsParams{ID: task.ID, Refs: refs}); err != nil {
+				return err
+			}
 		}
 		if err := s.record(ctx, q, task.ID, nil, first.Name, "create", actor, "", nil); err != nil {
 			return err
@@ -583,10 +639,37 @@ func (s *Service) SetCheck(ctx context.Context, taskID pgtype.UUID, c Check) err
 
 // Approve records a human approval on the current gate. It does not advance; Advance does.
 func (s *Service) Approve(ctx context.Context, taskID pgtype.UUID, userID pgtype.UUID) error {
+	return s.approve(ctx, taskID, userID, nil)
+}
+
+// ErrGateMoved answers an approval of a gate the task no longer waits at.
+var ErrGateMoved = errors.New("the task no longer waits at that gate")
+
+// ApproveWaiting is Approve of one wait: the gate of phase, entered at entered. A task that has moved
+// on (or came back to the phase later) is not approved by a decision made about the old wait — a
+// button pressed outside on a card drawn before the move.
+func (s *Service) ApproveWaiting(ctx context.Context, taskID, userID pgtype.UUID, phase string, entered time.Time) error {
+	return s.approve(ctx, taskID, userID, func(t db.Task) error {
+		if t.ClosedAt.Valid {
+			return ErrTaskClosed
+		}
+		if t.Phase != phase || t.PhaseEnteredAt.Time.UnixMicro() != entered.UnixMicro() {
+			return ErrGateMoved
+		}
+		return nil
+	})
+}
+
+func (s *Service) approve(ctx context.Context, taskID, userID pgtype.UUID, check func(db.Task) error) error {
 	return s.tx(ctx, func(q *db.Queries) error {
 		task, err := q.GetTaskForUpdate(ctx, taskID)
 		if err != nil {
 			return err
+		}
+		if check != nil {
+			if err := check(task); err != nil {
+				return err
+			}
 		}
 		if err := q.SetGateHumanApproval(ctx, db.SetGateHumanApprovalParams{TaskID: taskID, Phase: task.Phase, HumanApprovedBy: userID}); err != nil {
 			return err

@@ -74,7 +74,7 @@ func (s *Server) SetProjectAutomation(w http.ResponseWriter, r *http.Request, pr
 
 func toAutomation(v automations.View) gen.Automation {
 	out := gen.Automation{Key: v.Key, Title: v.Title, Summary: v.Summary, Creates: v.Creates, Trigger: v.Trigger, Needs: v.Needs,
-		UsesAgents: v.UsesAgents, Available: v.Available, UnavailableReason: optString(v.Unavailable), Enabled: v.Enabled,
+		UsesAgents: v.UsesAgents, Author: optString(v.Author), Available: v.Available, UnavailableReason: optString(v.Unavailable), Enabled: v.Enabled,
 		Settings:  gen.AutomationSettings{Weekday: optString(v.Settings.Weekday)},
 		EnabledBy: toUUIDPtr(v.EnabledBy), EnabledByName: optString(v.EnabledName), EnabledAt: timePtr(v.EnabledAt),
 		LastRunAt: timePtr(v.LastRunAt), LastError: optString(v.LastError), LastTaskId: toUUIDPtr(v.LastTaskID),

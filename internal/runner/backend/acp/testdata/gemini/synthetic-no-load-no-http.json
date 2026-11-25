@@ -1,0 +1,9 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {"loadSession": false, "mcpCapabilities": {"http": false, "sse": false}}, "authMethods": [{"id": "oauth-personal", "name": "Log in with Google"}, {"id": "gemini-api-key", "name": "Use Gemini API key"}]},
+  "new_session": {"sessionId": "gemini-session-1"},
+  "noise": ["Loaded cached credentials."],
+  "turns": [{"steps": [
+    {"update": {"sessionId": "gemini-session-1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Hello from Gemini."}}}},
+    {"update": {"sessionId": "other-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Not this run's words."}}}}
+  ], "result": {"stopReason": "max_turn_requests"}}]
+}

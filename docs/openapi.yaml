@@ -442,6 +442,159 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ProductEntry" } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /brain:
+    get:
+      operationId: searchBrain
+      description: >
+        Search the Brain: what the caller may read, by words (websearch syntax) or, without q, the newest first.
+        The same rules as the MCP server's brain_search, which answers the same hits. A person's private context
+        is theirs alone; a proposal from a private conversation is read only by that conversation's readers.
+      parameters:
+        - { name: q, in: query, required: false, schema: { type: string } }
+        - { name: scope, in: query, required: false, schema: { $ref: "#/components/schemas/BrainScope" } }
+        - { name: kind, in: query, required: false, schema: { $ref: "#/components/schemas/BrainKind" } }
+        - { name: status, in: query, required: false, schema: { $ref: "#/components/schemas/BrainStatus" } }
+        - { name: project, in: query, required: false, description: "one project and what is above it", schema: { type: string, format: uuid } }
+        - { name: at, in: query, required: false, description: "what held at this moment: approved by then and not yet replaced (\"what did we know in March\")", schema: { type: string, format: date-time } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainHit" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createBrainEntry
+      description: >
+        Write an entry. Whoever may approve in its scope (a project's members, workspace admins for the workspace,
+        a person for their own context) writes it approved unless they ask to propose; anyone else who may write
+        there proposes it.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewBrainEntry" } } }
+      responses:
+        "201": { description: written, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /brain/proposals:
+    get:
+      operationId: listBrainProposals
+      description: What waits for a person's verdict, oldest first, within what the caller may read.
+      parameters:
+        - { name: project, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainEntry" } } } } }
+  /brain/review:
+    get:
+      operationId: listBrainToReview
+      description: >
+        Approved entries no job has cited for a while (90 days by default), oldest first: the ones worth asking
+        "is this still true?". Archive what no longer holds, revise what changed.
+      parameters:
+        - { name: project, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 3650, default: 90 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/BrainEntry" } } } } }
+  /brain/{brainEntryId}:
+    get:
+      operationId: getBrainEntry
+      description: An entry with every version, its links and where it was used (packed, searched, cited by jobs).
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: reviseBrainEntry
+      description: A change is a new version (supersedes the old one once approved); the old version stays.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/BrainPatch" } } }
+      responses:
+        "200": { description: the new version, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /brain/{brainEntryId}/approve:
+    post:
+      operationId: approveBrainEntry
+      description: Approve a proposal; it reaches prompts from now on, and the versions before it stop being true.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /brain/{brainEntryId}/reject:
+    post:
+      operationId: rejectBrainEntry
+      description: Turn a proposal down. It stays, rejected, so the same thing is not proposed again unnoticed.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /brain/{brainEntryId}/archive:
+    post:
+      operationId: archiveBrainEntry
+      description: Archive an entry that no longer holds; it stays readable and stops reaching prompts.
+      parameters: [ { $ref: "#/components/parameters/brainEntryId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainEntry" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/brain/preview:
+    get:
+      operationId: previewBrainPackage
+      description: >
+        What a job of this task would be handed from the Brain if the caller asked for it (debug, like
+        /projects/{id}/knowledge/preview): its component's and neighbours' entries, the product context for the
+        roles that weigh direction, the project's runbooks and facts, the agent's lessons, what people share and
+        the caller's own private context. Each entry's title carries its [brain:<id>] tag.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: task, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: role, in: query, required: false, schema: { type: string, description: "defaults to the current phase's role" } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ContextPackage" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/brain/impact:
+    get:
+      operationId: getBrainImpact
+      description: >
+        Whether the Brain helps, measured: the median context a phase job was handed and the share of phases
+        sent back, in a window before a moment and one as long after it. The context should grow by at most 20%
+        and rollbacks should fall.
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { name: pivot, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/BrainImpact" } } } }
+  /me/brain:
+    get:
+      operationId: getMyBrain
+      description: >
+        Everything the Brain holds about the caller, every version: their expertise, preferences and focus (worked out
+        from the tasks they own and talk about, never approved by anyone, never seen by anyone else), and what agents see
+        of it. This is the export.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MyBrain" } } } }
+    delete:
+      operationId: forgetMyBrain
+      description: Delete everything the Brain holds about the caller. Nothing of it is kept in any job's record.
+      responses:
+        "200": { description: forgotten, content: { application/json: { schema: { $ref: "#/components/schemas/Forgotten" } } } }
+  /me/brain/focus:
+    put:
+      operationId: setMyFocus
+      description: >
+        Turn the working out of the caller's focus on or off. Forgetting (DELETE /me/brain) turns it off, and it stays
+        off until the caller turns it on again.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/FocusSetting" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/FocusSetting" } } } }
   /presets:
     get:
       operationId: listProjectPresets
@@ -936,6 +1089,37 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentWrite" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /agent/say:
+    post:
+      operationId: agentSay
+      description: "Says something in the conversation the job's turn answers in (a phase job: its task's thread), as the job's agent and beside its answer. An @handle of another agent there asks it: a delegation in the same chain, under its limits."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentSay" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentWrite" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/thread:
+    get:
+      operationId: agentThread
+      description: "The conversation the job speaks in, its latest messages, oldest first, as the prompt carries them (words from outside the workspace marked untrusted): more of it than the prompt had room for."
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentThread" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /agent/tasks:
+    post:
+      operationId: agentProposeTask
+      description: "Proposes a task in the conversation the job speaks in, as a card. Nothing is created until a person accepts it (POST /proposals/{messageId}/accept)."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentTaskProposal" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentWrite" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /agent/catalogue:
     get:
       operationId: agentCatalogue
@@ -1370,11 +1554,544 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ConversationDetail" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /turns/{turnId}:
+    get:
+      operationId: getTurn
+      description: "One turn of an agent: what asked it, where it answers, the chain it is part of, its job and what it cost. For anyone who may read the conversation it answers in."
+      parameters: [ { $ref: "#/components/parameters/turnId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentTurn" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /turns/{turnId}/stop:
+    post:
+      operationId: stopTurn
+      description: "Stop an answer being written (the button under a streaming message): its job is stopped and the message ends with what it had said. For anyone who may write in the conversation."
+      parameters: [ { $ref: "#/components/parameters/turnId" } ]
+      requestBody:
+        content: { application/json: { schema: { $ref: "#/components/schemas/Reason" } } }
+      responses:
+        "202": { description: "stop requested, or done for a turn with no job yet", content: { application/json: { schema: { $ref: "#/components/schemas/AgentTurn" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /proposals/{messageId}/accept:
+    post:
+      operationId: acceptTaskProposal
+      description: "Makes the task an agent proposed (a task_proposal card), as the caller: a member of the project who may write where it was proposed. The card then points at the task."
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      responses:
+        "201": { description: the task, content: { application/json: { schema: { $ref: "#/components/schemas/Task" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /turns/{turnId}/allow:
+    post:
+      operationId: allowTurnToWork
+      description: "The consent card's button (\"Let @worker work on this?\"): a work agent that answered in chat because nobody allowed agents on the task. The caller (a project member who may write in the conversation) allows agents on the task, as POST /tasks/{id}/allow-agents does, and the agent takes a work turn on the same question. Repeating it answers the same turn."
+      parameters: [ { $ref: "#/components/parameters/turnId" } ]
+      responses:
+        "201": { description: the work turn, content: { application/json: { schema: { $ref: "#/components/schemas/AgentTurn" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/agents:
+    get:
+      operationId: listProjectAgents
+      description: "The agents people of this project can mention, for @autocomplete: its own (the defaults of every project and those it made) and the workspace's. For anyone who may read the project."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Agent" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createProjectAgent
+      description: "A project's own agent, such as a @backend-reviewer for the reviewer role. For the project's admins. Its handle must not be taken in the project or the workspace."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewAgent" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /workspace/agents:
+    get:
+      operationId: listWorkspaceAgents
+      description: The workspace's own agents, which every project sees.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Agent" } } } } }
+    post:
+      operationId: createWorkspaceAgent
+      description: "An agent every project sees. For workspace admins. Its handle must not be taken in any project."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewAgent" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /agents/{agentId}:
+    get:
+      operationId: getAgent
+      description: "An agent's profile: who it is, what it may do, and its record over the last 30 days."
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentProfile" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateAgent
+      description: "Change an agent or pause it (status: paused). For its project's admins, or workspace admins for a workspace agent. A built-in agent keeps its handle and role."
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentPatch" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteAgent
+      description: "Remove an agent a person made. A built-in agent is paused instead (409)."
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      responses:
+        "204": { description: deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /agents/{agentId}/turns:
+    get:
+      operationId: listAgentTurns
+      description: "An agent's turns since a moment (default 30 days), newest first: those in conversations the caller may read."
+      parameters:
+        - { $ref: "#/components/parameters/agentId" }
+        - { name: since, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AgentTurn" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /registries:
+    get:
+      operationId: listRegistries
+      description: "Where the marketplace comes from: Gator's own registry (GATOR_MARKETPLACE_URL) first, then the company's. Anyone signed in."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Registry" } } } } }
+    post:
+      operationId: addRegistry
+      description: "Add a company's own registry: a git repository (or a directory on the server) with index.json and, when it has a key, index.json.sig. Workspace admins only."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewRegistry" } } }
+      responses:
+        "201": { description: added, content: { application/json: { schema: { $ref: "#/components/schemas/Registry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /registries/{registryId}:
+    delete:
+      operationId: deleteRegistry
+      description: "Remove a registry nothing is installed from. Gator's own stays (409). Workspace admins only."
+      parameters: [ { $ref: "#/components/parameters/registryId" } ]
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /registries/{registryId}/fetch:
+    post:
+      operationId: fetchRegistry
+      description: >
+        Fetch a registry and cache every package that verifies: the index's signature (when the registry has a key) first,
+        then each package's files against its checksum and the server's limits. A bad signature takes nothing (400); a
+        package that fails, or a version already published with other files, is turned away on its own and listed under
+        rejected. Nothing installed changes. Workspace admins only.
+      parameters: [ { $ref: "#/components/parameters/registryId" } ]
+      responses:
+        "200": { description: fetched, content: { application/json: { schema: { $ref: "#/components/schemas/RegistryFetch" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /marketplace:
+    get:
+      operationId: listMarketplace
+      description: "The catalogue of every registry, each package at its newest version. With projectId, what that project has installed of each (and whether an update waits) and what it lacks to run it."
+      parameters:
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [agent, skill, integration, process, knowledge] } }
+        - { name: q, in: query, required: false, description: "words in the name, display name or description", schema: { type: string } }
+        - { name: phase, in: query, required: false, description: "a phase of the life of software: idea, discovery, planning, implementation, verification, release, monitoring", schema: { type: string } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/MarketplaceItem" } } } } }
+  /marketplace/{kind}/{name}:
+    get:
+      operationId: getMarketplacePackage
+      description: "One package: its manifest (README, example prompt, permissions, requirements), every version offered and its files."
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [agent, skill, integration, process, knowledge] } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: registryId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: version, in: query, required: false, description: "default: the newest", schema: { type: string } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MarketplaceDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/installations:
+    get:
+      operationId: listProjectInstallations
+      description: "What the project installed from the marketplace, with the version, the permissions accepted and whether an update waits."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Installation" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: installIntoProject
+      description: >
+        Install a package into the project, for its admins. acceptedPermissions must hold every permission the
+        package's version asks for (its manifest's permissions, line for line); otherwise nothing is installed and 409
+        names what is still to accept. An agent's handle is the package's suggestion unless handle says another; one
+        taken where people would see it is 409 too. An installed agent is in the project's agents (and @autocomplete)
+        at once.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInstallation" } } }
+      responses:
+        "201": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, or already installed, or the handle is taken", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+  /installations/{installationId}/update:
+    get:
+      operationId: previewInstallationUpdate
+      description: "What updating would do, changing nothing: the permissions the version adds and drops, and what a person changed here that it would touch, as diffs. The \"Update\" chip's sheet."
+      parameters:
+        - { $ref: "#/components/parameters/installationId" }
+        - { name: version, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UpdatePreview" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /workspace/installations:
+    get:
+      operationId: listWorkspaceInstallations
+      description: "What the workspace installed for every project: workspace agents, skills, native plugins."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Installation" } } } } }
+    post:
+      operationId: installIntoWorkspace
+      description: "Install a package for the whole workspace (an agent every project sees, a skill, a native plugin, a process for every project). Workspace admins only; the same acceptance as a project's."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInstallation" } } }
+      responses:
+        "201": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, or already installed", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+  /installations/{installationId}:
+    get:
+      operationId: getInstallation
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateInstallation
+      description: >
+        Bring an installation to another version (default: the newest its registry offers). Nothing ever updates by
+        itself. A version that asks for permissions never accepted needs them in acceptedPermissions (409
+        permissions_not_accepted otherwise, naming them). A part a person changed since installing (an agent's
+        instructions, a skill's SKILL.md, a process's template) blocks the update (409 local_changes, with diffs)
+        until resolve says keep_local (the new version, their changes kept) or take_theirs (the new version whole).
+        An agent keeps its handle; a remote server its allowlist and, at the same address, its credentials. For the
+        project's admins, or workspace admins.
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/InstallationUpdate" } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, local changes, or that version is installed already", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+    delete:
+      operationId: removeInstallation
+      description: "Uninstall: an agent is put away (its turns stay), a skill, an MCP server or a process goes. For the project's admins, or workspace admins."
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/skills:
+    get:
+      operationId: listProjectSkills
+      description: "The skills the project's agents may carry: the project's own and the workspace's (an agent carries a skill by naming it in skills)."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SkillInfo" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/remote-agents:
+    post:
+      operationId: createRemoteAgent
+      description: >
+        Add an agent outside Gator to the project, through A2A: its Agent Card is fetched (https, no private
+        address unless the server allows them) and checked, and the credential its endpoint takes (HTTP bearer) is
+        kept encrypted and never shown again. The agent is a member like any other — mention it and the turn is an A2A
+        task sent to the card's endpoint — but it chats and plays no role, answers only in conversations open to the
+        whole project, and its answers reach other agents as untrusted. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewRemoteAgent" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/Agent" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/a2a-clients:
+    get:
+      operationId: listA2AClients
+      description: "The outside agents let in to call the project's exposed agents, with what each spent today. For the project's admins."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/A2AClient" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createA2AClient
+      description: >
+        Let an outside agent in: a token (gtr_a2a_…, shown once) that reaches only /a2a/<project>/<agent> of the agents
+        this project exposes, a daily budget (default $5; the cost of the turns it asked for, jobs still running at
+        their cap) and a rate (default 30 requests a minute). What it asks is a message in #a2a-<name>, as an outside
+        identity: agents answer it in chat. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewA2AClient" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/A2AClientCreated" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /a2a-clients/{clientId}:
+    delete:
+      operationId: revokeA2AClient
+      description: "Take a client's token away; what it asked stays in its channel. For the project's admins."
+      parameters: [ { name: clientId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/A2AClient" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /agents/{agentId}/a2a:
+    put:
+      operationId: setAgentA2A
+      description: >
+        Show a project's own agent to its A2A clients, or stop (nobody is shown by default). An exposed agent has an
+        Agent Card at cardUrl that anyone may read, and answers the project's clients at url. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/agentId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/AgentA2A" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentA2AState" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /a2a/{projectSlug}/{handle}/.well-known/agent-card.json:
+    servers: [ { url: / } ]
+    get:
+      operationId: getA2AAgentCard
+      security: []
+      description: "The Agent Card (A2A 0.3) of an agent the project exposes: name, description, one skill, the JSON-RPC url and HTTP bearer authentication. 404 for any other."
+      parameters:
+        - { name: projectSlug, in: path, required: true, schema: { type: string } }
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/A2AAgentCard" } } } }
+        "404": { description: no such exposed agent }
+  /a2a/{projectSlug}/{handle}:
+    servers: [ { url: / } ]
+    post:
+      operationId: callA2AAgent
+      description: >
+        A2A JSON-RPC 2.0 for the project's clients (Authorization: Bearer gtr_a2a_…; any other token is 401 here, and
+        an A2A token is 403 anywhere else). message/send posts the text parts as the client's message in
+        #a2a-<client>, asking the agent, and answers the task (submitted, working, completed with the answer as status
+        message and artifact, failed, rejected, canceled); with configuration.blocking it waits up to 25 s.
+        messageId makes it idempotent. tasks/get reads a task the client was given; metadata carries turnId and
+        costUsd. tasks/cancel is -32002 (a person stops a turn in Gator); message/stream and tasks/resubscribe are
+        -32004. A spent daily budget is -32010, the rate -32011, an agent that is not exposed or not the client's
+        project's -32602. Errors are JSON-RPC errors with HTTP 200.
+      parameters:
+        - { name: projectSlug, in: path, required: true, schema: { type: string } }
+        - { name: handle, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/JsonRpcRequest" } } }
+      responses:
+        "200": { description: a JSON-RPC response, content: { application/json: { schema: { $ref: "#/components/schemas/JsonRpcResponse" } } } }
+        "401": { description: no A2A client token }
+  /projects/{projectId}/external-links:
+    post:
+      operationId: createExternalLinkCode
+      description: >
+        Make a code that links an account on a bridge to the caller, in this project: a messaging plugin switched on in
+        the project whose manifest says it takes codes (slack does; github does not, 400).
+        The person types it where the bridge hears it ("/gator link GTR-…" in Slack); it works once, for ten minutes,
+        and is shown only here. Until linked, what that account says is an outside identity's: agents hear it in chat
+        and it approves nothing. An email address never links an account. At most ten codes an hour.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewExternalLink" } } }
+      responses:
+        "201": { description: created, content: { application/json: { schema: { $ref: "#/components/schemas/ExternalLinkCode" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/external-identities:
+    get:
+      operationId: listExternalIdentities
+      description: "The outside accounts the project's bridges have heard from, and the people they are linked to. For the project's members and viewers."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ExternalIdentity" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /external-identities/{identityId}/link:
+    delete:
+      operationId: unlinkExternalIdentity
+      description: "Take a link away: the person it links to may, and a project admin. The account speaks as an outside identity again."
+      parameters: [ { name: identityId, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ExternalIdentity" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers:
+    get:
+      operationId: listProjectMcpServers
+      description: "The remote MCP servers the project's agents may be given: its own, and the workspace's it does not shadow. Never a secret, only which are set."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpServer" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}:
+    get:
+      operationId: getProjectMcpServer
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putProjectMcpServer
+      description: >
+        Change the project's own server, or make one (url and auth then required; bearer or none — OAuth comes with its
+        package): its address, the tools agents may call, whether it is on, and its credentials (secrets: {token: …};
+        an empty value removes one). A new address drops the old one's credentials. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpServerSettings" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/tools:
+    get:
+      operationId: listProjectMcpServerTools
+      description: "Ask the server, with its credentials, which tools it has: which agents may call, which it marks read-only (the only ones chat agents get). For the project's admins."
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpTool" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/calls:
+    get:
+      operationId: listProjectMcpServerCalls
+      description: "Every call the project's jobs made through the proxy to this server (the project's own, or the workspace's it reaches), newest first: method, tool, arguments (secrets masked by name and by shape), outcome, time. For the project's admins."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/serverName" }
+        - { $ref: "#/components/parameters/listLimit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpCall" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/connect:
+    post:
+      operationId: connectProjectMcpServer
+      description: >
+        Start connecting a server that signs in with OAuth, as the MCP authorization spec says: Gator reads the
+        server's protected resource metadata (RFC 9728) and its authorization server's metadata (RFC 8414) —
+        which must be the authorization server its package declared — registers a client of its own there
+        (RFC 7591, kept encrypted with the server) and answers the sign-in address, with PKCE, for the person's
+        browser. A provider app of this server (GATOR_<PROVIDER>_CLIENT_ID) is used instead only at the hosts
+        its operator listed (GATOR_<PROVIDER>_OAUTH_HOSTS). The browser comes back to /connect/callback; the
+        token stays on the server, renewed before it expires. Needs GATOR_PUBLIC_URL. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectRequest" } } }
+      responses:
+        "200": { description: started, content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectStart" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /workspace/mcp-servers:
+    get:
+      operationId: listWorkspaceMcpServers
+      description: "The workspace's own remote MCP servers, which every project's agents may be given."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpServer" } } } } }
+  /workspace/mcp-servers/{serverName}/calls:
+    get:
+      operationId: listWorkspaceMcpServerCalls
+      description: "Every call any project's jobs made through the proxy to this workspace server, newest first. Workspace admins only."
+      parameters:
+        - { $ref: "#/components/parameters/serverName" }
+        - { $ref: "#/components/parameters/listLimit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpCall" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /workspace/mcp-servers/{serverName}:
+    put:
+      operationId: putWorkspaceMcpServer
+      description: "Change (or make) a workspace server, as a project's. Workspace admins only."
+      parameters: [ { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpServerSettings" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   parameters:
+    serverName: { name: serverName, in: path, required: true, schema: { type: string } }
+    installationId: { name: installationId, in: path, required: true, schema: { type: string, format: uuid } }
+    registryId: { name: registryId, in: path, required: true, schema: { type: string, format: uuid } }
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    turnId: { name: turnId, in: path, required: true, schema: { type: string, format: uuid } }
+    agentId: { name: agentId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
     pluginName: { name: pluginName, in: path, required: true, schema: { type: string } }
     invitationId: { name: invitationId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -1385,6 +2102,7 @@ components:
     memberId: { name: memberId, in: path, required: true, schema: { type: string, format: uuid } }
     emoji: { name: emoji, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 64 } }
     attachmentId: { name: attachmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    brainEntryId: { name: brainEntryId, in: path, required: true, schema: { type: string, format: uuid } }
     listLimit: { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
     listOffset: { name: offset, in: query, required: false, description: "rows to skip, for the next page", schema: { type: integer, minimum: 0 } }
   responses:
@@ -1397,6 +2115,143 @@ components:
         X-Has-More: { schema: { type: boolean } }
       content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } }
   schemas:
+    MessageOrigin:
+      type: object
+      additionalProperties: true
+      description: "Where a message came from: {turn, job} for an agent's, {provider, external_ref} for one a bridge brought in (provider is the plugin: slack, github, or a2a for an A2A client); {} otherwise. A bridge never hears back a message whose provider is its own."
+      properties:
+        turn: { type: string, format: uuid }
+        job: { type: string, format: uuid }
+        provider: { type: string }
+        external_ref: { type: string, description: "where it is outside, in the provider's terms: T0123/C0456/1700000000.000100, owner/name#12/comment/77" }
+    NewRemoteAgent:
+      type: object
+      required: [handle, cardUrl]
+      properties:
+        handle: { type: string, description: "what people type after @; not taken in the project or the workspace" }
+        cardUrl: { type: string, description: "the Agent Card, or the agent's base address (/.well-known/agent-card.json is added)" }
+        token: { type: string, writeOnly: true, description: "the bearer token its endpoint takes; kept encrypted, never shown" }
+        displayName: { type: string, description: "default: the card's name" }
+    RemoteAgentInfo:
+      type: object
+      description: "What Gator keeps of a remote agent's card. Never its credential, only whether there is one."
+      required: [cardUrl, url, name, hasCredential]
+      properties:
+        cardUrl: { type: string }
+        url: { type: string, description: "its JSON-RPC endpoint" }
+        name: { type: string }
+        description: { type: string }
+        version: { type: string }
+        skills: { type: array, items: { $ref: "#/components/schemas/A2ASkill" } }
+        hasCredential: { type: boolean }
+        fetchedAt: { type: string, format: date-time }
+    A2ASkill:
+      type: object
+      required: [id, name, description]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        tags: { type: array, items: { type: string } }
+    NewA2AClient:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: "1–40 lowercase letters, digits and dashes; its channel is #a2a-<name>" }
+        dailyBudgetUsd: { type: number, format: double, minimum: 0 }
+        perMinute: { type: integer, minimum: 1, maximum: 600 }
+    A2AClient:
+      type: object
+      required: [id, projectId, name, dailyBudgetUsd, perMinute, spentTodayUsd, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        name: { type: string }
+        dailyBudgetUsd: { type: number, format: double }
+        perMinute: { type: integer }
+        spentTodayUsd: { type: number, format: double, description: "the cost of the turns it asked for since 00:00 UTC, jobs still running at their cap" }
+        identityId: { type: string, format: uuid, description: "who it is in its channel (an outside identity, provider a2a)" }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time }
+    A2AClientCreated:
+      type: object
+      required: [client, token]
+      properties:
+        client: { $ref: "#/components/schemas/A2AClient" }
+        token: { type: string, description: "gtr_a2a_…; shown once" }
+    AgentA2A:
+      type: object
+      required: [exposed]
+      properties:
+        exposed: { type: boolean }
+    AgentA2AState:
+      type: object
+      required: [agent, exposed]
+      properties:
+        agent: { $ref: "#/components/schemas/Agent" }
+        exposed: { type: boolean }
+        url: { type: string, description: "where clients call it (when exposed)" }
+        cardUrl: { type: string, description: "its Agent Card (when exposed)" }
+    A2AAgentCard:
+      type: object
+      description: "An A2A 0.3 Agent Card."
+      required: [protocolVersion, name, description, url, version, capabilities, defaultInputModes, defaultOutputModes, skills]
+      properties:
+        protocolVersion: { type: string }
+        name: { type: string }
+        description: { type: string }
+        url: { type: string }
+        preferredTransport: { type: string }
+        version: { type: string }
+        capabilities: { type: object, additionalProperties: true }
+        defaultInputModes: { type: array, items: { type: string } }
+        defaultOutputModes: { type: array, items: { type: string } }
+        skills: { type: array, items: { $ref: "#/components/schemas/A2ASkill" } }
+        securitySchemes: { type: object, additionalProperties: true }
+        security: { type: array, items: { type: object, additionalProperties: true } }
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, id, method]
+      properties:
+        jsonrpc: { type: string, enum: ["2.0"] }
+        id: { description: "a string or a number" }
+        method: { type: string, description: "message/send, tasks/get" }
+        params: { type: object, additionalProperties: true }
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc: { type: string }
+        id: { description: "the request's" }
+        result: { type: object, additionalProperties: true, description: "an A2A Task: {kind: task, id, contextId, status: {state, message?}, artifacts?, metadata?}" }
+        error: { type: object, properties: { code: { type: integer }, message: { type: string } } }
+    NewExternalLink:
+      type: object
+      required: [provider]
+      properties:
+        provider: { type: string, description: "the bridge's plugin name (slack); one that takes no link codes is 400" }
+    ExternalLinkCode:
+      type: object
+      required: [code, provider, expiresAt]
+      properties:
+        code: { type: string, description: "GTR-XXXX-XXXX-XXXX-XXXX; shown once" }
+        provider: { type: string }
+        expiresAt: { type: string, format: date-time }
+    ExternalIdentity:
+      type: object
+      description: "An account on a bridge, as one project knows it: the same Slack user in two projects is two identities."
+      required: [id, projectId, provider, externalId, displayName, linked, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        provider: { type: string, description: "the bridge (plugin) that vouches for it" }
+        externalId: { type: string, description: "in the provider's namespace: T0123/U0456 for Slack" }
+        displayName: { type: string, description: "as the outside gave it; outside words, not verified" }
+        linked: { type: boolean }
+        userId: { type: string, format: uuid, description: "the person it is linked to" }
+        linkedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
     Error:
       type: object
       required: [error]
@@ -1430,7 +2285,7 @@ components:
     NewJob:
       type: object
       properties:
-        backend: { type: string, description: "claude | codex | pi; defaults to the project's policy for the role" }
+        backend: { type: string, description: "claude, or acp:<agent> for an agent speaking ACP through a runner (GATOR_ACP_AGENTS); defaults to the project's policy for the role" }
         model: { type: string, description: "defaults to the policy's model when the backend is the policy's" }
         maxCostUsd: { type: number, format: double, minimum: 0, description: "cost cap for this job; defaults to the policy's" }
         instruction: { type: string }
@@ -1442,13 +2297,17 @@ components:
         allowAgents: { type: boolean, default: false, description: "the caller allows agents to work on this task without asking, recorded before the job is queued, in the same step; see allowAgents" }
     Job:
       type: object
-      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt, placement]
+      required: [id, taskId, projectId, phase, role, backend, instruction, status, attempts, maxAttempts, createdAt, placement, kind, tier]
       properties:
         id: { type: string, format: uuid }
         taskId: { type: string, format: uuid }
         projectId: { type: string, format: uuid }
         phase: { type: string }
         role: { type: string }
+        agentId: { type: string, format: uuid, description: "the agent whose work this is: the one a turn named, or the agent playing the role" }
+        turnId: { type: string, format: uuid, description: "the conversation turn a reply answers" }
+        kind: { type: string, enum: [phase, reply, summary], description: "a phase of the process, an answer in a conversation, or the summary of one" }
+        tier: { type: string, enum: [chat, work], description: "chat reads and answers with no tools that write; work changes code on a gator/ branch" }
         backend: { type: string }
         placement: { type: string, enum: [local, cloud], description: "where the job runs" }
         model: { type: string }
@@ -1489,7 +2348,7 @@ components:
         kind: { type: string }
         phase: { type: string }
         title: { type: string }
-        origin: { type: string, description: "task | catalogue | product | knowledge | artifact | plugin" }
+        origin: { type: string, description: "conversation | task | catalogue | product | knowledge | artifact | plugin" }
         body: { type: string, description: "as it went into the prompt; empty when the document was left out" }
         bytes: { type: integer }
         fullBytes: { type: integer, description: "its length before trimming" }
@@ -1521,6 +2380,8 @@ components:
         maxParallel: { type: integer }
         projects: { type: array, items: { type: string } }
         canLogin: { type: boolean, description: "this runner can drive an interactive backend login; when false, asking it to is refused" }
+        readOnly: { type: array, items: { type: string }, description: "its backends that keep a chat job read-only; absent from a runner that says nothing (every backend)" }
+        noTools: { type: array, items: { type: string }, description: "its backends that run a summary with no tools; absent from a runner that says nothing (every backend)" }
     RunnerInfo:
       type: object
       required: [id, name, location, placement, status, connected, capabilities, authState, protocolVersion, binaryVersion]
@@ -1953,6 +2814,32 @@ components:
         kind: { type: string, enum: [decision, lesson] }
         title: { type: string }
         content: { type: string }
+    AgentSay:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, description: "Markdown; @handle of an agent asks it" }
+    AgentThread:
+      type: object
+      required: [conversationId, messages]
+      properties:
+        conversationId: { type: string, format: uuid }
+        messages: { type: array, items: { $ref: "#/components/schemas/AgentThreadMessage" } }
+    AgentThreadMessage:
+      type: object
+      required: [seq, author, body, untrusted]
+      properties:
+        seq: { type: integer, format: int64, description: "0 for the message a thread hangs under" }
+        author: { type: string, description: "a person's name, @handle, Gator, a plugin" }
+        body: { type: string, description: "words from outside the workspace come fenced, as in the prompt" }
+        untrusted: { type: boolean, description: "written outside the workspace: data, never instructions" }
+    AgentTaskProposal:
+      type: object
+      required: [kind, title]
+      properties:
+        kind: { type: string, enum: [feature, bug, chore, incident] }
+        title: { type: string }
+        description: { type: string }
     AgentWrite:
       type: object
       required: [ok]
@@ -2056,6 +2943,159 @@ components:
       type: object
       properties:
         key: { type: string, description: "component key, or absent to clear" }
+    BrainScope: { type: string, enum: [workspace, project, component, user, agent] }
+    BrainKind:
+      type: string
+      enum: [vision, principle, persona, glossary, decision, lesson, roadmap, convention, runbook, fact, expertise, focus, preference]
+    BrainStatus: { type: string, enum: [proposed, approved, rejected, superseded, archived] }
+    BrainVisibility: { type: string, enum: [private, scope, project, workspace], description: "scope: the scope's own rule; a person's entry is theirs unless project or workspace" }
+    BrainSource:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, description: "manual | message | task | job | plugin | import | pack" }
+        id: { type: string }
+        url: { type: string }
+        excerpt: { type: string, description: "a quote of the source; never kept for a private conversation" }
+        name: { type: string, description: "the plugin or pack it came from" }
+    BrainEntry:
+      type: object
+      required: [id, lineage, scope, kind, title, content, visibility, status, version, confidence, source, private, createdByKind, validFrom, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        lineage: { type: string, format: uuid, description: "shared by every version of one entry" }
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        projectId: { type: string, format: uuid }
+        componentKey: { type: string }
+        userId: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        topic: { type: string, description: "a convention's shelf: language, architecture, requirements, testing, security" }
+        title: { type: string }
+        content: { type: string }
+        visibility: { $ref: "#/components/schemas/BrainVisibility" }
+        status: { $ref: "#/components/schemas/BrainStatus" }
+        version: { type: integer }
+        supersedes: { type: string, format: uuid, description: the version before this one }
+        validFrom: { type: string, format: date-time }
+        validUntil: { type: string, format: date-time, description: "when it stopped being true (superseded, archived)" }
+        confidence: { type: string, enum: [stated, inferred] }
+        source: { $ref: "#/components/schemas/BrainSource" }
+        sourceTaskId: { type: string, format: uuid }
+        sourceConversationId: { type: string, format: uuid }
+        private: { type: boolean, description: "came from a private conversation: until approved, only its readers see it" }
+        createdByKind: { type: string, description: "user | runner | plugin | system" }
+        createdBy: { type: string, format: uuid }
+        approvedBy: { type: string, format: uuid }
+        approvedAt: { type: string, format: date-time }
+        archivedAt: { type: string, format: date-time, description: folded into a condensed entry }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    BrainHit:
+      type: object
+      required: [id, title, excerpt, scope, kind, status, version, source]
+      description: one search result, the same for the REST API and the MCP server's brain_search
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        excerpt: { type: string }
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        status: { $ref: "#/components/schemas/BrainStatus" }
+        version: { type: integer }
+        projectId: { type: string, format: uuid }
+        componentKey: { type: string }
+        source: { $ref: "#/components/schemas/BrainSource" }
+        rank: { type: number, format: float }
+    BrainLinkInput:
+      type: object
+      required: [targetKind, targetId]
+      properties:
+        targetKind: { type: string, enum: [entry, component, task, conversation] }
+        targetId: { type: string }
+        relation: { type: string, enum: [relates, depends_on, contradicts, implements], default: relates }
+    BrainLink:
+      allOf:
+        - $ref: "#/components/schemas/BrainLinkInput"
+        - type: object
+          required: [relation, createdAt]
+          properties:
+            createdAt: { type: string, format: date-time }
+    BrainCitation:
+      type: object
+      required: [jobId, taskId, role, how, at]
+      properties:
+        jobId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        role: { type: string }
+        how: { type: string, enum: [packed, searched, cited] }
+        at: { type: string, format: date-time }
+    BrainDetail:
+      type: object
+      required: [entry, versions, links, citations]
+      properties:
+        entry: { $ref: "#/components/schemas/BrainEntry" }
+        versions: { type: array, items: { $ref: "#/components/schemas/BrainEntry" }, description: "every version, newest first" }
+        links: { type: array, items: { $ref: "#/components/schemas/BrainLink" } }
+        citations: { type: array, items: { $ref: "#/components/schemas/BrainCitation" } }
+    NewBrainEntry:
+      type: object
+      required: [scope, kind, title, content]
+      properties:
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        title: { type: string }
+        content: { type: string }
+        projectId: { type: string, format: uuid, description: "for project, component and agent entries, and a person's entry shared with a project" }
+        componentKey: { type: string }
+        agentId: { type: string, format: uuid }
+        topic: { type: string, enum: [language, architecture, requirements, testing, security] }
+        visibility: { $ref: "#/components/schemas/BrainVisibility" }
+        propose: { type: boolean, description: "propose it even if you may approve it" }
+        links: { type: array, items: { $ref: "#/components/schemas/BrainLinkInput" } }
+    BrainPatch:
+      type: object
+      properties:
+        title: { type: string }
+        content: { type: string }
+        visibility: { $ref: "#/components/schemas/BrainVisibility" }
+        propose: { type: boolean }
+    BrainSample:
+      type: object
+      required: [jobs, medianContextBytes, advances, rollbacks, rollbackRate]
+      properties:
+        jobs: { type: integer }
+        medianContextBytes: { type: integer }
+        advances: { type: integer }
+        rollbacks: { type: integer }
+        rollbackRate: { type: number, format: double }
+    BrainImpact:
+      type: object
+      required: [before, after, contextGrowth, contextHeld, rollbacksFell]
+      properties:
+        before: { $ref: "#/components/schemas/BrainSample" }
+        after: { $ref: "#/components/schemas/BrainSample" }
+        contextGrowth: { type: number, format: double, description: "how much the median context grew, as a fraction" }
+        contextHeld: { type: boolean, description: "it grew by at most 20%" }
+        rollbacksFell: { type: boolean }
+    FocusSetting:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        offSince: { type: string, format: date-time, description: "when it was turned off (or the caller asked to be forgotten)" }
+    MyBrain:
+      type: object
+      required: [entries, agentsSee, focus]
+      properties:
+        focus: { $ref: "#/components/schemas/FocusSetting" }
+        entries: { type: array, items: { $ref: "#/components/schemas/BrainEntry" }, description: "every version of every entry about the caller" }
+        agentsSee: { type: string, description: "what agents are told of it, in a sentence" }
+    Forgotten:
+      type: object
+      required: [deleted]
+      properties:
+        deleted: { type: integer, description: "entries deleted" }
     ProductEntry:
       type: object
       required: [id, kind, title, content, version, status, createdAt]
@@ -2167,7 +3207,7 @@ components:
       type: object
       required: [url]
       properties:
-        url: { type: string, description: "the provider's sign-in page; open it in a browser" }
+        url: { type: string, description: "where the person's browser starts: Gator's /connect/start, which ties the connection to that browser and sends it on to the provider's sign-in page; a callback from any other browser is refused" }
     PluginImport:
       type: object
       required: [created, existing]
@@ -2220,6 +3260,7 @@ components:
         trigger: { type: string, description: "pull_request, weekly or incident" }
         needs: { type: string, description: "what the project must have first: github, monitoring, repository, or empty for nothing" }
         usesAgents: { type: boolean, description: "its tasks are worked on by agents, so switching it on needs allowAgents" }
+        author: { type: string, description: "the role of the agent whose work it is (its default agent: reviewer, security_reviewer, worker, triage, reporter)" }
         available: { type: boolean, description: the project has what it needs }
         unavailableReason: { type: string, description: "what to do first, when not available" }
         enabled: { type: boolean }
@@ -2480,6 +3521,7 @@ components:
       required: [members]
       properties:
         members: { type: array, items: { type: string, format: uuid }, description: "people besides the caller (the caller may be listed too)" }
+        agents: { type: array, items: { type: string, format: uuid }, description: "agents of the project in the DM; every person's message there asks them (needs projectId)" }
         projectId: { type: string, format: uuid, description: "a DM inside this project; omitted, outside every project" }
     ConversationPatch:
       type: object
@@ -2520,12 +3562,12 @@ components:
         authorId: { type: string, format: uuid }
         kind: { type: string, enum: [text, card] }
         body: { type: string, description: "Markdown; empty once deleted" }
-        cardType: { type: string, description: "task | decision | job | artifact | pr | incident | release | brain_proposal" }
+        cardType: { type: string, description: "task | decision | job | artifact | consent | task_proposal | pr | incident | release | brain_proposal" }
         card: { $ref: "#/components/schemas/Card" }
         replyCount: { type: integer }
         threadId: { type: string, format: uuid, description: "the thread under this message, once opened" }
-        status: { type: string, enum: [streaming, final, failed] }
-        origin: { type: object, additionalProperties: true, description: "where it came from outside Gator (phase 5); {} otherwise" }
+        status: { type: string, enum: [streaming, final, failed], description: "streaming while an agent is still writing it (message.edited as it grows), failed when its turn could not answer" }
+        origin: { $ref: "#/components/schemas/MessageOrigin" }
         clientId: { type: string }
         editedAt: { type: string, format: date-time }
         deletedAt: { type: string, format: date-time }
@@ -2533,6 +3575,127 @@ components:
         mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
         reactions: { type: array, items: { $ref: "#/components/schemas/Reaction" } }
         attachments: { type: array, items: { $ref: "#/components/schemas/Attachment" }, description: "none once deleted" }
+        turn: { $ref: "#/components/schemas/MessageTurn" }
+    Agent:
+      type: object
+      description: "A member of the team that is an agent: an identity people mention, a role it plays in the process, what it may touch, and its state."
+      required: [id, handle, displayName, description, avatar, instructions, tier, policy, tools, skills, status, source, builtin, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: absent for a workspace agent }
+        handle: { type: string, description: "what people type after @; 2–32 of a–z, 0–9 and '-'" }
+        displayName: { type: string }
+        description: { type: string, description: "one line, shown in @autocomplete" }
+        avatar: { type: string, description: "an SF Symbol, an emoji or a url" }
+        roleKey: { type: string, description: "the process role it plays: researcher, planner, worker, reviewer, security_reviewer, curator, triage, reporter, …" }
+        instructions: { type: string, description: "its own prompt; empty means its role's" }
+        tier: { type: string, enum: [chat, work], description: "chat reads and answers with no tools that write; work changes code on a gator/ branch, where a person allowed agents on the task" }
+        policy: { $ref: "#/components/schemas/AgentPolicy" }
+        tools: { type: array, items: { type: string }, description: "the remote MCP servers it may call through Gator's proxy: a server's name, or server/tool" }
+        skills: { type: array, items: { type: string }, description: "the skills it carries, by name; a job of it gets them in its lease" }
+        status: { type: string, enum: [active, paused], description: "a paused agent refuses turns and says so" }
+        source: { type: object, additionalProperties: true, description: "{kind: builtin | custom | marketplace, …}" }
+        builtin: { type: boolean, description: "one of every project's defaults: paused, never deleted" }
+        kind: { type: string, enum: [local, remote], x-enum-varnames: [AgentKindLocal, AgentKindRemote], description: "local runs on a runner; remote is an agent outside Gator, asked over A2A" }
+        remote: { $ref: "#/components/schemas/RemoteAgentInfo" }
+        a2aExposed: { type: boolean, description: "shown to the project's A2A clients" }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AgentPolicy:
+      type: object
+      description: "The agent's own backend, model and cost cap per turn, over the project's policy for its role and tier; empty takes the project's."
+      properties:
+        backend: { type: string, pattern: "^[a-z][a-z0-9-]{0,31}(:[a-z][a-z0-9-]{0,31})?$", description: "claude, or acp:<agent> for an agent speaking the Agent Client Protocol through a runner (acp:codex, acp:gemini); a job waits for a runner with that backend logged in" }
+        model: { type: string }
+        maxCostUsd: { type: number, format: double }
+        dailyBudgetUsd: { type: number, format: double, description: "what the agent may spend in a UTC day, jobs still running counted at their cap; absent: only the project's budget" }
+    NewAgent:
+      type: object
+      required: [handle, displayName]
+      properties:
+        handle: { type: string }
+        displayName: { type: string }
+        description: { type: string }
+        avatar: { type: string }
+        roleKey: { type: string }
+        instructions: { type: string }
+        tier: { type: string, enum: [chat, work], default: chat }
+        policy: { $ref: "#/components/schemas/AgentPolicy" }
+    AgentPatch:
+      type: object
+      description: fields left out stay as they are
+      properties:
+        handle: { type: string, description: "not for a built-in agent" }
+        displayName: { type: string }
+        description: { type: string }
+        avatar: { type: string }
+        roleKey: { type: string, description: "not for a built-in agent" }
+        instructions: { type: string }
+        tier: { type: string, enum: [chat, work] }
+        policy: { $ref: "#/components/schemas/AgentPolicy" }
+        status: { type: string, enum: [active, paused] }
+        skills: { type: array, items: { type: string }, description: "the skills it carries, by name: the project's own skill of that name before the workspace's" }
+        tools: { type: array, items: { type: string }, description: "the remote MCP servers it may call through Gator's proxy: a server's name (every tool its allowlist holds) or server/tool" }
+    AgentProfile:
+      type: object
+      required: [agent, stats]
+      properties:
+        agent: { $ref: "#/components/schemas/Agent" }
+        stats: { $ref: "#/components/schemas/AgentStats" }
+    AgentStats:
+      type: object
+      description: "Its record since a moment, 30 days by default: turns asked of it, jobs it did (phase work and answers), how many of those that ended ended done, and what they cost. A workspace agent's record spans every project and is shown to workspace admins only; others get zeros."
+      required: [since, turns, refused, jobs, done, ended, doneShare, costUsd]
+      properties:
+        since: { type: string, format: date-time }
+        turns: { type: integer }
+        refused: { type: integer }
+        jobs: { type: integer }
+        done: { type: integer }
+        ended: { type: integer }
+        doneShare: { type: number, format: double, description: "done over ended; 0 with nothing ended" }
+        costUsd: { type: number, format: double }
+    AgentTurn:
+      type: object
+      description: "One answer of one agent to one call: a mention, a message in a DM, a delegation, an escalation a person allowed. A refused call is a turn too, with its refusal."
+      required: [id, agentId, projectId, conversationId, requestedByKind, chainId, hop, tier, status, createdAt, costUsd, durationMs]
+      properties:
+        id: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        conversationId: { type: string, format: uuid, description: where the answer goes }
+        triggerMessageId: { type: string, format: uuid, description: the message that asked }
+        replyMessageId: { type: string, format: uuid, description: the agent's answer }
+        requestedByKind: { type: string, enum: [user, agent, automation, process, external], description: "external: somebody outside the workspace (a bridge's outside identity, an A2A client), answered in chat" }
+        requestedBy: { type: string, format: uuid, description: the person or the agent who asked }
+        onBehalfOf: { type: string, format: uuid, description: the person at the start of the chain }
+        chainId: { type: string, format: uuid, description: shared by agent-to-agent delegations }
+        parentTurnId: { type: string, format: uuid, description: the turn that delegated this one }
+        escalatedFrom: { type: string, format: uuid, description: the chat turn a person let work }
+        hop: { type: integer, description: "0 for a person's call; a chain stops at 4 turns" }
+        tier: { type: string, enum: [chat, work] }
+        jobId: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, done, failed, refused, stopped] }
+        refusal: { type: string, description: "paused | no_access | hop_limit | repeat | fan_out | chain_budget | agent_budget | budget | no_task" }
+        costUsd: { type: number, format: double }
+        durationMs: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    MessageTurn:
+      type: object
+      description: "The agent's turn a message is the answer of: what a client shows under it (state, cost, time) and what Stop acts on."
+      required: [id, agentId, status, tier, costUsd, durationMs, costEstimated]
+      properties:
+        id: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, done, failed, refused, stopped] }
+        tier: { type: string, enum: [chat, work] }
+        jobId: { type: string, format: uuid }
+        refusal: { type: string, description: "why it did not run: paused | no_access | hop_limit | repeat | fan_out | chain_budget | agent_budget | budget | no_task" }
+        costUsd: { type: number, format: double }
+        durationMs: { type: integer, format: int64 }
+        costEstimated: { type: boolean, description: "priced from list rates (a subscription), not billed" }
     Reaction:
       type: object
       required: [emoji, count, members]
@@ -2564,11 +3727,26 @@ components:
         state: { type: string }
         summary: { type: string }
         actions: { type: array, items: { type: string } }
+        day: { type: string, description: "brain_proposal: the day (YYYY-MM-DD) whose proposals the card lists" }
+        proposals: { type: array, items: { $ref: "#/components/schemas/BrainCardProposal" }, description: "brain_proposal: what the Brain was proposed from the task that day" }
+    BrainCardProposal:
+      type: object
+      required: [id, kind, scope, title, status]
+      description: "one proposal of a brain_proposal card; approve and reject call /brain/{id}/approve and /brain/{id}/reject"
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        component: { type: string }
+        title: { type: string }
+        status: { $ref: "#/components/schemas/BrainStatus" }
+        replaces: { type: array, items: { type: string, format: uuid }, description: "approved decisions it contradicts: approving it supersedes them (\"does this replace X?\")" }
+        actions: { type: array, items: { type: string, enum: [approve, reject] } }
     CardRef:
       type: object
       required: [kind, id]
       properties:
-        kind: { type: string, description: "task | job | artifact | pr | incident | release | brain_entry" }
+        kind: { type: string, description: "task | job | artifact | turn | task_proposal | pr | incident | release | brain_entry | brain_proposal" }
         id: { type: string }
         taskId: { type: string, format: uuid }
     MessagePage:
@@ -2596,3 +3774,244 @@ components:
       properties:
         message: { $ref: "#/components/schemas/Message" }
         conversation: { $ref: "#/components/schemas/Conversation" }
+    Registry:
+      type: object
+      required: [id, name, signed, builtin, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string, description: "workspace admins only; a credential in it is never shown" }
+        publicKey: { type: string, description: "the keys its index is signed with (ed25519:<base64>, comma-separated)" }
+        signed: { type: boolean, description: "false: an unsigned registry, whose packages only their checksums vouch for" }
+        builtin: { type: boolean, description: "Gator's own; it follows the server's configuration" }
+        fetchedAt: { type: string, format: date-time }
+        fetchError: { type: string, description: "workspace admins only: why the last fetch failed or what it turned away; empty when all was well" }
+        createdAt: { type: string, format: date-time }
+    NewRegistry:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string, description: "lowercase letters, digits and dashes" }
+        url: { type: string, description: "a git repository (https or ssh), or file:// a directory on the server (signed registries only)" }
+        publicKey: { type: string, description: "ed25519:<base64>; empty: an unsigned registry, which must be fetched over https or ssh and is shown as untrusted" }
+    RegistryFetch:
+      type: object
+      required: [registry, fetched, rejected]
+      properties:
+        registry: { $ref: "#/components/schemas/Registry" }
+        fetched: { type: array, items: { $ref: "#/components/schemas/PackageRef" } }
+        rejected: { type: array, items: { $ref: "#/components/schemas/RejectedPackage" } }
+    PackageRef:
+      type: object
+      required: [kind, name, version]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+    RejectedPackage:
+      type: object
+      required: [kind, name, version, reason]
+      properties:
+        kind: { type: string }
+        name: { type: string }
+        version: { type: string }
+        reason: { type: string }
+    PackageManifest:
+      type: object
+      description: "What a package says about itself, the same for every kind."
+      required: [kind, name, version, displayName, description, permissions, requires]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        displayName: { type: string }
+        description: { type: string }
+        phases: { type: array, items: { type: string } }
+        icon: { type: string, description: "a file of the package (assets/icon.png) or an SF Symbol" }
+        examplePrompt: { type: string }
+        readme: { type: string, description: "only in a package's details" }
+        permissions: { type: array, items: { type: string }, description: "what installing it lets it do, one line each; installing accepts exactly these" }
+        requires: { $ref: "#/components/schemas/PackageRequires" }
+        detail: { type: object, additionalProperties: true, description: "the kind's own manifest (agent.yaml, SKILL.md frontmatter, integration.yaml, process.yaml, pack.json), only in a package's details" }
+    PackageRequires:
+      type: object
+      properties:
+        capabilities: { type: array, items: { type: string }, description: "plugin capabilities: vcs, ci, deploy, monitoring, tracker …" }
+        mcp: { type: array, items: { type: string }, description: "remote MCP servers by name" }
+        skills: { type: array, items: { type: string }, description: "skills it uses and does not bring" }
+    MarketplaceItem:
+      type: object
+      required: [registryId, registryName, trusted, manifest, checksum, versions]
+      properties:
+        registryId: { type: string, format: uuid }
+        registryName: { type: string }
+        trusted: { type: boolean, description: "false: from an unsigned registry, which nothing but its checksums vouches for; show it as untrusted" }
+        manifest: { $ref: "#/components/schemas/PackageManifest" }
+        checksum: { type: string }
+        versions: { type: array, items: { type: string }, description: "every version offered, newest first" }
+        installed: { $ref: "#/components/schemas/InstalledRef" }
+        missing: { type: array, items: { type: string }, description: "with projectId: what the project lacks to run it (capabilities, MCP servers, skills)" }
+    InstalledRef:
+      type: object
+      description: "What a project (or the workspace) has installed of a package, and whether a newer version waits for a person."
+      required: [installationId, version, updateAvailable]
+      properties:
+        installationId: { type: string, format: uuid }
+        version: { type: string }
+        updateAvailable: { type: boolean }
+        workspace: { type: boolean, description: "installed for the whole workspace rather than this project" }
+    MarketplaceDetail:
+      type: object
+      required: [registryId, registryName, trusted, manifest, checksum, files, versions]
+      properties:
+        registryId: { type: string, format: uuid }
+        registryName: { type: string }
+        trusted: { type: boolean, description: "false: from an unsigned registry" }
+        manifest: { $ref: "#/components/schemas/PackageManifest" }
+        checksum: { type: string }
+        files: { type: array, items: { type: string }, description: "the package's files, by path" }
+        versions: { type: array, items: { $ref: "#/components/schemas/PackageVersion" } }
+        installed: { $ref: "#/components/schemas/InstalledRef" }
+        missing: { type: array, items: { type: string } }
+    PackageVersion:
+      type: object
+      required: [version, checksum, listed, permissions]
+      properties:
+        version: { type: string }
+        checksum: { type: string }
+        listed: { type: boolean, description: "false: the registry no longer offers it; it stays where it is installed" }
+        permissions: { type: array, items: { type: string } }
+    NewInstallation:
+      type: object
+      description: "Exactly the package the person looked at: a name two registries offer, a version published since, or the same version with other files is not what they accepted, and is refused (409)."
+      required: [kind, name, registryId, version, checksum, acceptedPermissions]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        registryId: { type: string, format: uuid }
+        checksum: { type: string, description: "the version's checksum, as the details showed it" }
+        acceptedPermissions: { type: array, items: { type: string }, description: "the permissions the person ticked, as the package words them" }
+        handle: { type: string, description: "an agent's handle, when the suggested one is taken" }
+    Installation:
+      type: object
+      required: [id, registryId, kind, name, version, checksum, acceptedPermissions, installedBy, installedAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: installed for the workspace" }
+        registryId: { type: string, format: uuid }
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        checksum: { type: string }
+        targetId: { type: string, format: uuid, description: "what it made: the agent, skill, MCP server, plugin or knowledge pack" }
+        acceptedPermissions: { type: array, items: { type: string } }
+        installedBy: { type: string, format: uuid }
+        installedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        updateAvailable: { type: string, description: "the newest version offered, when it is newer than this one" }
+        missing: { type: array, items: { type: string }, description: "what the project lacks to run it" }
+        agent: { $ref: "#/components/schemas/Agent" }
+    InstallRefusal:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, description: "permissions_not_accepted | conflict" }
+        permissions: { type: array, items: { type: string }, description: "with permissions_not_accepted: what is still to accept" }
+        localChanges: { type: array, items: { $ref: "#/components/schemas/LocalChange" }, description: "with local_changes: what a person changed, and what the new version would" }
+    SkillInfo:
+      type: object
+      description: "A skill: a folder in the Agent Skills format (SKILL.md, scripts/, references/, assets/). A job of an agent that carries it gets it whole; Claude Code loads it by itself, other backends read it through skill_read."
+      required: [id, name, version, description, files, source]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: every project's" }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        files: { type: array, items: { type: string } }
+        source: { type: object, additionalProperties: true, description: "{kind: marketplace, registry, package, version, agent?}: agent is the agent package that brought it" }
+    McpServer:
+      type: object
+      description: "A remote MCP server agents reach through Gator's proxy (/mcp/proxy/<name>, with a job's own token); its credentials never leave the server."
+      required: [id, name, displayName, url, auth, allowedTools, readOnlyTools, enabled, connected, secretsSet, breaker, workspace, source, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: the workspace's" }
+        name: { type: string, description: "what agents' tools are named after: mcp__<name>__<tool>" }
+        displayName: { type: string }
+        url: { type: string }
+        auth: { type: string, enum: [oauth, bearer, none] }
+        allowedTools: { type: array, items: { type: string }, description: "the tools agents may call; the rest are off until an admin switches them on" }
+        readOnlyTools: { type: array, items: { type: string }, description: "of those, the ones chat agents (and any job of a chat agent) may call: read-only as the admin or the package said when allowing them, not as the server says live" }
+        enabled: { type: boolean }
+        connected: { type: boolean, description: "it has what it needs to be called: a token, or nothing at all" }
+        secretsSet: { type: array, items: { type: string }, description: "which credentials are set, never their values" }
+        breaker: { type: string, enum: [closed, open, half-open], description: "open: it failed too often lately, and is not called for a while" }
+        workspace: { type: boolean }
+        source: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    McpServerSettings:
+      type: object
+      description: fields left out stay as they are
+      properties:
+        displayName: { type: string }
+        url: { type: string, description: "https, or http to localhost" }
+        auth: { type: string, enum: [bearer, none], description: "only when making a server" }
+        allowedTools: { type: array, items: { type: string } }
+        readOnlyTools: { type: array, items: { type: string }, description: "the allowed tools chat agents may call; left out while allowedTools changes, what the server marks read-only at that moment" }
+        enabled: { type: boolean }
+        secrets: { type: object, additionalProperties: { type: string }, description: "credentials, e.g. {token: …}; an empty value removes one" }
+    McpTool:
+      type: object
+      required: [name, description, readOnly, allowed, chat]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        readOnly: { type: boolean, description: "the server marks it read-only, now" }
+        allowed: { type: boolean }
+        chat: { type: boolean, description: "chat agents may call it: allowed, and in readOnlyTools" }
+    McpCall:
+      type: object
+      required: [id, method, tool, outcome, resultBytes, durationMs, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        jobId: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        method: { type: string, description: "tools/list or tools/call" }
+        tool: { type: string }
+        payload: { type: object, additionalProperties: true, description: "the arguments, anything that looks like a secret masked" }
+        outcome: { type: string, enum: [ok, error, denied, open], description: "denied: the allowlist refused it; open: the breaker did" }
+        error: { type: string }
+        resultBytes: { type: integer }
+        durationMs: { type: integer }
+        createdAt: { type: string, format: date-time }
+    InstallationUpdate:
+      type: object
+      required: [version, checksum]
+      properties:
+        version: { type: string, description: "the version previewed, in the installation's registry" }
+        checksum: { type: string, description: "its checksum, as the preview showed it" }
+        acceptedPermissions: { type: array, items: { type: string }, description: "accepted now; with what was accepted before, every permission of the new version" }
+        resolve: { type: string, enum: [keep_local, take_theirs], description: "what becomes of what a person changed since installing" }
+        downgrade: { type: boolean, description: "a version older than the one installed is refused (400) unless this says so" }
+    UpdatePreview:
+      type: object
+      required: [from, to, checksum, addedPermissions, removedPermissions, needsAcceptance, localChanges]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        checksum: { type: string, description: "the checksum of the version previewed, to name in the update" }
+        addedPermissions: { type: array, items: { type: string }, description: "asked for by the new version and never accepted: to accept again" }
+        removedPermissions: { type: array, items: { type: string } }
+        needsAcceptance: { type: boolean }
+        localChanges: { type: array, items: { $ref: "#/components/schemas/LocalChange" } }
+    LocalChange:
+      type: object
+      required: [part, local, incoming]
+      properties:
+        part: { type: string, description: "instructions, SKILL.md, template" }
+        local: { type: string, description: "a unified diff: what was installed → what it is now" }
+        incoming: { type: string, description: "a unified diff: what was installed → what the new version has" }

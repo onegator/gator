@@ -17,8 +17,9 @@ type Deps struct {
 	// Decisions answers whether a task waits on a person (process.Service). Nil: no decision
 	// cards.
 	Decisions DecisionSource
-	// Tasks creates tasks (process.Service). Nil: messages cannot be made into tasks.
-	Tasks TaskCreator
+	// Tasks creates tasks and promotes asks (process.Service). Nil: messages cannot be made into
+	// tasks, and nobody's conversation with an agent opens one.
+	Tasks Tasks
 	// Blobs keeps uploaded files (BlobStoreFromEnv). Nil: no attachments.
 	Blobs BlobStore
 	// CardSources are more kinds of cards (a plugin's pull requests, an incident), written by
@@ -35,10 +36,16 @@ type Module struct {
 	Threads   *Threads
 	Cards     *Projector
 	Search    *Search
-	// Promoter is nil without Deps.Tasks.
-	Promoter *Promoter
+	// Packer tells an agent the conversation it answers in.
+	Packer *Packer
+	// Promoter, Asks and Proposals are nil without Deps.Tasks.
+	Promoter  *Promoter
+	Asks      *Asks
+	Proposals *Proposals
 	// Attachments is nil without Deps.Blobs.
 	Attachments *Attachments
+	// Bridged writes what messaging bridges carry in.
+	Bridged *Bridged
 
 	pool *pgxpool.Pool
 	deps Deps
@@ -56,11 +63,15 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Threads:   threads,
 		Cards:     NewProjector(pool, threads),
 		Search:    NewSearch(pool, access),
+		Packer:    NewPacker(db.New(pool), 0),
+		Bridged:   NewBridged(pool),
 		pool:      pool,
 		deps:      deps,
 	}
 	if deps.Tasks != nil {
-		m.Promoter = NewPromoter(pool, access, deps.Roles, deps.Tasks, threads)
+		m.Promoter = NewPromoter(pool, access, deps.Roles, deps.Tasks, deps.Tasks, threads)
+		m.Asks = NewAsks(pool, deps.Tasks)
+		m.Proposals = NewProposals(pool, access, deps.Roles, deps.Tasks)
 	}
 	if deps.Blobs != nil {
 		m.Attachments = NewAttachments(pool, access, deps.Blobs)
@@ -74,7 +85,11 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 // whatever Deps.CardSources adds.
 func (m *Module) CardSources() []CardSource {
 	q := db.New(m.pool)
-	sources := []CardSource{taskCards{tasks: q}, jobCards{jobs: q}, artifactCards{artifacts: q}}
+	var kinds hiddenKinds
+	if m.deps.Tasks != nil {
+		kinds = m.deps.Tasks
+	}
+	sources := []CardSource{taskCards{tasks: q, kinds: kinds}, jobCards{jobs: q}, artifactCards{artifacts: q}}
 	if m.deps.Decisions != nil {
 		sources = append(sources, decisionCards{tasks: q, decisions: m.deps.Decisions, index: m.Cards})
 	}

@@ -23,6 +23,20 @@ type TaskCreator interface {
 	Create(ctx context.Context, p process.CreateParams, actor process.Actor) (db.Task, error)
 }
 
+// AskPromoter turns a conversation with an agent (an ask) into a task of the process, keeping
+// what was done in it. process.Service is one.
+type AskPromoter interface {
+	PromoteAsk(ctx context.Context, taskID pgtype.UUID, p process.PromoteAskParams, actor process.Actor) (db.Task, error)
+}
+
+// Tasks is what conversations need of the process to make work of what is said: creating tasks,
+// reopening asks and promoting them, and knowing which kinds are hidden. process.Service is one.
+type Tasks interface {
+	askTasks
+	AskPromoter
+	HiddenKind(ctx context.Context, projectID pgtype.UUID, kind string) (bool, error)
+}
+
 // PromotableKinds are the kinds of task a message can become.
 var PromotableKinds = []string{"feature", "bug", "chore", "incident"}
 
@@ -42,12 +56,13 @@ type Promoter struct {
 	access  *Access
 	roles   RoleResolver
 	tasks   TaskCreator
+	asks    AskPromoter
 	threads taskThreads
 }
 
 // NewPromoter builds the promoter.
-func NewPromoter(pool *pgxpool.Pool, access *Access, roles RoleResolver, tasks TaskCreator, threads taskThreads) *Promoter {
-	return &Promoter{pool: pool, access: access, roles: roles, tasks: tasks, threads: threads}
+func NewPromoter(pool *pgxpool.Pool, access *Access, roles RoleResolver, tasks TaskCreator, asks AskPromoter, threads taskThreads) *Promoter {
+	return &Promoter{pool: pool, access: access, roles: roles, tasks: tasks, asks: asks, threads: threads}
 }
 
 // Promotion says what task a message becomes.
@@ -110,6 +125,13 @@ func (p *Promoter) Promote(ctx context.Context, caller auth.Principal, actor pro
 	}
 	var plan promotionPlan
 	if open {
+		ask, isAsk, askErr := p.askOf(ctx, q, conv, msg)
+		if askErr != nil {
+			return Promoted{}, askErr
+		}
+		if isAsk {
+			return p.promoteAsk(ctx, q, actor, ask, msg, in.Kind, title)
+		}
 		plan, err = p.inPlace(ctx, q, conv, msg, by)
 	} else {
 		plan = p.apart(ctx, conv, msg, by)
@@ -160,6 +182,51 @@ func (p *Promoter) inPlace(ctx context.Context, q *db.Queries, conv db.Conversat
 			return err
 		},
 	}, nil
+}
+
+// askOf answers the ask a message is in or under: a conversation with an agent about no task,
+// which is made a task by changing its kind rather than by opening another.
+func (p *Promoter) askOf(ctx context.Context, q *db.Queries, conv db.Conversation, msg db.Message) (db.Conversation, bool, error) {
+	thread := conv
+	if conv.Kind != KindTask {
+		var err error
+		thread, err = q.GetThreadOfMessage(ctx, msg.ID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.Conversation{}, false, nil
+		}
+		if err != nil {
+			return db.Conversation{}, false, err
+		}
+	}
+	if thread.Kind != KindTask || p.asks == nil {
+		return db.Conversation{}, false, nil
+	}
+	task, err := q.GetTask(ctx, thread.TaskID)
+	if err != nil {
+		return db.Conversation{}, false, err
+	}
+	return thread, task.Kind == process.AskKind, nil
+}
+
+// promoteAsk makes the ask a task of kind: its thread, its jobs and their cost stay, and the
+// description quotes the conversation as any promotion's does.
+func (p *Promoter) promoteAsk(ctx context.Context, q *db.Queries, actor process.Actor, thread db.Conversation, msg db.Message, kind, title string) (Promoted, error) {
+	replies, err := q.ListMessagesAfter(ctx, db.ListMessagesAfterParams{ConversationID: thread.ID, AfterSeq: 0, MaxRows: maxQuotedReplies})
+	if err != nil {
+		return Promoted{}, err
+	}
+	root := msg
+	if thread.ParentMessageID.Valid && thread.ParentMessageID != msg.ID {
+		if root, err = q.GetMessage(ctx, thread.ParentMessageID); err != nil {
+			return Promoted{}, err
+		}
+	}
+	task, err := p.asks.PromoteAsk(ctx, thread.TaskID, process.PromoteAskParams{
+		Kind: kind, Title: title, Description: promotionDescription(root, replies, MessageLink(root))}, actor)
+	if err != nil {
+		return Promoted{}, err
+	}
+	return Promoted{Task: task, Conversation: thread.ID}, nil
 }
 
 // apart is a promotion out of a private channel or a DM. The task belongs to the whole project,

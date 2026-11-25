@@ -17,7 +17,6 @@ import (
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/agentenv"
 	"github.com/onegator/gator/internal/runner/backend"
-	"github.com/onegator/gator/internal/runner/backend/claude"
 	"github.com/onegator/gator/internal/runner/client"
 	"github.com/onegator/gator/internal/runner/config"
 	"github.com/onegator/gator/internal/runner/executor"
@@ -106,17 +105,9 @@ func run(args []string) error {
 		}
 		log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 		denyRead := agentDenyRead(cfg, log)
-		backends := map[string]backend.Backend{}
-		var advertised []string
-		for _, name := range cfg.Backends {
-			switch name {
-			case "claude":
-				backends[name] = claude.Backend{Bin: os.Getenv("GATOR_RUNNER_CLAUDE_BIN"), Model: os.Getenv("GATOR_RUNNER_CLAUDE_MODEL"),
-					MCPConfig: os.Getenv("GATOR_RUNNER_CLAUDE_MCP_CONFIG"), Log: log, AllowEnv: cfg.AgentEnv}
-				advertised = append(advertised, name)
-			default:
-				log.Warn("unknown backend ignored", "backend", name)
-			}
+		backends, advertised, err := backends(cfg, log)
+		if err != nil {
+			return err
 		}
 		if len(advertised) == 0 {
 			log.Warn("no usable GATOR_RUNNER_BACKENDS; this runner stays online but receives no jobs")
@@ -136,6 +127,7 @@ func run(args []string) error {
 		c := client.New(client.Config{
 			ServerURL: cfg.ServerURL, Token: cfg.Token, Name: cfg.Name, Location: cfg.Location, Placement: cfg.Placement, Once: cfg.Once,
 			BinaryVersion: version.Version, Backends: advertised, Projects: cfg.Projects, MaxParallel: cfg.MaxParallel,
+			ReadOnly: keeping(backends, backend.Access{ReadOnly: true}), NoTools: keeping(backends, backend.Access{NoTools: true}),
 			JournalPath: filepath.Join(cfg.WorkDir, "outbox.json"),
 		}, ex, log)
 		log.Info("runner starting", "name", cfg.Name, "location", cfg.Location, "placement", cfg.Placement, "once", cfg.Once,

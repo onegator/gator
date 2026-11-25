@@ -48,6 +48,9 @@ func NewMachine(t Template, capabilities []string) (*Machine, error) {
 // Kind returns the template kind.
 func (m *Machine) Kind() string { return m.template.Kind }
 
+// Hidden reports a kind the system opens by itself, shown on no board and in no inbox.
+func (m *Machine) Hidden() bool { return m.template.Hidden }
+
 // Phases returns the active phases in order.
 func (m *Machine) Phases() []Phase { return m.active }
 

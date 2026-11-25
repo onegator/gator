@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -23,18 +24,33 @@ import (
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/client"
+	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
+	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/brain/curator"
+	"github.com/onegator/gator/internal/server/bridges"
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/marketplace"
+	"github.com/onegator/gator/internal/server/marketplace/marketplacetest"
+	"github.com/onegator/gator/internal/server/mcp"
+	"github.com/onegator/gator/internal/server/mcpremote"
+	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
+	"github.com/onegator/gator/internal/server/store/db"
 )
+
+// testNet lets the server reach the tests' fakes, which listen on loopback; what it refuses
+// without this is netguard's own test.
+var testNet = netguard.Policy{AllowPrivate: true}
 
 type harness struct {
 	t       *testing.T
@@ -45,11 +61,17 @@ type harness struct {
 	plugins *plugins.Host
 	quality *quality.Service
 	autos   *automations.Service
+	brain   *brain.Module
+	curator *curator.Curator
 	svc     *process.Service
 	admin   string // user bearer
 	runner  string // runner bearer
 	oauth   *fakeProvider
 	bundled string // the catalogue's one plugin, not installed until a test asks for it
+	market  *marketplace.Module
+	// starter is Gator's own registry for the test: the starter catalogue, in a directory, signed
+	// with a key made for the test.
+	starter *marketplacetest.Registry
 }
 
 const (
@@ -84,7 +106,26 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	}
 	oauth := newFakeProvider(t)
 	catalogue, bundled := catalogueDir(t)
-	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{CallTimeout: 2 * time.Second,
+	// Conversations, and what the team and its agents know, read under the same rules.
+	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
+		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool))}})
+	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
+	svc.UseBrain(knows.Packer, knows.Legacy)
+	// Remote MCP servers; one that signs in with OAuth signs in at the fake provider, and comes back
+	// through the plugins' /connect/callback.
+	remote := mcpremote.New(pool, mcpremote.Deps{Keys: keys, Net: testNet, BreakerThreshold: 3, BreakerCooldown: time.Hour, PublicURL: fakePublicURL,
+		OAuthHTTP: oauth.httpClient(), Apps: func(provider string) (mcpremote.OAuthApp, bool) {
+			c, ok := oauth.client(provider)
+			// The operator allowed the echo app at auth.echo.test only.
+			return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret, Hosts: []string{"auth.echo.test"}}, ok
+		}})
+	// Messaging bridges, with the core's rules, as the server wires them.
+	bridge := bridges.New(pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access,
+		Roles: auth.Authorizer{Pool: pool}, Approver: svc, Linkers: plugins.Linkers{Pool: pool}})
+	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{Brain: knows.Plugins, CallTimeout: 2 * time.Second,
+		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
+		Extensions: []plugins.Extension{{Capability: bridge.Capability(), Methods: bridge.Methods()}},
+		EventHooks: []plugins.EventHook{bridge}, AllowPrivateOutbound: testNet.AllowPrivate, APIHosts: "127.0.0.1",
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
 		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
 		CatalogueDir: catalogue, PublicURL: fakePublicURL, HooksURL: fakeHooksURL,
@@ -94,18 +135,44 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}}
+		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations}
 	for _, c := range configure {
 		c(&rcfg)
 	}
 	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
+	// Conversations and the agents who answer in them, each following the outbox on its own.
+	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default()})
+	mgr.UseBriefer(team.Briefer)
+	consumers, stopConsumers := context.WithCancel(context.Background())
+	t.Cleanup(stopConsumers)
+	go chat.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
+	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
+	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
+	// The curator follows the outbox on its own; sweeping for quiet threads is a test's to ask.
+	curate := curator.New(db.New(pool), curator.PoolTx(pool), team.Curations, chat.Packer, chat.Access, knows.Service, slog.Default())
+	curations := conversations.NewCursorConsumer("brain_curator", pool, hub, slog.Default(), 50*time.Millisecond)
+	curations.On(curate, curate.Events()...)
+	go curations.Run(consumers)
+	// Gator's own registry is the starter catalogue in a directory of the test's, as a server
+	// would fetch it from GATOR_MARKETPLACE_URL at start.
+	starter := marketplacetest.New(t)
+	starter.Starter()
+	market := marketplace.New(pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: pool}, Plugins: host,
+		PluginDir: filepath.Join(t.TempDir(), "marketplace"), Net: testNet})
+	if err := market.Start(ctx, marketplace.Builtin{URL: starter.URL, PublicKey: starter.PublicKey}); err != nil {
+		t.Fatal(err)
+	}
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Automations: autos, Hub: hub, Log: slog.Default(),
-		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}}
+		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows,
+		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
+		Marketplace: market,
+		Remote:      remote,
+		Bridges:     bridge}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
-	root.Mount("/connect", host.ConnectHandler())
+	root.Mount("/connect", auth.Authenticate(auth.Tokens{Pool: pool}, false, slog.Default())(host.ConnectHandler()))
 	srv := httptest.NewServer(root)
 	t.Cleanup(srv.Close)
 
@@ -117,7 +184,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, admin: admin, runner: runner, oauth: oauth, bundled: bundled}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.

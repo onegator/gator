@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/backend"
 	"github.com/onegator/gator/internal/runner/client"
@@ -46,6 +47,31 @@ func (e *Executor) agentEnv(job proto.Job) []string {
 	return env
 }
 
+// MCPServerName is Gator's MCP server in an agent's session: its tools are mcp__gator__….
+const MCPServerName = "gator"
+
+// mcpServers are the MCP servers the agent reaches: Gator's, at /mcp, with the job's own identity
+// — the Brain and the agent surface, held by the server to what the job's kind may call. None
+// without an identity, so a summary (and a job of an older server) has none.
+//
+// The remote MCP servers the job's agent was given are reached through Gator's proxy, at
+// /mcp/proxy/<name>, with the same identity: the job never holds a remote server's credential.
+func (e *Executor) mcpServers(job proto.Job) []backend.MCPServer {
+	if job.AgentToken == "" || e.ServerURL == "" {
+		return nil
+	}
+	base := strings.TrimRight(e.ServerURL, "/")
+	identity := map[string]string{"Authorization": "Bearer " + job.AgentToken}
+	out := []backend.MCPServer{{Name: MCPServerName, URL: base + "/mcp", Headers: identity}}
+	for _, name := range job.MCP {
+		if name == MCPServerName || !names.Valid(name) {
+			continue // a name the server never sends: not one to put in a URL or a tool's name
+		}
+		out = append(out, backend.MCPServer{Name: name, URL: base + "/mcp/proxy/" + name, Headers: identity})
+	}
+	return out
+}
+
 var _ client.Executor = (*Executor)(nil)
 
 // errSteered interrupts a run so it can resume with the person's correction.
@@ -72,15 +98,46 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	if !ok {
 		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q is not available on this runner", job.Backend)}
 	}
-	ws, err := e.WS.Prepare(ctx, job)
+	access := AccessFor(job)
+	if !backend.Supports(be, access) {
+		return proto.Finish{Status: proto.StatusFailed, StopReason: fmt.Sprintf("backend %q cannot hold an agent to what this job may touch", job.Backend)}
+	}
+	if access.NoTools {
+		job.Repo, job.AgentToken = nil, "" // nothing to read and nobody to talk to: an empty directory
+	}
+	prepare := e.WS.Prepare
+	if access.ReadOnly {
+		prepare = e.WS.PrepareReadOnly
+	}
+	ws, err := prepare(ctx, job)
 	if err != nil {
 		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
 	}
-	io.Emit("workspace", map[string]any{"branch": ws.Branch, "base": ws.Base, "repo": repoName(job)})
+	io.Emit("workspace", map[string]any{"branch": ws.Branch, "base": ws.Base, "repo": repoName(job), "read_only": ws.ReadOnly})
+	env := e.agentEnv(job)
+	signing, err := ws.SignCommits(trailerFor(job))
+	if err != nil {
+		_ = ws.Cleanup(context.WithoutCancel(ctx), false)
+		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
+	}
+	env = append(env, signing...)
+	servers := e.mcpServers(job)
+	opening := promptFor(job, ws)
+	// Skills go to a backend that loads them by itself; any other is told of them in its prompt
+	// and reads them through Gator's skill_read.
+	skills := skillsOf(job)
+	if len(skills) > 0 && !backend.LoadsSkills(be) {
+		opening += "\n\n" + SkillsPrompt(job.Skills, len(servers) > 0)
+		skills = nil
+	}
+	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
+		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
+			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
+	}
 
 	var usage proto.Usage
 	var last backend.Outcome
-	prompt, session, tools := Prompt(job, ws.HasRepo()), "", 0
+	prompt, session, tools := opening, "", 0
 	steers, objections := 0, 0
 	for {
 		runCtx, cancelRun := context.WithCancelCause(ctx)
@@ -98,8 +155,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		if job.Bounds.MaxToolCalls > 0 {
 			budget = max(job.Bounds.MaxToolCalls-tools, 1)
 		}
-		last = be.Run(runCtx, backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model,
-			MaxToolCalls: budget, MaxCostUSD: costLeft(job, usage), Env: e.agentEnv(job), DenyRead: e.DenyRead}, backend.Emit(io.Emit))
+		last = be.Run(runCtx, spec(prompt, session, budget, costLeft(job, usage)), backend.Emit(io.Emit))
 		close(done)
 		cancelRun(nil)
 		addUsage(&usage, last.Usage)
@@ -114,7 +170,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 			if session != "" {
 				prompt = SteerPrompt(msg)
 			} else {
-				prompt = Prompt(job, ws.HasRepo()) + "\n\nA person added this correction before you started: " + msg
+				prompt = opening + "\n\nA person added this correction before you started: " + msg
 			}
 			continue
 		}
@@ -135,6 +191,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	}
 
 	digest, summary := ExtractDigest(last.Summary)
+	if job.KindOrPhase() == proto.KindSummary {
+		digest, summary = nil, last.Summary // a summary is all answer: there is no work to digest
+	}
 	fin := proto.Finish{Status: last.Status, StopReason: last.Reason, SessionID: session, Summary: summary,
 		Usage: usage, Objections: objections}
 	if last.Interrupted {
@@ -151,10 +210,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 
 	// A done session that forgot its digest is asked once more, in the same session: cheap,
 	// because the context is cached, and it keeps the working state complete.
-	if fin.Status == proto.StatusDone && digest == nil && session != "" && ctx.Err() == nil {
+	if fin.Status == proto.StatusDone && digest == nil && session != "" && ctx.Err() == nil && job.KindOrPhase() != proto.KindSummary {
 		io.Emit("digest_requested", map[string]any{"session_id": session})
-		out := be.Run(ctx, backend.Spec{Dir: ws.Dir, Prompt: DigestPrompt, SessionID: session, Model: job.Model,
-			MaxToolCalls: 1, Env: e.agentEnv(job), DenyRead: e.DenyRead}, backend.Emit(io.Emit))
+		out := be.Run(ctx, spec(DigestPrompt, session, 1, 0), backend.Emit(io.Emit))
 		addUsage(&usage, out.Usage)
 		fin.Usage = usage
 		if out.Status == proto.StatusDone {
@@ -171,6 +229,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	changed := len(changedPaths)
 	pushed, keep := false, false
 	var pushErr string
+	if ws.Branch == "" {
+		commits, changedPaths, changed = nil, nil, 0 // on no branch nothing is the job's to push
+	}
 	if gerr == nil && len(commits) > 0 {
 		fin.Branch, fin.Commits, fin.ChangedFiles = ws.Branch, commits, changed
 		fin.ChangedPaths = changedPaths
@@ -203,7 +264,10 @@ const AgentTools = `You can talk back to Gator while you work, with gator-cli (J
 - ` + "`gator-cli ask --question \"...\"`" + ` — ask a question and stop there; it reaches a person's inbox.
 - ` + "`gator-cli artifact put --type report --file -`" + ` — record a document now, so it survives a failed job.
 - ` + "`gator-cli product propose --kind lesson --title \"...\" --file -`" + ` — propose what this work taught the product; a person approves it.
-- ` + "`gator-cli catalogue show`" + ` and ` + "`gator-cli knowledge search --query \"...\"`" + ` — look things up that your prompt did not carry.`
+- ` + "`gator-cli catalogue show`" + ` and ` + "`gator-cli knowledge search --query \"...\"`" + ` — look things up that your prompt did not carry.
+- ` + "`gator-cli say --file -`" + ` — say something in the task's thread; mention @agent to ask another agent.
+
+Where your session has Gator's MCP tools (mcp__gator__brain_search, brain_get, brain_propose, catalogue_show, thread_read, conversation_post, …), they do the same.`
 
 func Prompt(job proto.Job, hasRepo bool) string {
 	var b strings.Builder
@@ -270,8 +334,8 @@ func Prompt(job proto.Job, hasRepo bool) string {
 // objection the agent cannot act on is an objection worth nothing.
 func (e *Executor) askedToContinue(ctx context.Context, job proto.Job, io client.JobIO, ws *workspace.Workspace,
 	last backend.Outcome, session string, objections int) []proto.Objection {
-	if io.TurnEnding == nil || session == "" || objections >= maxObjections {
-		return nil
+	if io.TurnEnding == nil || session == "" || objections >= maxObjections || job.KindOrPhase() != proto.KindPhase {
+		return nil // only a phase's work is anybody's to object to
 	}
 	if last.Status != proto.StatusDone || last.Interrupted || ctx.Err() != nil {
 		return nil

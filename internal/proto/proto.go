@@ -14,10 +14,15 @@ import (
 //
 // v2 added the turn_ending/continue exchange: a runner asks before it ends a turn and
 // something may object. A v1 runner never asks, so it behaves exactly as it always did.
-const Version = 2
+//
+// v3 added agents' turns: a job says its Kind (a phase, a reply in a conversation, a summary),
+// its Tier (chat is read-only), its Agent and, for a reply, the conversation it answers in. A v2
+// runner knows none of it and would run a reply as a phase (committing, pushing, objecting to
+// itself), so it is only ever handed phase jobs, which are all of the work tier.
+const Version = 3
 
 // MinSupportedVersion is the oldest runner protocol the server still speaks.
-const MinSupportedVersion = 1
+const MinSupportedVersion = 2
 
 // Timing both sides agree on.
 const (
@@ -142,13 +147,19 @@ func ValidPlacement(p string) bool { return p == PlacementLocal || p == Placemen
 
 // Capabilities describes what a runner can execute.
 type Capabilities struct {
-	Backends    []string `json:"backends"`     // "claude", "codex", "pi"
+	Backends    []string `json:"backends"`     // "claude", "acp:codex", "acp:gemini"
 	MaxParallel int      `json:"max_parallel"` // concurrent jobs
 	Projects    []string `json:"projects"`     // project ids; empty = any project
 	// CanLogin says this runner can drive an interactive backend login and answer with a
 	// LoginPrompt. A runner that cannot must say so, rather than leaving a person clicking a
 	// button that writes one line into a log file nobody reads.
 	CanLogin bool `json:"can_login,omitempty"`
+	// ReadOnly are the backends that can hold an agent to read-only tools (chat), and NoTools those
+	// that can run one with none at all (summaries). A job is leased only to a runner whose backend
+	// can keep it, rather than to one that would refuse it. Nil, from a runner before these fields:
+	// every backend keeps both, as Claude Code, the only one there was, does.
+	ReadOnly []string `json:"read_only,omitempty"`
+	NoTools  []string `json:"no_tools,omitempty"`
 }
 
 // Registered acknowledges a registration.
@@ -185,6 +196,9 @@ type Repo struct {
 	Name          string `json:"name"`
 	URL           string `json:"url"`
 	DefaultBranch string `json:"default_branch"`
+	// ReadBranch is what a read-only job reads instead of the default branch: the branch the
+	// task's work was pushed to (v3). A branch the remote does not have falls back to the default.
+	ReadBranch string `json:"read_branch,omitempty"`
 }
 
 // ContextDoc is earlier work a job should read before starting.
@@ -193,6 +207,35 @@ type ContextDoc struct {
 	Phase string `json:"phase"`
 	Title string `json:"title"`
 	Body  string `json:"body"`
+}
+
+// Kinds of job (v3). Empty is a phase job: what every job was before.
+const (
+	KindPhase   = "phase"
+	KindReply   = "reply"
+	KindSummary = "summary"
+)
+
+// Tiers of a job (v3): what its agent may touch. Empty is work: what every job was before.
+const (
+	TierWork = "work"
+	TierChat = "chat"
+)
+
+// Agent is who does a job, for the runner to sign its commits with (v3).
+type Agent struct {
+	Handle      string `json:"handle"`
+	DisplayName string `json:"display_name"`
+}
+
+// Turn is the conversation a reply answers in (v3), in the order a prompt reads it: who asks
+// what, the conversation (its background, then the latest messages, words from outside the
+// workspace already marked untrusted) and the ask again, briefly.
+type Turn struct {
+	ID           string       `json:"id"`
+	Ask          string       `json:"ask"`
+	Conversation []ContextDoc `json:"conversation,omitempty"`
+	Repeat       string       `json:"repeat,omitempty"`
 }
 
 // Job is one unit of work handed to a runner.
@@ -220,7 +263,45 @@ type Job struct {
 	AgentToken     string    `json:"agent_token,omitempty"`
 	Attempt        int       `json:"attempt"`
 	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	// Kind, Tier, Agent and Turn are v3.
+	Kind  string `json:"kind,omitempty"`
+	Tier  string `json:"tier,omitempty"`
+	Agent *Agent `json:"agent,omitempty"`
+	Turn  *Turn  `json:"turn,omitempty"`
+	// Skills are the skills the job's agent carries, each an Agent Skills folder, whole. Additive
+	// in v3: a runner that does not know them runs the job without.
+	Skills []Skill `json:"skills,omitempty"`
+	// MCP are the remote MCP servers the job's agent may reach, by name. The runner reaches each
+	// at <server>/mcp/proxy/<name> with the job's own token, and only there: no credential of a
+	// remote server is in a job, ever. Additive in v3.
+	MCP []string `json:"mcp,omitempty"`
 }
+
+// Skill is one skill of a job's agent: its SKILL.md and whatever else the folder holds
+// (scripts/, references/, assets/). Its scripts are run only by the agent, in the job, with the
+// job's own rights.
+type Skill struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Files       []SkillFile `json:"files"`
+}
+
+// SkillFile is one file of a skill, at its path inside the skill's folder.
+type SkillFile struct {
+	Path string `json:"path"`
+	Data []byte `json:"data"`
+}
+
+// KindOrPhase is the job's kind; a job that names none is a phase job.
+func (j Job) KindOrPhase() string {
+	if j.Kind == "" {
+		return KindPhase
+	}
+	return j.Kind
+}
+
+// ReadOnly says the job's agent gets no tools that write and a checkout it cannot change.
+func (j Job) ReadOnly() bool { return j.Tier == TierChat }
 
 // Lease hands jobs to the runner. An empty list means nothing is queued for it.
 type Lease struct {
@@ -274,7 +355,7 @@ type LoginPrompt struct {
 // Usage is what one job consumed. Every finish carries it; the server stores it per task
 // and phase so time and tokens can be reported for every task Gator runs.
 type Usage struct {
-	Backend          string    `json:"backend"` // "claude" | "codex" | "pi"
+	Backend          string    `json:"backend"` // "claude" | "acp:<agent>"
 	Model            string    `json:"model"`
 	InputTokens      int64     `json:"input_tokens"`
 	OutputTokens     int64     `json:"output_tokens"`

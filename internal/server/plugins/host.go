@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/server/automations"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/process"
@@ -31,6 +33,7 @@ import (
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/version"
 	"github.com/onegator/gator/plugin"
+	"github.com/onegator/gator/plugin/netguard"
 )
 
 var (
@@ -73,6 +76,47 @@ type Config struct {
 	// Automations decides what a project does with a pull request a plugin reports, or a new
 	// incident. Optional: without it no automation runs on a plugin's behalf.
 	Automations *automations.Service
+	// Brain takes what plugins propose to it (brain.propose). Optional: without it the method
+	// answers that the Brain is not there.
+	Brain BrainProposer
+	// Connectors finish connections of other targets that come back to /connect/callback (a
+	// remote MCP server's OAuth), by target.
+	Connectors map[string]Connector
+	// Extensions are core methods served outside this package, each for the plugins that declare
+	// its capability (messaging: bridges.Service.Methods). A new kind of plugin is one more here.
+	Extensions []Extension
+	// EventHooks carry outbox events to plugins of a capability through hooks they choose
+	// (messaging: messagePosted, messageEdited).
+	EventHooks []EventHook
+	// AllowPrivateOutbound passes GATOR_OUTBOUND_ALLOW_PRIVATE=1 to plugins, which hold their own
+	// requests to netguard's rules: a test's fake API, a company network.
+	AllowPrivateOutbound bool
+	// APIHosts are the hosts plugins' API address settings may name besides their own
+	// (GATOR_PLUGIN_API_HOSTS): the operator's, never a project admin's.
+	APIHosts string
+}
+
+// Extension is core methods for the plugins that declare Capability, each served as the plugin
+// and project the call came from.
+type Extension struct {
+	Capability string
+	Methods    map[string]func(ctx context.Context, project pgtype.UUID, plugin string, params json.RawMessage) (any, error)
+}
+
+// EventHook carries outbox events of some types to the plugins of a project that declare a
+// capability. Deliver decides, for one plugin, whether and through which hook it hears the event;
+// call reaches that plugin (and does nothing for a hook it does not handle).
+type EventHook interface {
+	Events() []string
+	Capability() string
+	Project(ctx context.Context, e events.Event) (pgtype.UUID, bool, error)
+	Deliver(ctx context.Context, e events.Event, project pgtype.UUID, plugin string,
+		call func(ctx context.Context, method string, params, out any) error) error
+}
+
+// BrainProposer stores a plugin's proposal in its project's Brain. brain.PluginProposals is one.
+type BrainProposer interface {
+	Propose(ctx context.Context, project pgtype.UUID, plugin string, p brain.PluginProposal) (db.BrainEntry, bool, error)
 }
 
 // LoadEnv fills the settings that come from the server's environment and are the plugins'
@@ -80,6 +124,7 @@ type Config struct {
 func (c *Config) LoadEnv() {
 	c.CatalogueDir = DefaultCatalogueDir()
 	c.HooksURL = strings.TrimRight(os.Getenv("GATOR_HOOKS_URL"), "/")
+	c.APIHosts = os.Getenv(netguard.APIHostsEnv)
 }
 
 func (c *Config) defaults() {
@@ -203,12 +248,17 @@ func (h *Host) Run(ctx context.Context) {
 	if err := db.New(h.pool).InitEventCursor(ctx, cursorName); err != nil && ctx.Err() == nil {
 		h.log.Warn("plugin event cursor", "err", err)
 	}
+	for i, eh := range h.cfg.EventHooks {
+		go h.runEventHook(ctx, fmt.Sprintf("%s_%d", eventHookCursor, i), eh)
+	}
 	syncT := time.NewTicker(h.cfg.SyncEvery)
 	defer syncT.Stop()
 	poll := time.NewTicker(h.cfg.PollEvery)
 	defer poll.Stop()
 	refresh := time.NewTicker(h.cfg.RefreshEvery)
 	defer refresh.Stop()
+	prune := time.NewTicker(time.Hour)
+	defer prune.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -217,6 +267,8 @@ func (h *Host) Run(ctx context.Context) {
 			h.syncLogged(ctx)
 		case <-refresh.C:
 			h.RefreshTokens(ctx)
+		case <-prune.C:
+			h.PruneDeliveries(ctx, time.Now().Add(-DeliveryMemory))
 		case <-wake:
 			h.drain(ctx)
 		case <-poll.C:
@@ -385,6 +437,12 @@ func (i *instance) run(ctx context.Context) {
 func (i *instance) env() ([]string, []string, error) {
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TMPDIR=" + os.TempDir(),
 		"LANG=C.UTF-8", "GATOR_PLUGIN_PROJECT=" + i.b.slug}
+	if i.h.cfg.AllowPrivateOutbound {
+		env = append(env, "GATOR_OUTBOUND_ALLOW_PRIVATE=1")
+	}
+	if i.h.cfg.APIHosts != "" {
+		env = append(env, netguard.APIHostsEnv+"="+i.h.cfg.APIHosts)
+	}
 	if i.b.secrets == "" {
 		return env, nil, nil
 	}
@@ -788,4 +846,61 @@ func (h *Host) webhookURL(slug, name string) string {
 		return ""
 	}
 	return h.cfg.HooksURL + "/hooks/" + slug + "/" + name
+}
+
+// DeliveryMemory is how long a webhook delivery is remembered. A sender's retries come within
+// minutes; a replay of a signed GitHub delivery older than this is handled again, and what the
+// plugins make of one (a task by its issue, a message by its comment) is made once by its id anyway.
+const DeliveryMemory = 30 * 24 * time.Hour
+
+// PruneDeliveries forgets deliveries received before before.
+func (h *Host) PruneDeliveries(ctx context.Context, before time.Time) {
+	n, err := db.New(h.pool).PruneWebhookDeliveries(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil && ctx.Err() == nil {
+		h.log.Warn("pruning webhook deliveries", "err", err)
+	} else if n > 0 {
+		h.log.Info("pruned webhook deliveries", "count", n)
+	}
+}
+
+// eventHookCursor names the cursors of the event hooks: each follows the outbox on its own, so that
+// a slow outside system (a chat's API) never holds up the hooks of every other plugin.
+const eventHookCursor = "plugins_event_hook"
+
+// runEventHook delivers an event hook's events from its own cursor until ctx ends.
+func (h *Host) runEventHook(ctx context.Context, cursor string, eh EventHook) {
+	if err := db.New(h.pool).InitEventCursor(ctx, cursor); err != nil && ctx.Err() == nil {
+		h.log.Warn("event hook cursor", "cursor", cursor, "err", err)
+	}
+	wake, unsub := h.hub.Subscribe("*")
+	defer unsub()
+	poll := time.NewTicker(h.cfg.PollEvery)
+	defer poll.Stop()
+	for {
+		// Nothing is read of an event while no running plugin has the hook's capability: the
+		// cursor moves past it, as for every other hook.
+		events.DrainCursor(ctx, h.pool, cursor, eh.Events(), func(r db.EventsAfterRow) {
+			if h.hasCapability(eh.Capability()) {
+				h.deliver(ctx, eh, events.Event{ID: r.ID, Type: r.Type, Aggregate: r.Aggregate, AggregateID: uuidString(r.AggregateID), Payload: r.Payload})
+			}
+		})
+		select {
+		case <-ctx.Done():
+			return
+		case <-wake:
+		case <-poll.C:
+		}
+	}
+}
+
+// hasCapability says whether any running plugin declares c.
+func (h *Host) hasCapability(c string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, i := range h.inst {
+		if slices.Contains(i.b.manifest.Capabilities, c) {
+			return true
+		}
+	}
+	return false
 }

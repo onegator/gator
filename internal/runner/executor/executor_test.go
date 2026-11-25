@@ -21,13 +21,17 @@ import (
 
 // scripted is an in-process backend whose behaviour each test chooses.
 type scripted struct {
-	mu    sync.Mutex
-	specs []backend.Spec
-	run   func(ctx context.Context, n int, spec backend.Spec, emit backend.Emit) backend.Outcome
+	noLimits bool
+	mu       sync.Mutex
+	specs    []backend.Spec
+	run      func(ctx context.Context, n int, spec backend.Spec, emit backend.Emit) backend.Outcome
 }
 
 func (s *scripted) Name() string      { return "fake" }
 func (s *scripted) AuthState() string { return "ok" }
+
+// Supports implements backend.Limited unless a test says the backend keeps no limits.
+func (s *scripted) Supports(backend.Access) bool { return !s.noLimits }
 func (s *scripted) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) backend.Outcome {
 	s.mu.Lock()
 	s.specs = append(s.specs, spec)
@@ -336,5 +340,17 @@ func TestAFailedTurnAndAnUnaskedOneEndAtOnce(t *testing.T) {
 				t.Fatalf("the turn should have ended at once: runs %d finish %+v asked %v", len(be.specs), fin, asked)
 			}
 		})
+	}
+}
+
+// An agent with an identity reaches Gator's MCP server with it; one without has no server at all.
+func TestTheAgentReachesGatorsMCPServerWithItsOwnIdentity(t *testing.T) {
+	e := &Executor{ServerURL: "https://gator.example/"}
+	got := e.mcpServers(proto.Job{AgentToken: "gtr_job_x"})
+	if len(got) != 1 || got[0].Name != "gator" || got[0].URL != "https://gator.example/mcp" || got[0].Headers["Authorization"] != "Bearer gtr_job_x" {
+		t.Fatalf("servers: %+v", got)
+	}
+	if e.mcpServers(proto.Job{}) != nil || (&Executor{}).mcpServers(proto.Job{AgentToken: "t"}) != nil {
+		t.Fatal("no identity or no server, no MCP")
 	}
 }

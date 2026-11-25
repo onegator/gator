@@ -67,7 +67,7 @@ func (s *Service) Catalogue(ctx context.Context, t db.Task) (ContextDoc, bool, e
 		fmt.Fprintf(&b, "\nUsed by (a change here reaches them): %s\n", dependentList(dependents))
 	}
 	for _, d := range decisions {
-		fmt.Fprintf(&b, "\n_Decision — %s:_ %s\n", d.ProductContext.Title, d.ProductContext.Content)
+		fmt.Fprintf(&b, "\n_Decision — %s:_ %s\n", d.BrainEntry.Title, d.BrainEntry.Content)
 	}
 	return ContextDoc{Kind: "catalogue", Phase: "component", Title: "The part of the product this task is about", Body: b.String()}, true, nil
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/metric"
@@ -41,6 +42,12 @@ var (
 )
 
 // Config tunes timing. Zero values take the protocol defaults.
+// BrainUse records which Brain entries a job used. brain.Citations is one.
+type BrainUse interface {
+	Used(ctx context.Context, job pgtype.UUID, how string, entries []pgtype.UUID) error
+	Cited(ctx context.Context, job pgtype.UUID, text string) error
+}
+
 type Config struct {
 	OfflineAfter    time.Duration
 	LeaseTTL        time.Duration
@@ -65,6 +72,12 @@ type Config struct {
 	AgentTokenTTL time.Duration
 	// Judge may object when an agent says its turn is over. Optional.
 	Judge TurnJudge
+	// Authors names the agents of automations' work. Optional: without it every job is done by
+	// the agent of its role.
+	Authors AuthorRoles
+	// Briefer tells a reply's agent its conversation. Optional: without it a reply carries only
+	// its instruction.
+	Briefer TurnBriefer
 	// MaxObjections is how many times one job may be sent back to work. Zero takes 2: enough
 	// for a plugin to be right about something the agent missed, few enough that a plugin
 	// which is never satisfied cannot spend a person's money in a loop.
@@ -90,6 +103,14 @@ type Config struct {
 	// ProvisionDelay is the pause between queueing a cloud job and looking for a machine for
 	// it, which gives connected runners the first chance. Zero takes 2 seconds.
 	ProvisionDelay time.Duration
+	// Brain records which Brain entries a job was handed and cited (brain.Citations); nil: none.
+	Brain BrainUse
+}
+
+// AuthorRoles names, for the work of an automation, the role whose agent does a job of a given
+// role: error triage has @triage do an incident's implementation. automations.Authors is one.
+type AuthorRoles interface {
+	AuthorRole(automation, jobRole string) string
 }
 
 // AgentTokenIssuer mints and revokes the per-job identity. The interface keeps this package
@@ -103,6 +124,23 @@ type AgentTokenIssuer interface {
 // core's own objection is the only one, and a job ends when the agent says it is done.
 type TurnJudge interface {
 	Objections(ctx context.Context, job db.Job, te proto.TurnEnding) []proto.Objection
+}
+
+// TurnBrief is what the agent of a reply is told about the conversation it answers in, in the
+// order a prompt reads it: who asks what, the conversation (its background, then its latest
+// messages) and the ask again, briefly.
+type TurnBrief struct {
+	Ask    string
+	Docs   []process.ContextDoc
+	Repeat string
+	// Private says the conversation is not the whole project's: what the job was handed of it
+	// reaches the runner but is not kept in the job's record, which the project reads.
+	Private bool
+}
+
+// TurnBriefer briefs the agent of a reply. The agents package provides one.
+type TurnBriefer interface {
+	Brief(ctx context.Context, job db.Job) (TurnBrief, error)
 }
 
 // JobPreparer lets plugins add context to a job before a runner gets it.
@@ -179,6 +217,10 @@ func New(pool *pgxpool.Pool, proc *process.Service, hub *events.Hub, log *slog.L
 		machines: map[[16]byte]*machine{}, provisions: map[[16]byte]int{}}
 }
 
+// UseBriefer has b tell replies' agents their conversations. It is wiring, for a briefer that
+// needs the manager itself to queue its summaries: call it before the manager serves runners.
+func (m *Manager) UseBriefer(b TurnBriefer) { m.cfg.Briefer = b }
+
 // Connected reports whether a runner has a live session.
 func (m *Manager) Connected(runnerID pgtype.UUID) bool {
 	m.mu.Lock()
@@ -231,7 +273,27 @@ type NewJob struct {
 	// AllowAgents records CreatedBy's consent to agents on the task before queueing, in the
 	// same transaction. Only a person can give it.
 	AllowAgents bool
+	// Agent does the job. Zero: the agent playing the job's role in the project (or, for the
+	// work of an automation, the agent the automation names for that role).
+	Agent pgtype.UUID
+	// Turn is the conversation turn the job answers, for a reply.
+	Turn pgtype.UUID
+	// Kind is KindPhase (the default), KindReply or KindSummary.
+	Kind string
+	// Tier is TierWork (the default) or TierChat. A chat job reads and answers and touches
+	// nothing, so the person who asked for it consented to that one answer: it needs no consent
+	// on the task.
+	Tier string
 }
+
+// Kinds and tiers of a job; see the jobs table (migration 00040).
+const (
+	KindPhase   = "phase"
+	KindReply   = "reply"
+	KindSummary = "summary"
+	TierWork    = "work"
+	TierChat    = "chat"
+)
 
 // CreateJob queues a job for the task's current phase and offers it to connected runners.
 func (m *Manager) CreateJob(ctx context.Context, taskID pgtype.UUID, in NewJob) (db.Job, error) {
@@ -267,7 +329,13 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if d.Task.ClosedAt.Valid {
 		return db.Job{}, fmt.Errorf("%w: task is closed", ErrInvalidJob)
 	}
-	if !d.Task.AgentsAllowedAt.Valid {
+	if in.Tier == "" {
+		in.Tier = TierWork
+	}
+	if in.Kind == "" {
+		in.Kind = KindPhase
+	}
+	if in.Tier != TierChat && !d.Task.AgentsAllowedAt.Valid {
 		return db.Job{}, ErrAgentsNotAllowed
 	}
 	role := in.Role
@@ -277,9 +345,21 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if role == "" {
 		return db.Job{}, fmt.Errorf("%w: phase %q has no runner role; pass one explicitly", ErrInvalidJob, d.Task.Phase)
 	}
-	pol, err := m.process.JobPolicy(ctx, d.Task.ProjectID, role, m.cfg.DefaultBackend)
+	var err error
+	if !in.Agent.Valid {
+		if in.Agent, err = m.agentFor(ctx, q, d.Task, role); err != nil {
+			return db.Job{}, err
+		}
+	}
+	pol, err := m.policy(ctx, q, d.Task.ProjectID, role, in)
 	if err != nil {
 		return db.Job{}, err
+	}
+	// A summary reads a transcript with no tools at all, which not every backend can promise (an
+	// agent speaking ACP runs tools of its own): it runs on the server's default backend, whatever
+	// the project's policy picked for its role.
+	if in.Kind == KindSummary && strings.TrimSpace(in.Backend) == "" {
+		in.Backend = m.cfg.DefaultBackend
 	}
 	if strings.TrimSpace(in.Backend) == "" {
 		in.Backend = pol.Backend
@@ -320,11 +400,50 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 		TaskID: d.Task.ID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
 		Backend: in.Backend, Instruction: in.Instruction, Bounds: bounds, MaxAttempts: int32(in.MaxAttempts),
 		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID, Model: in.Model, Placement: in.Placement,
+		AgentID: in.Agent, TurnID: in.Turn, Tier: in.Tier, Kind: in.Kind,
 	})
 	if err != nil {
 		return db.Job{}, err
 	}
 	return job, m.emitJob(ctx, q, "job.queued", job, nil)
+}
+
+// policy is what the job's backend, model and cost cap default to: the role's policy, then for
+// a turn its tier's, then the policy the job's agent has of its own.
+func (m *Manager) policy(ctx context.Context, q *db.Queries, project pgtype.UUID, role string, in NewJob) (process.RolePolicy, error) {
+	var own process.RolePolicy
+	if in.Agent.Valid {
+		a, err := q.GetAgent(ctx, in.Agent)
+		if err != nil {
+			return process.RolePolicy{}, err
+		}
+		if len(a.Policy) > 0 {
+			if err := json.Unmarshal(a.Policy, &own); err != nil {
+				return process.RolePolicy{}, fmt.Errorf("%w: agent @%s has a policy that does not read: %v", ErrInvalidJob, a.Handle, err)
+			}
+		}
+	}
+	tier := ""
+	if in.Kind != KindPhase {
+		tier = in.Tier
+	}
+	return m.process.TurnPolicy(ctx, project, role, tier, own, m.cfg.DefaultBackend)
+}
+
+// agentFor is the agent who does a job of this role on the task: the project's agent for the
+// role, or the one an automation names for its work. None is no error: a role nobody plays
+// (a project that deleted the agent, a role a template made up) still gets its job done.
+func (m *Manager) agentFor(ctx context.Context, q *db.Queries, task db.Task, role string) (pgtype.UUID, error) {
+	if a := m.cfg.Authors; a != nil && task.Automation != nil {
+		if r := a.AuthorRole(*task.Automation, role); r != "" {
+			role = r
+		}
+	}
+	agent, err := q.AgentForRole(ctx, db.AgentForRoleParams{RoleKey: &role, ProjectID: task.ProjectID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pgtype.UUID{}, nil
+	}
+	return agent.ID, err
 }
 
 // EnsureJob is the autopilot: if the task sits in a runner-owned phase of a project with
@@ -377,8 +496,8 @@ func (m *Manager) EnsureJob(ctx context.Context, taskID pgtype.UUID) (db.Job, bo
 			return err
 		}
 		for _, j := range jobs {
-			if j.Phase == t.Phase && !j.CreatedAt.Time.Before(t.PhaseEnteredAt.Time) {
-				return nil // this phase entry already has its job
+			if j.Kind == KindPhase && j.Phase == t.Phase && !j.CreatedAt.Time.Before(t.PhaseEnteredAt.Time) {
+				return nil // this phase entry already has its job (an agent's reply in the thread is not it)
 			}
 		}
 		d.Task = t

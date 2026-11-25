@@ -67,13 +67,37 @@ przychodzi jako karta w wątku taska i działa tym samym endpointem co dziś `/t
 | Faza | Migracja |
 |---|---|
 | 1 | `00035_conversations.sql`, `00036_general_channels.sql`, `00037_task_conversations.sql`, `00038_message_search.sql` |
-| 2 | `00039_agents.sql`, `00040_agent_turns.sql` |
-| 3 | `00041_brain.sql`, `00042_brain_backfill.sql`, `00043_brain_embeddings.sql` (opcjonalna, pgvector) |
-| 4 | `00044_marketplace.sql`, `00045_mcp_servers.sql` |
-| 5 | `00046_external_agents.sql`, `00047_messaging_bridges.sql` |
+| 2 | `00039_agents.sql`, `00040_agent_turns.sql`, `00041_agents_keep.sql` |
+| 3 | `00042_brain.sql`, `00043_brain_backfill.sql`, `00044_brain_curation.sql`, `00045_brain_embeddings.sql` (opcjonalna, pgvector; numer zarezerwowany, jeszcze nie napisana) |
+| 4 | `00046_marketplace.sql`, `00047_mcp_servers.sql` |
+| 5 | `00048_messaging_bridges.sql`, `00049_external_agents.sql` |
 
 Faza 1 dostała dwie migracje więcej niż w pierwszej wersji planu: backfill `#general` i backfill
 wątków otwartych tasków to osobne kroki (osobne PR-y), więc numery kolejnych faz przesunęły się o 2.
+Faza 2 dostała jedną więcej (`00041_agents_keep.sql`: agentów się odkłada, a nie usuwa, i turn jest
+zajmowany przed startem), więc fazy 3–5 przesunęły się o kolejną. Faza 3 dostała jedną więcej
+(`00044_brain_curation.sql`: dokąd curator przeczytał każdą rozmowę), więc embeddingi mają 00045, a
+fazy 4–5 przesunęły się o jeszcze jedną.
+
+Faza 4 zmieściła się w dwóch zaplanowanych numerach: `00046_marketplace.sql` (rejestry, cache
+paczek, instalacje, skille) i `00047_mcp_servers.sql` (serwery MCP, `mcp_calls` i `target` w
+`plugin_connect_states` dla OAuth serwerów MCP). 00045 wciąż czeka na embeddingi; kto ją napisze,
+uruchamia `goose` z `allow-missing` na bazach, które mają już 00046 (goose odrzuca brakującą
+migrację starszą niż ostatnia wykonana).
+
+Serwery MCP rejestru Gatora (`gator-marketplace/integrations`) mają adresy i narzędzia „na dziś”, do
+sprawdzenia z żywymi usługami przed publikacją: Sentry (`https://mcp.sentry.dev/mcp`), Atlassian
+(`https://mcp.atlassian.com/v2/mcp`; v1 jest wycofywane), Notion (`https://mcp.notion.com/mcp`), Figma
+(`https://mcp.figma.com/mcp`), Slack (`https://mcp.slack.com/mcp`) — czy każdy publikuje metadata
+RFC 9728/8414 na swoim hoście i rejestrację RFC 7591 (inaczej potrzebna aplikacja operatora z
+`GATOR_<PROVIDER>_OAUTH_HOSTS`) i jak nazywają się ich narzędzia; Datadog
+(`https://mcp.datadoghq.com/api/unstable/mcp-server/mcp`) jest eksperymentalny (klucze API i aplikacji w
+dwóch nagłówkach, adres zależny od regionu), a Grafana jest samodzielnie hostowana (adres ustawia admin).
+
+Faza 5 zamieniła kolejność swoich dwóch numerów: mosty komunikatorów powstały przed A2A, więc
+`00048_messaging_bridges.sql` (tożsamości z zewnątrz, odwołania rozmów i wiadomości, kody powiązań,
+`requested_by_kind='external'`) i `00049_external_agents.sql` (agenci zdalni, klienci A2A, ich taski i
+wywołania).
 
 Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
 

@@ -54,7 +54,7 @@ umiejętności, endpoint, auth) i zlecanie mu zadań z cyklem życia i strumieni
 - delegacja agent→agent z fazy 2 obejmuje remote, z tymi samymi limitami hop i budżetu.
 
 ```sql
--- 00046_external_agents.sql
+-- 00049_external_agents.sql (w planie 00048; zob. odstępstwa)
 ALTER TABLE agents ADD COLUMN kind text NOT NULL DEFAULT 'local' CHECK (kind IN ('local','remote')),
                    ADD COLUMN remote jsonb,          -- {card_url, auth, secrets_ref}
                    ADD COLUMN a2a_exposed boolean NOT NULL DEFAULT false;
@@ -100,7 +100,7 @@ cardAction?                                przyciski Approve/Rollback w Slacku (
 | użytkownik Slacka bez konta Gatora | `author_kind='external'`; agent go słucha, ale nie może zatwierdzać ani dawać consentu `work` |
 
 ```sql
--- 00047_messaging_bridges.sql
+-- 00048_messaging_bridges.sql (w planie 00049; zob. odstępstwa)
 CREATE TABLE external_identities (
     provider text NOT NULL, external_id text NOT NULL,
     user_id uuid REFERENCES users(id) ON DELETE CASCADE,
@@ -157,3 +157,139 @@ Rozszerzenie istniejącego pluginu `github`:
   zespół jest. Rozmowa i tak żyje w Gatorze (Brain, karty, metryki), Slack jest oknem.
 - **Zewnętrzni autorzy.** Wszystko z mostów i A2A to untrusted. Żaden external nie zatwierdza bramek
   i nie daje consentu `work`.
+
+## Odstępstwa od planu (zapisane przy implementacji)
+
+- **Migracje** zamieniły się numerami: mosty powstały przed A2A (kolejność PR-ów 4–6 przed 7–8), więc
+  `00048_messaging_bridges.sql` i `00049_external_agents.sql` (tabela w `README.md`). 00045 dalej czeka
+  na embeddingi. `store/external_migrations_test.go` robi na osobnej bazie: wejście na 00047 z
+  rozmową, wiadomością i turnem, up, dane obu migracji (tożsamości, odwołania, kody, turn z zewnątrz,
+  agent zdalny z wywołaniem, klient A2A z tokenem i taskiem), down do 00047 i znów up; turn zamówiony z
+  zewnątrz zostaje po down jako `process`, a tokeny `a2a` i agenci zdalni (z ich turnami) znikają.
+- **Tożsamości są projektu**: `external_identities` ma `id`, `project_id` i `UNIQUE (project_id,
+  provider, external_id)` zamiast klucza `(provider, external_id)` — ten sam użytkownik Slacka w dwóch
+  projektach to dwie tożsamości, a powiązanie w jednym nic nie daje w drugim. `provider` ustawia core
+  (nazwa pluginu), nigdy plugin; `external_id` jest w przestrzeni pluginu i zawiera workspace (`T…/U…`).
+  `external_message_refs` też jest per projekt. Doszły `external_conversation_refs` (gdzie rozmowa
+  żyje na zewnątrz; jedno miejsce na providera) i `external_link_codes`.
+- **`member.link` bierze kod, nie e-mail**: osoba robi w Gatorze kod (`POST
+  /projects/{id}/external-links`, `GTR-XXXX-…`, 80 bitów, 10 minut, raz, dla projektu i pluginu,
+  trzymany jako hash, najwyżej 10 na godzinę) i wpisuje go tam, gdzie słucha most (`/gator link …`).
+  Adres e-mail nigdy nie wiąże konta: administrator workspace'u Slacka może nadać kontu dowolny adres.
+  Próby kodu są ograniczone per konto. Powiązana osoba, która nie może pisać w rozmowie, pisze znów
+  jako tożsamość z zewnątrz. Lista i odpięcie: `GET /projects/{id}/external-identities`, `DELETE
+  /external-identities/{id}/link`.
+- **`cardAction` jest metodą core (`card.action`), nie hookiem**: przycisk wciska się na zewnątrz, więc
+  to plugin mówi core'owi. Działa tylko `approve` na oczekującej karcie `decision`, którą ten most
+  dostał, dla powiązanego konta z rolą member+ (`process.Approve` w imieniu osoby). Rollback (potrzebuje
+  fazy i powodu) i consent zostają w Gatorze; karta linkuje do wątku.
+- **Słowa z zewnątrz**: wiadomość tożsamości z zewnątrz pyta agentów (dispatcher), ale turn jest
+  `requested_by_kind='external'` (nowa wartość CHECK w 00048), zawsze `chat` (`agents.GrantFor`), bez
+  karty consentu i bez możliwości `POST /turns/{id}/allow`, nawet na tasku ze zgodą na agentów.
+  Przy tym wyszła luka z fazy 2: pytanie (`Ask`) briefu nie było w znacznikach untrusted, a `Repeat`
+  powtarzało pierwsze zdanie bez nich — teraz pytanie z zewnątrz jest ogrodzone, a `Repeat` go nie
+  cytuje. W pakiecie autor z zewnątrz to „someone on <provider>, outside the workspace”, bez nazwy,
+  którą sam sobie dał (nazwa wyświetlana to też słowa z zewnątrz).
+- **Echo i prywatność**: `origin` wiadomości ma `provider` i `external_ref`; most nie dostaje tego, co
+  sam przyniósł. Rozmowa prywatna (DM, kanał prywatny) nigdy nie jest podłączana ani odbijana;
+  most pisze tylko w rozmowach, które sam podłączył (albo w wątkach pod nimi). Odpowiedź agenta idzie
+  na zewnątrz najwyżej co 2 s (`bridges.EditEvery`), końcowa zawsze; hook niesie `reply_to` (zewnętrzne
+  odwołanie pytania, gdy przyszło tym mostem).
+- **Rozszerzenia hosta pluginów**: metody `messaging` i hooki z outboxu są rejestrowane
+  (`plugins.Config.Extensions`, `EventHooks`), a nie dopisywane do switcha w `core.go`; metoda
+  rozszerzenia jest tylko dla pluginu z jego capability. Webhook może odpowiedzieć nadawcy
+  (`WebhookResult`, `Handlers.WebhookReply`) — Slack weryfikuje URL echem `challenge`. Host przekazuje
+  pluginom `GATOR_OUTBOUND_ALLOW_PRIVATE`, a `slack` i `github` wychodzą przez `netguard` (adres API
+  to ustawienie). Nazwa pluginu `a2a` jest zarezerwowana (provider klientów A2A).
+- **Slack**: kanały są mapowane w ustawieniu `channels` (`C0123=eng`), a nie przez `origin.slack_channel`;
+  podpis v0 z oknem 5 minut, a replay w oknie łapie deduplikacja core'a po hashu body (Slack nie podaje
+  id dostawy; ponowienie ma to samo body) i idempotencja `message.post` po `ts`. Workspace bota z
+  `auth.test`; zdarzenie, komenda i przycisk innego workspace'u są odrzucane. `/gator ask` publikuje
+  pytanie jako bot (żeby odpowiedź miała wątek). Wychodzące słowa są escapowane (`<!channel>` nikogo nie
+  woła), bez unfurla. Teams i Telegram nie weszły (plan: po walidacji Slacka).
+- **GitHub**: komentarz bez taska idzie do `#github` (agent odpowiada w wątku pod nim, co otwiera aska
+  jak każda rozmowa), a nie od razu do nowego aska. Odpowiedź wraca jednym komentarzem, gdy jest
+  końcowa, z wyłączonymi `@` i słowami zamykającymi; plugin pomija własne komentarze (znacznik) i boty.
+  **Nie zrobione**: review agenta jako GitHub review z komentarzami w liniach (`review_comments` w
+  digeście) — digest nie ma jeszcze takiego pola, a format trzeba ustalić z rolą reviewera.
+- **ACP**: Gator nie oferuje agentowi `fs/*` ani `terminal/*` (agent używa własnych narzędzi), a
+  `session/request_permission` odpowiada wg tieru. Job read-only (`chat`) idzie tylko na agenta, którego
+profil zna tryb read-only, a sesja musi go oferować (inaczej start się nie udaje): nie każde narzędzie
+agenta pyta przed działaniem, więc same odpowiedzi na prośby nie są obietnicą. Dziś to `codex`
+(`read-only` codex-acp, do sprawdzenia); `gemini` bierze tylko joby `work`. Steer to `session/cancel`, potem nowy proces i
+  `session/load` tej samej sesji; agent bez `loadSession` nie oddaje id sesji, więc executor zaczyna od
+  nowa z poprawką. Backend ACP nie obsługuje `NoTools` (agent ma własne narzędzia, nie o wszystkie
+  pyta), więc joby `summary` (streszczenia, kuracja) zostają na Claude. Koszt: z `usage_update`
+  (`cost` w USD), tokeny z `usage` odpowiedzi; bez nich `costEstimated` i $0 — tabeli cen modeli innych
+  dostawców nie ma. Profile (`codex`, `gemini`) to zmienne i pliki logowania (`AuthState`) i tryb
+  read-only; nagrania w `testdata/<agent>` są **syntetyczne** (odegrane przez fałszywego agenta z
+  binarki testów), bo adapterów (`codex-acp`, `gemini --experimental-acp`) nie było na maszynie, a sesja
+  modelu jest płatna; jest tylko zapis `codex --version` i `codex login --help` (0.171.0). Runner buduje
+  backendy z tabeli (`cmd/gator-runner/backends.go`), a nie ze switcha. Polityka i profil agenta
+  przyjmują `claude` albo `acp:<nazwa>` (sprawdzane przy zapisie); ekran wyboru backendu to faza 6.
+- **A2A**: cienka warstwa na JSON-RPC zamiast SDK, A2A 0.3 (`/.well-known/agent-card.json`,
+  `message/send`, `tasks/get`; bez streamingu i push). Agent zdalny: `agents.kind`, `remote` (to, co z
+  karty), `remote_secrets` (bearer zaszyfrowany keyringiem, nigdy w API — tylko `hasCredential`),
+  CHECK: projekt, `chat`, bez roli, nieeksponowany. Turn agenta zdalnego nie jest jobem: Starter oddaje
+  go temu, kto odpowiada za ten rodzaj agenta (`AnswerElsewhere`), a worker w serwerze robi wywołanie
+  (`a2a_calls`, zajęcie z wygaśnięciem) i wpisuje odpowiedź do wiadomości agenta. Agent zdalny odpowiada
+  tylko w rozmowach otwartych dla projektu i dostaje pytanie z ostatnimi 10 wiadomościami; jego słowa
+  idą do innych agentów jako untrusted. Koszt turnu zdalnego to $0 (A2A go nie raportuje); limity hop,
+  szerokości i budżetu obowiązują. Inbound: `PUT /agents/{id}/a2a` (eksponowanie), `a2a_clients` z
+  `identity_id` (tożsamość `a2a`), `per_minute` i `revoked_at`, kwoty jako `double precision` jak
+  `usage_records`; `a2a_tasks` łączy id taska A2A z wiadomością i agentem. Token `gtr_a2a_…`
+  (nowy rodzaj tokenu) sięga tylko `/a2a/…`, a karta jest publiczna tylko dla agenta eksponowanego.
+  Budżet dzienny liczy koszt jobów turnów zamówionych przez klienta (w toku po ich limicie). `tasks/cancel`
+  odpowiada -32002 (turn zatrzymuje człowiek w Gatorze). Endpointy A2A są w `docs/openapi.yaml` (z
+  `servers: /`), wyłączone z generowania (`exclude-operation-ids`).
+- **Do sprawdzenia na żywo** (notki w `README.md` i `plugins/slack/README.md`): flagi i wersje adapterów
+  ACP, raportowanie usage, id trybów; OAuth Slacka przez wspólny connect, zakresy, JSON w
+  `chat.*`, ponowienia Slacka; wersje A2A i ścieżki kart u realnych peerów, ich odpowiedzi
+  (`task` czy `message`) i koszt.
+- **Punkt 3 (UI wyboru backendu w profilu agenta)** należy do fazy 6; `docs/openapi.yaml` opisuje
+  wszystko, czego potrzebuje (`AgentPolicy.backend`, agent zdalny, eksponowanie, klienci A2A, kody
+  powiązań i tożsamości z zewnątrz).
+- **Po przeglądzie** (szczegóły w commicie): komenda dozwolona w read-only ACP to sama nazwa z PATH
+  (`./gator-cli` z repozytorium jest odrzucane), a dopuszczenie narzędzia MCP po tytule dotyczy tylko
+  wywołań bez rodzaju albo `other`; łańcuch delegacji zaczęty przez kogoś z zewnątrz zostaje w `chat`
+  na każdym hopie (`Request.FromOutside`, dispatcher idzie po `parent_turn_id`), a budżet klienta A2A
+  liczy cały łańcuch; każda tożsamość z zewnątrz ma dzienny budżet (strażnik `OutsideBudget`, $2 albo
+  budżet klienta A2A); plugin bez własnego nagłówka dostawy (Slack) jest deduplikowany tylko po hashu
+  body (`X-Gator-Delivery` nie robi z replayu nowej dostawy); Approve ze Slacka działa tylko, gdy task
+  wciąż czeka na tę samą bramkę (klucz karty = faza i chwila wejścia); podpis odpowiedzi w GitHubie
+  nie woła `@handle`; karta A2A musi wskazywać endpoint na swoim hoście (tam idzie token), a ten sam
+  `messageId` do innego agenta to inne pytanie.
+- **Po drugim przeglądzie** (szczegóły w commitach):
+  - ACP: agent, który w jobie read-only sam zmieni tryb (`current_mode_update`), jest przerywany, a job
+    kończy się porażką; `AuthState` patrzy tylko na zmienne i pliki logowania (nie na `CODEX_HOME`,
+    `OPENAI_BASE_URL`); bufor słów agenta jest ograniczony (64 KiB niedokończonego akapitu, 1 MiB całości).
+  - **Routing**: runner mówi, które backendy utrzymują job read-only, a które job bez narzędzi
+    (`proto.Capabilities.read_only`, `no_tools`; runner sprzed tych pól — wszystkie), a serwer leasuje
+    job `chat` i `summary` tylko tam. Job `summary` (streszczenia, kuracja) idzie na
+    `GATOR_DEFAULT_BACKEND` serwera, cokolwiek polityka roli wybrała. Job `chat` z backendem, który
+    nie umie read-only (np. `acp:gemini`), czeka na runner, który umie, i jest widoczny jako taki, który
+    nie ma runnera — bez cichej zamiany.
+  - **A2A**: Stop kończy biegnący turn agenta zdalnego (`Control` przez `Elsewhere.Stopped`), a
+    wywołanie jest kończone; worker sprawdza turn przed wysłaniem, między pytaniami o task i przed
+    zapisem. Worker robi 4 wywołania naraz, najwyżej 2 do jednego agenta, wywołanie próbowane 3 razy
+    kończy się porażką, a agent zdalny odpowiada najwyżej na 100 wywołań dziennie (jego turn kosztuje
+    $0, więc limit jest w wywołaniach). Wysyłki klienta są szeregowane od sprawdzenia budżetu do posta
+    (na tym serwerze), najwyżej 5 jego pytań może być otwartych naraz, a `tasks/get` ma własny limit.
+  - **Mosty**: tożsamość z zewnątrz pyta agentów najwyżej 6 razy na minutę (ponowienie dostawy to nie
+    nowe pytanie); komentarz w GitHubie pyta tylko od OWNER, MEMBER, COLLABORATOR (ustawienie
+    `commenters`; odpowiedź jest publiczna); `message.update` zmienia tylko wiadomość autora;
+    Approve ze Slacka to `process.ApproveWaiting` (faza i chwila wejścia sprawdzane pod blokadą taska);
+    kody powiązań są tylko dla mostu projektu, który je przyjmuje (`links` w manifeście: Slack tak,
+    GitHub nie); `api_url` pluginu (tam idzie jego sekret) tylko na hoście pluginu albo na hoście z
+    `GATOR_PLUGIN_API_HOSTS` operatora (`plugin/netguard.APIBase`). Polityka wyjścia przeniosła się do
+    publicznego `plugin/netguard`, a `internal/server/netguard` jest jej fasadą.
+  - Hooki zdarzeń (mosty) mają własny kursor outboxu: wolne API czatu nie wstrzymuje hooków innych
+    pluginów. Sprzątacz usuwa przeterminowane kody, a host zapomina dostawy webhooków po 30 dniach
+    (podpisana dostawa GitHuba starsza niż to byłaby obsłużona znowu; to, co z niej powstaje, i tak
+    powstaje raz po id).
+  - **00048 poprawiona w miejscu** (gałąź nie była wypchnięta): indeksy turnów z zewnątrz, turnów po
+    rodzicu i mostów po rozmowie. W `docs/openapi.yaml`: `requestedByKind` ma `external`,
+    `Agent.kind` jest enumem, `Message.origin` jest opisany.
+  - **Zawężone**: szeregowanie wysyłek klienta A2A i limity na minutę są w pamięci jednego serwera
+    (jak limity webhooków); przy kilku węzłach budżet i liczba otwartych pytań i tak trzymają.
+

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/plugin"
@@ -41,6 +43,16 @@ func decode[T any](raw json.RawMessage) (T, error) {
 }
 
 func (i *instance) core(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+	for _, x := range i.h.cfg.Extensions {
+		serve, ok := x.Methods[method]
+		if !ok {
+			continue
+		}
+		if x.Capability != "" && !slices.Contains(i.b.manifest.Capabilities, x.Capability) {
+			return nil, plugin.Errorf(plugin.CodeForbidden, "%s needs the %s capability", method, x.Capability)
+		}
+		return serve(ctx, i.b.projectID, i.b.name, raw)
+	}
 	q := db.New(i.h.pool)
 	switch method {
 	case plugin.CoreTaskCreate:
@@ -67,6 +79,8 @@ func (i *instance) core(ctx context.Context, method string, raw json.RawMessage)
 			}
 		}
 		return taskRef(t), nil
+	case plugin.CoreBrainPropose:
+		return i.proposeToBrain(ctx, raw)
 	case plugin.CoreTaskFind:
 		p, err := decode[plugin.TaskFindParams](raw)
 		if err != nil {
@@ -281,4 +295,25 @@ func taskRef(t db.Task) plugin.TaskRef {
 	}
 	return plugin.TaskRef{ID: uuidString(t.ID), ProjectID: uuidString(t.ProjectID), Kind: t.Kind, Title: t.Title, Phase: t.Phase, ExternalRefs: refs,
 		Closed: t.ClosedAt.Valid}
+}
+
+// proposeToBrain is brain.propose: a proposal in the plugin's own project, never approved, each
+// source once.
+func (i *instance) proposeToBrain(ctx context.Context, raw json.RawMessage) (any, error) {
+	if i.h.cfg.Brain == nil {
+		return nil, plugin.Errorf(plugin.CodeMethodNotFound, "the Brain is not enabled on this server")
+	}
+	p, err := decode[plugin.BrainProposeParams](raw)
+	if err != nil {
+		return nil, err
+	}
+	e, created, err := i.h.cfg.Brain.Propose(ctx, i.b.projectID, i.b.name, brain.PluginProposal{Kind: p.Kind, Title: p.Title,
+		Content: p.Content, Scope: p.Scope, Component: p.Component, SourceID: p.SourceID, URL: p.URL, Excerpt: p.Excerpt})
+	if brain.IsInvalid(err) {
+		return nil, plugin.Errorf(plugin.CodeInvalidParams, "%v", err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return plugin.BrainProposeResult{EntryID: brain.UUIDString(e.ID), Created: created}, nil
 }

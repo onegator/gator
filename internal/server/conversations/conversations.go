@@ -52,6 +52,10 @@ const (
 	AuthorExternal = "external"
 )
 
+// AgentRemote is the kind of an agent outside Gator (A2A): a member whose words are another
+// system's, carried to other agents as untrusted.
+const AgentRemote = "remote"
+
 // Notification levels of a member.
 const (
 	NotifyAll      = "all"
@@ -148,6 +152,9 @@ func dmKey(ids []pgtype.UUID) string {
 	slices.Sort(keys)
 	return strings.Join(keys, ",")
 }
+
+// UUIDString writes an id the way the API and the outbox do; the zero id is "".
+func UUIDString(u pgtype.UUID) string { return uuidString(u) }
 
 func uuidString(u pgtype.UUID) string {
 	if !u.Valid {

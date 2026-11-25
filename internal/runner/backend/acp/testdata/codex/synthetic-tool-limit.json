@@ -1,0 +1,10 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {"loadSession": false}},
+  "new_session": {"sessionId": "sess-limit"},
+  "turns": [{"steps": [
+    {"update": {"sessionId": "sess-limit", "update": {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "ls", "kind": "execute", "status": "completed"}}},
+    {"update": {"sessionId": "sess-limit", "update": {"sessionUpdate": "tool_call", "toolCallId": "t2", "title": "ls", "kind": "execute", "status": "completed"}}},
+    {"update": {"sessionId": "sess-limit", "update": {"sessionUpdate": "tool_call", "toolCallId": "t3", "title": "ls", "kind": "execute", "status": "completed"}}},
+    {"wait_cancel": true}
+  ]}]
+}

@@ -38,6 +38,11 @@ type IssueParams struct {
 
 // Issue mints a token and returns its plaintext exactly once.
 func (t Tokens) Issue(ctx context.Context, p IssueParams) (plaintext string, rec db.ApiToken, err error) {
+	return t.IssueWith(ctx, db.New(t.Pool), p)
+}
+
+// IssueWith is Issue in the caller's transaction: the token exists only if what it is for does.
+func (t Tokens) IssueWith(ctx context.Context, q *db.Queries, p IssueParams) (plaintext string, rec db.ApiToken, err error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", db.ApiToken{}, err
@@ -47,7 +52,7 @@ func (t Tokens) Issue(ctx context.Context, p IssueParams) (plaintext string, rec
 	if p.TTL > 0 {
 		exp = pgtype.Timestamptz{Time: time.Now().Add(p.TTL), Valid: true}
 	}
-	rec, err = db.New(t.Pool).InsertToken(ctx, db.InsertTokenParams{
+	rec, err = q.InsertToken(ctx, db.InsertTokenParams{
 		Kind: string(p.Kind), Scope: p.Scope, Hash: hash(plaintext), UserID: p.UserID,
 		ProjectID: p.ProjectID, Name: p.Name, ExpiresAt: exp, JobID: p.JobID,
 	})

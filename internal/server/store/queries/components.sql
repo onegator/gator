@@ -49,10 +49,10 @@ DELETE FROM component_decisions WHERE component_id = $1 AND entry_id = $2;
 
 -- name: ListComponentDecisions :many
 -- Only approved entries: a proposal nobody accepted is not yet how this component works.
-SELECT sqlc.embed(p), l.component_id AS of_id FROM component_decisions l
-JOIN product_context p ON p.id = l.entry_id
-WHERE l.component_id = ANY(sqlc.arg(component_ids)::uuid[]) AND p.status = 'approved'
-ORDER BY p.kind, p.title;
+SELECT sqlc.embed(b), l.component_id AS of_id FROM component_decisions l
+JOIN brain_entries b ON b.id = l.entry_id
+WHERE l.component_id = ANY(sqlc.arg(component_ids)::uuid[]) AND b.status = 'approved'
+ORDER BY b.kind, b.title;
 
 -- name: SetTaskComponent :one
 UPDATE tasks SET component_id = sqlc.narg(component_id), updated_at = now()

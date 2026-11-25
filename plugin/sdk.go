@@ -38,6 +38,14 @@ type Handlers struct {
 	Import func(ctx context.Context, core *Core, p ImportParams) (ImportResult, error)
 	// TaskClosed says a task finished, so the issue it came from can be closed too.
 	TaskClosed func(ctx context.Context, core *Core, p TaskClosedParams) error
+	// WebhookReply is Webhook for a sender that reads the answer (Slack's URL verification).
+	// A plugin sets one of the two.
+	WebhookReply func(ctx context.Context, core *Core, p WebhookParams) (WebhookResult, error)
+	// MessagePosted and MessageEdited mirror a bridged conversation outside. Answer the outside
+	// reference of the copy, so the core can say which one later edits change. Requires the
+	// messaging capability.
+	MessagePosted func(ctx context.Context, core *Core, p MessageHookParams) (MessageHookResult, error)
+	MessageEdited func(ctx context.Context, core *Core, p MessageHookParams) (MessageHookResult, error)
 }
 
 func (h *Handlers) hooks() []string {
@@ -47,7 +55,7 @@ func (h *Handlers) hooks() []string {
 			out = append(out, name)
 		}
 	}
-	add(h.Webhook != nil, MethodWebhook)
+	add(h.Webhook != nil || h.WebhookReply != nil, MethodWebhook)
 	add(h.PhaseTransition != nil, MethodPhaseTransition)
 	add(h.GateEvaluate != nil, MethodGateEvaluate)
 	add(h.ArtifactApproved != nil, MethodArtifactApproved)
@@ -61,6 +69,8 @@ func (h *Handlers) hooks() []string {
 	add(h.TurnEnding != nil, MethodTurnEnding)
 	add(h.Import != nil, MethodImport)
 	add(h.TaskClosed != nil, MethodTaskClosed)
+	add(h.MessagePosted != nil, MethodMessagePosted)
+	add(h.MessageEdited != nil, MethodMessageEdited)
 	return out
 }
 
@@ -115,7 +125,14 @@ func dispatch(ctx context.Context, h *Handlers, core *Core, method string, raw j
 	case MethodShutdown:
 		return nil, nil
 	case MethodWebhook:
+		if h.WebhookReply != nil {
+			return ask(ctx, core, method, raw, h.WebhookReply)
+		}
 		return tell(ctx, core, method, raw, h.Webhook)
+	case MethodMessagePosted:
+		return ask(ctx, core, method, raw, h.MessagePosted)
+	case MethodMessageEdited:
+		return ask(ctx, core, method, raw, h.MessageEdited)
 	case MethodPhaseTransition:
 		return tell(ctx, core, method, raw, h.PhaseTransition)
 	case MethodGateEvaluate:
@@ -304,6 +321,13 @@ func (c *Core) RequestReview(ctx context.Context, p ReviewRequestParams) (Review
 	return out, err
 }
 
+// ProposeToBrain proposes an entry to the project's Brain; a person approves it.
+func (c *Core) ProposeToBrain(ctx context.Context, p BrainProposeParams) (BrainProposeResult, error) {
+	var out BrainProposeResult
+	err := c.conn.Call(ctx, CoreBrainPropose, p, &out)
+	return out, err
+}
+
 // CloseIncident says a fault has stopped: production is all right again. Closing one that is
 // already closed changes nothing, because a monitoring tool may say so more than once.
 func (c *Core) CloseIncident(ctx context.Context, p IncidentCloseParams) error {
@@ -313,4 +337,40 @@ func (c *Core) CloseIncident(ctx context.Context, p IncidentCloseParams) error {
 // Log writes to the core's log.
 func (c *Core) Log(ctx context.Context, level, message string, fields map[string]any) error {
 	return c.conn.Call(ctx, CoreLog, LogParams{Level: level, Message: message, Fields: fields}, nil)
+}
+
+// FindOrCreateConversation answers the conversation an outside place is connected to, connecting
+// it the first time.
+func (c *Core) FindOrCreateConversation(ctx context.Context, p ConversationFindOrCreateParams) (ConversationFindOrCreateResult, error) {
+	var out ConversationFindOrCreateResult
+	err := c.conn.Call(ctx, CoreConversationFindOrCreate, p, &out)
+	return out, err
+}
+
+// PostMessage posts what somebody said outside; the same ExternalRef again answers the same
+// message.
+func (c *Core) PostMessage(ctx context.Context, p MessagePostParams) (MessagePostResult, error) {
+	var out MessagePostResult
+	err := c.conn.Call(ctx, CoreMessagePost, p, &out)
+	return out, err
+}
+
+// UpdateMessage changes a message the bridge brought in, after its author edited it outside.
+func (c *Core) UpdateMessage(ctx context.Context, p MessageUpdateParams) error {
+	return c.conn.Call(ctx, CoreMessageUpdate, p, nil)
+}
+
+// LinkMember links an outside account with a code its owner made in Gator, or answers whom it is
+// linked to.
+func (c *Core) LinkMember(ctx context.Context, p MemberLinkParams) (MemberLinkResult, error) {
+	var out MemberLinkResult
+	err := c.conn.Call(ctx, CoreMemberLink, p, &out)
+	return out, err
+}
+
+// CardAction presses a card's button for the person an outside account is linked to.
+func (c *Core) CardAction(ctx context.Context, p CardActionParams) (CardActionResult, error) {
+	var out CardActionResult
+	err := c.conn.Call(ctx, CoreCardAction, p, &out)
+	return out, err
 }

@@ -49,6 +49,11 @@ type Definition struct {
 	Kind string
 	// UsesAgents says whether its tasks are worked on by agents. Only those need the consent.
 	UsesAgents bool
+	// Author is the role of the agent whose work this is (its default agent: @reviewer,
+	// @security, @triage, @reporter). Instead is the job role it takes over on the automation's
+	// tasks; empty when the author's role is the job's own, or when no agent works on them.
+	Author  string
+	Instead string
 	// Weekday is the default day of a weekly automation.
 	Weekday time.Weekday
 }
@@ -57,18 +62,21 @@ type Definition struct {
 var Catalogue = []Definition{
 	{
 		Key: PRReview, Title: "PR review", Trigger: TriggerPullRequest, Needs: NeedsGitHub, Kind: "review", UsesAgents: true,
+		Author:  "reviewer",
 		Summary: "An agent reads every pull request a person opens and points out bugs.",
 		Creates: "A review task for each pull request a person opens or pushes to. A reviewer agent reads the change " +
 			"and what it writes is posted on the pull request as a review comment.",
 	},
 	{
 		Key: SecurityReview, Title: "Security review", Trigger: TriggerPullRequest, Needs: NeedsGitHub, Kind: "security_review", UsesAgents: true,
+		Author:  "security_reviewer",
 		Summary: "An agent reads every pull request for what an attacker could use.",
 		Creates: "A security review task for each pull request a person opens or pushes to. An agent looks for injection, " +
 			"leaked secrets and broken access checks, and posts what it finds on the pull request.",
 	},
 	{
 		Key: DependencyScan, Title: "Dependency scan", Trigger: TriggerWeekly, Needs: NeedsRepository, Kind: "chore", UsesAgents: true,
+		Author:  "worker",
 		Weekday: time.Monday,
 		Summary: "Once a week, an agent checks the dependencies for known vulnerabilities.",
 		Creates: "A chore task once a week. An agent runs the repository's own audit tool (govulncheck, npm audit, pip-audit, " +
@@ -76,12 +84,14 @@ var Catalogue = []Definition{
 	},
 	{
 		Key: ErrorTriage, Title: "Error triage", Trigger: TriggerIncident, Needs: NeedsMonitoring, Kind: "incident", UsesAgents: true,
+		Author: "triage", Instead: "worker",
 		Summary: "An agent looks into each new error from production and proposes a fix.",
 		Creates: "Nothing new: the incident task a monitoring tool opens gets an agent straight away, which finds the cause " +
 			"and proposes a fix. With this off, incident tasks wait for a person as they do now.",
 	},
 	{
 		Key: WeeklySummary, Title: "Weekly summary", Trigger: TriggerWeekly, Needs: NeedsNothing, Kind: "summary",
+		Author:  "reporter",
 		Weekday: time.Friday,
 		Summary: "A short summary of the project's week, with a notification.",
 		Creates: "A summary once a week: what was finished, what waits for a person, and what agents spent in time and money. " +
@@ -155,4 +165,17 @@ func DueIn(t time.Time, day time.Weekday) time.Time {
 	t = t.UTC()
 	monday := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -int((t.Weekday()+6)%7))
 	return monday.AddDate(0, 0, int((day+6)%7)).Add(RunHour * time.Hour)
+}
+
+// Authors answers which agent does an automation's jobs (runners.AuthorRoles): the author, for
+// the job role it takes over; every other job is done by the agent of its own role.
+type Authors struct{}
+
+// AuthorRole implements runners.AuthorRoles.
+func (Authors) AuthorRole(automation, jobRole string) string {
+	d, ok := Lookup(automation)
+	if !ok || d.Instead == "" || d.Instead != jobRole {
+		return ""
+	}
+	return d.Author
 }

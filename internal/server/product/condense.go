@@ -3,10 +3,12 @@ package product
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -51,8 +53,8 @@ func NewCondenser(c *Curator, proc *process.Service, minEntries, minBytes int) *
 // many it opened.
 func (c *Condenser) Sweep(ctx context.Context) (int, error) {
 	q := db.New(c.pool)
-	rows, err := q.ProductKindsWorthCondensing(ctx, db.ProductKindsWorthCondensingParams{
-		MinEntries: int64(c.MinEntries), MinBytes: int64(c.MinBytes)})
+	rows, err := q.KindsWorthCondensing(ctx, db.KindsWorthCondensingParams{
+		Kinds: brain.ProductKinds, MinEntries: int64(c.MinEntries), MinBytes: int64(c.MinBytes)})
 	if err != nil {
 		return 0, err
 	}
@@ -76,14 +78,14 @@ func (c *Condenser) Sweep(ctx context.Context) (int, error) {
 // open creates the curation task for one kind, unless one is already open for it.
 func (c *Condenser) open(ctx context.Context, projectID pgtype.UUID, kind string, entries int64) (bool, error) {
 	q := db.New(c.pool)
-	title := curationTitle(kind)
+	title := curationTitle(brain.ProductKind(kind))
 	// A slow agent must not collect a queue of identical tasks; one open curation per kind is
 	// the whole point of asking.
 	n, err := q.OpenCondensationTask(ctx, db.OpenCondensationTaskParams{ProjectID: projectID, Title: title})
 	if err != nil || n > 0 {
 		return false, err
 	}
-	live, err := q.LiveProductEntriesOfKind(ctx, db.LiveProductEntriesOfKindParams{ProjectID: projectID, Kind: kind})
+	live, err := liveOfKind(ctx, q, projectID, kind)
 	if err != nil {
 		return false, err
 	}
@@ -92,7 +94,7 @@ func (c *Condenser) open(ctx context.Context, projectID pgtype.UUID, kind string
 	}
 	if _, err := c.proc.Create(ctx, process.CreateParams{
 		ProjectID: projectID, Kind: curationKind, Title: title,
-		Description: condensationBrief(kind, live, entries), Urgency: 4,
+		Description: condensationBrief(brain.ProductKind(kind), live, entries), Urgency: 4,
 	}, process.Actor{Kind: process.ActorSystem}); err != nil {
 		return false, err
 	}
@@ -106,7 +108,7 @@ func curationTitle(kind string) string {
 // condensationBrief is what the curator reads: every entry, whole, with the instruction. The
 // entries are quoted rather than summarised here — a summary of a summary is how the detail
 // that mattered disappears.
-func condensationBrief(kind string, entries []db.ProductContext, count int64) string {
+func condensationBrief(kind string, entries []db.BrainEntry, count int64) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "This project has %d %s entries in its product context, which is more than a prompt should carry.\n\n", count, kind)
 	b.WriteString("Propose one entry that replaces them. The originals are kept and archived once somebody approves your proposal, so write the entry you would want read from now on.\n\n")
@@ -124,12 +126,12 @@ func condensationBrief(kind string, entries []db.ProductContext, count int64) st
 // proposeCondensate turns a finished curation task into a proposal of the kind it was about,
 // naming the entries it was made from so approving it archives exactly those.
 func (c *Condenser) proposeCondensate(ctx context.Context, task db.Task) error {
-	kind := kindFromCurationTitle(task.Title)
+	kind := brain.KindOfProduct(kindFromCurationTitle(task.Title))
 	if kind == "" {
 		return nil
 	}
 	q := db.New(c.pool)
-	n, err := q.CountProposalsForTask(ctx, db.CountProposalsForTaskParams{
+	n, err := q.CountBrainProposalsForTask(ctx, db.CountBrainProposalsForTaskParams{
 		ProjectID: task.ProjectID, Kind: kind, SourceTaskID: task.ID})
 	if err != nil || n > 0 {
 		return err
@@ -147,7 +149,7 @@ func (c *Condenser) proposeCondensate(ctx context.Context, task db.Task) error {
 	if report.Content == nil {
 		return nil // the curator has not answered yet
 	}
-	live, err := q.LiveProductEntriesOfKind(ctx, db.LiveProductEntriesOfKindParams{ProjectID: task.ProjectID, Kind: kind})
+	live, err := liveOfKind(ctx, q, task.ProjectID, kind)
 	if err != nil {
 		return err
 	}
@@ -158,9 +160,9 @@ func (c *Condenser) proposeCondensate(ctx context.Context, task db.Task) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	entry, err := q.CreateCondensedEntry(ctx, db.CreateCondensedEntryParams{
-		ProjectID: task.ProjectID, Kind: kind, Title: curationTitle(kind),
-		Content: strings.TrimSpace(*report.Content), SourceTaskID: task.ID, CondensedFrom: ids})
+	d := taskDraft(task, kind, curationTitle(brain.ProductKind(kind)), strings.TrimSpace(*report.Content))
+	d.CondensedFrom = ids
+	entry, err := c.brain.Propose(ctx, d, brain.Author{Kind: brain.BySystem})
 	if err != nil {
 		return err
 	}
@@ -179,12 +181,13 @@ func kindFromCurationTitle(title string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(title, prefix), suffix)
 }
 
-// ArchiveCondensedSources is called when a condensed entry is approved: the entries it replaces
-// are archived, not deleted. They stay readable for anyone who wants to know what was folded
-// together, and they stop being carried into every prompt.
-func ArchiveCondensedSources(ctx context.Context, q *db.Queries, entry db.ProductContext) (int64, error) {
-	if len(entry.CondensedFrom) == 0 || entry.Status != "approved" {
-		return 0, nil
+// liveOfKind is what a condensation of kind would fold together, in title order: approved, not
+// archived, not itself a condensate.
+func liveOfKind(ctx context.Context, q *db.Queries, project pgtype.UUID, kind string) ([]db.BrainEntry, error) {
+	live, err := q.LiveEntriesOfKind(ctx, db.LiveEntriesOfKindParams{ProjectID: project, Kind: kind})
+	if err != nil {
+		return nil, err
 	}
-	return q.ArchiveProductEntries(ctx, entry.CondensedFrom)
+	slices.SortFunc(live, func(a, b db.BrainEntry) int { return strings.Compare(a.Title, b.Title) })
+	return live, nil
 }

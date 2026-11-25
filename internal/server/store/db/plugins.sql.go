@@ -38,6 +38,17 @@ func (q *Queries) ClearPluginTokenExpiry(ctx context.Context, id pgtype.UUID) er
 	return err
 }
 
+const countProjectPluginsOf = `-- name: CountProjectPluginsOf :one
+SELECT count(*)::int FROM project_plugins WHERE plugin_id = $1
+`
+
+func (q *Queries) CountProjectPluginsOf(ctx context.Context, pluginID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countProjectPluginsOf, pluginID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteExpiredPluginConnectStates = `-- name: DeleteExpiredPluginConnectStates :exec
 DELETE FROM plugin_connect_states WHERE expires_at < now()
 `
@@ -45,6 +56,19 @@ DELETE FROM plugin_connect_states WHERE expires_at < now()
 func (q *Queries) DeleteExpiredPluginConnectStates(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, deleteExpiredPluginConnectStates)
 	return err
+}
+
+const deletePlugin = `-- name: DeletePlugin :execrows
+DELETE FROM plugins p WHERE p.id = $1 AND NOT EXISTS (SELECT 1 FROM project_plugins pp WHERE pp.plugin_id = p.id)
+`
+
+// A plugin no project has set up; one a project has keeps its row (and its calls, which are a record).
+func (q *Queries) DeletePlugin(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePlugin, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const disableProjectPlugin = `-- name: DisableProjectPlugin :exec
@@ -118,6 +142,26 @@ func (q *Queries) GetEventCursor(ctx context.Context, name string) (int64, error
 	return last_event_id, err
 }
 
+const getPluginByID = `-- name: GetPluginByID :one
+SELECT id, name, command, version, manifest, enabled, created_at, updated_at FROM plugins WHERE id = $1
+`
+
+func (q *Queries) GetPluginByID(ctx context.Context, id pgtype.UUID) (Plugin, error) {
+	row := q.db.QueryRow(ctx, getPluginByID, id)
+	var i Plugin
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Command,
+		&i.Version,
+		&i.Manifest,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPluginByName = `-- name: GetPluginByName :one
 SELECT id, name, command, version, manifest, enabled, created_at, updated_at FROM plugins WHERE name = $1
 `
@@ -134,6 +178,28 @@ func (q *Queries) GetPluginByName(ctx context.Context, name string) (Plugin, err
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPluginConnectState = `-- name: GetPluginConnectState :one
+SELECT hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, created_at, target, authorize_url FROM plugin_connect_states WHERE hash = $1 AND expires_at > now()
+`
+
+func (q *Queries) GetPluginConnectState(ctx context.Context, hash []byte) (PluginConnectState, error) {
+	row := q.db.QueryRow(ctx, getPluginConnectState, hash)
+	var i PluginConnectState
+	err := row.Scan(
+		&i.Hash,
+		&i.ProjectID,
+		&i.PluginName,
+		&i.UserID,
+		&i.Verifier,
+		&i.ReturnTo,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.Target,
+		&i.AuthorizeUrl,
 	)
 	return i, err
 }
@@ -269,18 +335,21 @@ func (q *Queries) InsertPluginCall(ctx context.Context, arg InsertPluginCallPara
 }
 
 const insertPluginConnectState = `-- name: InsertPluginConnectState :exec
-INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, target, authorize_url)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, $8, $9)
 `
 
 type InsertPluginConnectStateParams struct {
-	Hash       []byte             `json:"hash"`
-	ProjectID  pgtype.UUID        `json:"project_id"`
-	PluginName string             `json:"plugin_name"`
-	UserID     pgtype.UUID        `json:"user_id"`
-	Verifier   string             `json:"verifier"`
-	ReturnTo   string             `json:"return_to"`
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	Hash         []byte             `json:"hash"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	PluginName   string             `json:"plugin_name"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	Verifier     string             `json:"verifier"`
+	ReturnTo     string             `json:"return_to"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	Target       string             `json:"target"`
+	AuthorizeUrl string             `json:"authorize_url"`
 }
 
 func (q *Queries) InsertPluginConnectState(ctx context.Context, arg InsertPluginConnectStateParams) error {
@@ -292,6 +361,8 @@ func (q *Queries) InsertPluginConnectState(ctx context.Context, arg InsertPlugin
 		arg.Verifier,
 		arg.ReturnTo,
 		arg.ExpiresAt,
+		arg.Target,
+		arg.AuthorizeUrl,
 	)
 	return err
 }
@@ -618,6 +689,20 @@ func (q *Queries) ProjectCapabilities(ctx context.Context, projectID pgtype.UUID
 	return items, nil
 }
 
+const pruneWebhookDeliveries = `-- name: PruneWebhookDeliveries :execrows
+DELETE FROM webhook_deliveries WHERE received_at < $1
+`
+
+// Deliveries are remembered long enough that a sender's retries, and a replay of a signed request,
+// are known; senders that sign with a timestamp (Slack) refuse older ones anyway.
+func (q *Queries) PruneWebhookDeliveries(ctx context.Context, before pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneWebhookDeliveries, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const releaseWebhookDelivery = `-- name: ReleaseWebhookDelivery :exec
 DELETE FROM webhook_deliveries WHERE project_plugin_id = $1 AND delivery_id = $2
 `
@@ -688,7 +773,7 @@ func (q *Queries) SetProjectPluginSecrets(ctx context.Context, arg SetProjectPlu
 }
 
 const takePluginConnectState = `-- name: TakePluginConnectState :one
-DELETE FROM plugin_connect_states WHERE hash = $1 AND expires_at > now() RETURNING hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, created_at
+DELETE FROM plugin_connect_states WHERE hash = $1 AND expires_at > now() RETURNING hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, created_at, target, authorize_url
 `
 
 // Single use: the row goes as it is read, so a replayed callback finds nothing.
@@ -704,6 +789,8 @@ func (q *Queries) TakePluginConnectState(ctx context.Context, hash []byte) (Plug
 		&i.ReturnTo,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.Target,
+		&i.AuthorizeUrl,
 	)
 	return i, err
 }

@@ -7,3 +7,11 @@
 /tmp/
 .DS_Store
 bin/
+# Plugin binaries built in their own directory (`go build` in plugins/<name>, or of a test plugin
+# from the repository root); `make plugins` puts them in bin/plugins instead.
+/plugins/*/github
+/plugins/*/linear
+/plugins/*/sentry
+/plugins/*/honeybadger
+/echo
+/plugins/*/slack

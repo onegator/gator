@@ -1,0 +1,5 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {"loadSession": false}, "authMethods": [{"id": "oauth-personal", "name": "Log in with Google"}]},
+  "new_session_error": {"code": -32000, "message": "Authentication required"},
+  "turns": []
+}

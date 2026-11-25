@@ -39,11 +39,17 @@ func Authenticate(tokens Tokens, devHeader bool, log *slog.Logger) func(http.Han
 					writeErr(w, http.StatusUnauthorized, "invalid or expired token")
 					return
 				}
-				// A job's identity exists for one conversation: the agent surface. Anywhere
-				// else it is refused outright rather than left to fail for lack of a role —
-				// the whole point is that words from outside cannot wander the API.
-				if p.Kind == KindJob && !strings.HasPrefix(r.URL.Path, agentPrefix) {
+				// A job's identity exists for one conversation: the agent surface, over REST or
+				// MCP. Anywhere else it is refused outright rather than left to fail for lack of
+				// a role — the whole point is that words from outside cannot wander the API.
+				if p.Kind == KindJob && !agentSurface(r.URL.Path) {
 					writeErr(w, http.StatusForbidden, "a job's identity may only use the agent commands")
+					return
+				}
+				// An A2A client is an outside agent: it calls the agents its project exposes, and
+				// reads nothing of the API.
+				if p.Kind == KindA2A && !strings.HasPrefix(r.URL.Path, A2APath+"/") {
+					writeErr(w, http.StatusForbidden, "an A2A client's token reaches only "+A2APath)
 					return
 				}
 				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
@@ -130,4 +136,16 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": http.StatusText(status)})
+}
+
+// A2APath is where A2A clients call a project's exposed agents.
+const A2APath = "/a2a"
+
+// MCPPath is where the gator-brain MCP server is served; a job's identity reaches it, and what
+// lies under it (phase 4: /mcp/proxy/<server>).
+const MCPPath = "/mcp"
+
+// agentSurface says whether path is somewhere a job's identity may call.
+func agentSurface(path string) bool {
+	return strings.HasPrefix(path, agentPrefix) || path == MCPPath || strings.HasPrefix(path, MCPPath+"/")
 }

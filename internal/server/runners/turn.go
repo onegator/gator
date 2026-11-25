@@ -59,6 +59,11 @@ func (s *session) turnEnding(te proto.TurnEnding) {
 	if job.RunnerID != s.runnerID || terminal(job.Status) {
 		return
 	}
+	// A reply or a summary is an answer, not a phase's work: nothing watching the process has
+	// a say in when it is finished.
+	if job.Kind != KindPhase {
+		return
+	}
 	// Only a turn that thinks it succeeded is worth arguing with. A failed or stopped job has
 	// a reason of its own, and sending it back to work would bury it.
 	if te.Status != proto.StatusDone {

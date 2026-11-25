@@ -63,6 +63,75 @@ never message bodies. A mention, a DM or a reply in one's thread is pushed. File
 to 25 MB) are kept in `GATOR_ATTACHMENTS_S3_*` (endpoint, bucket, access key, secret key, prefix,
 insecure) or `GATOR_ATTACHMENTS_DIR`; with neither set the server takes none.
 
+## Agents
+
+Agents are members of a project: `@researcher`, `@planner`, `@worker`, `@reviewer`, `@security`,
+`@curator`, `@triage` and `@reporter` come with every project (the database seeds them), and a
+project adds its own (`POST /projects/{id}/agents`, a `@backend-reviewer` for the reviewer role) or
+sees the workspace's. A process template still says `role: reviewer`; the project's agent for the
+role does the job, and every job, commit and card is signed by it. Mentioning an agent in a
+conversation (or writing in a DM with one) is a turn: it answers in the thread under the message,
+its answer streams into its message, its tool calls move the job's card, and what it cost shows
+under it. A `chat` agent reads and answers with no tools that write in a read-only checkout; a
+`work` agent changes code on a `gator/` branch only where a person allowed agents on the task, and
+otherwise answers in chat and a card asks "Let @worker work on this?" (`POST /turns/{id}/allow`).
+A conversation about no task opens a hidden task of kind `ask`; "make this a task" turns it into a
+feature or a bug with its history. Agents delegate to each other with `gator-cli say` and an
+`@handle`, within limits: four turns per chain, a chain budget of twice a turn of the asked agent,
+never the same agent twice in a row, the project's daily budget, and a paused agent says so. A
+person's reply while an agent answers steers it; Stop is `POST /turns/{id}/stop`. The rules live in
+`internal/server/agents`, the conversation an agent is told in `internal/server/conversations/context.go`.
+
+## Outside Gator: bridges and A2A
+
+**Bridges** are plugins with the `messaging` capability: the bundled `slack` (channels, threads,
+`/gator ask`, Approve on a decision card) and `github` (`@gator reviewer …` in a comment, the answer
+as a comment). The core keeps their rules in `internal/server/bridges`: a bridge acts in its own
+project, only on conversations it connected, never on a private one; what came through a bridge is
+never mirrored back to it; an outside account is an identity of that project and bridge
+(`external_identities`), heard by agents in chat and fenced as untrusted, approving nothing, until
+its person links it with a code made in Gator (`POST /projects/{id}/external-links`, ten minutes,
+once — never by email address); a linked member's Approve is `process.Approve` in their name. An
+agent's answer streams out at most every 2 s. An outside identity asks agents at most six times a
+minute and within a daily budget ($2, delegations included); a GitHub comment asks only from people
+the repository trusts (`commenters`). A plugin's `api_url` (where its secret goes) may name another
+host only if the operator lists it in `GATOR_PLUGIN_API_HOSTS`.
+
+**A2A**: a project's admin adds an agent outside Gator from its Agent Card (`POST
+/projects/{id}/remote-agents`, card fetched through `netguard`, its bearer token encrypted with the
+keyring). Mentioning it is a turn like any other, under the same hop, fan-out and budget guards; the
+turn is an A2A task (`message/send`, then `tasks/get` until it ends) made by a worker in the server,
+its answer written into the agent's message and carried to other agents as untrusted. It answers
+only in conversations open to the whole project, a person stops it like any turn, and the worker makes
+four calls at once (two per agent, three tries each, 100 a day per agent). Inbound, the admin exposes agents (`PUT
+/agents/{id}/a2a`) and lets clients in (`POST /projects/{id}/a2a-clients`: a `gtr_a2a_…` token that
+reaches only `/a2a/<project>/<agent>`, a daily budget, a rate). A client's ask is its message in
+`#a2a-<client>`, answered in chat; it reads the answer from `tasks/get`. Cards are at
+`/a2a/<project>/<agent>/.well-known/agent-card.json`.
+
+**To check live before relying on it:** the A2A version and card path of the peers a team uses
+(0.3, `/.well-known/agent-card.json`; older peers serve `agent.json`), whether they answer
+`message/send` with a task or a message, and how they report cost (nothing reads it yet: a remote
+turn costs $0 in Gator's records). Every test here talks to a fake peer.
+
+## Brain
+
+What the team and its agents know lives in one store, `brain_entries` (`internal/server/brain`):
+scopes `workspace` (conventions everyone follows), `project` (vision, principles, decisions, runbooks),
+`component` (handed to jobs about that component and its neighbours), `user` (a person's expertise,
+preferences and focus: theirs alone unless shared) and `agent` (an agent's own lessons). Agents
+propose, people approve; only approved entries reach a prompt; a change is a new version and the old
+one stays (`GET /brain?at=` answers what held then). One `brain.Policy` decides who reads what for the
+REST API (`/brain`), the MCP server and the package a job is handed: a job reads its project's approved
+entries and the private context of the person its turn acts for (`agent_turns.on_behalf_of`), never of
+anybody else. Every job is handed its part with `[brain:<id>]` tags; what it was handed, looked up and
+cited is in `brain_citations`. The curator (`brain/curator`) proposes what a quiet task thread settled,
+with one `brain_proposal` card a day in the thread; plugins propose with `brain.propose` (GitHub: the
+ADRs in `docs/adr/`); a proposal that contradicts an approved decision asks whether it replaces it.
+The old `/product` and `/knowledge` endpoints are facades over it for one release. The MCP server
+`gator` is at `POST /mcp`: jobs reach it with their own token (the runner adds it to every session) and
+people connect their own clients with theirs; see [docs/agent-tools.md](docs/agent-tools.md).
+
 ## Identity and access
 
 - Browser login: `GET /auth/login` starts OIDC (`GATOR_OIDC_*`, e.g. Google) with PKCE and a
@@ -138,7 +207,9 @@ and `ghcr.io/onegator/gator-server` for amd64 and arm64.
 Runners hold one WebSocket to `/api/v1/runner`, authenticated with a runner token in the
 handshake. The contract lives in `internal/proto` and is the only code both binaries share.
 
-1. `register` → `registered` with the negotiated protocol version (the server speaks N and N-1).
+1. `register` → `registered` with the negotiated protocol version (the server speaks N and N-1:
+   v3 and v2). A v3 job says its kind (phase, reply, summary), tier (chat is read-only), agent and,
+   for a reply, the conversation it answers in; a v2 runner is handed phase jobs only.
 2. `heartbeat` every 15 s lists the jobs the runner holds; only those leases are extended.
    45 s of silence marks the runner offline.
 3. `lease_request` → `lease`: jobs are handed out with `FOR UPDATE SKIP LOCKED`, matched on
@@ -178,6 +249,36 @@ and `/stop`; live output streams on the WebSocket topic `job:<id>`.
 
 `internal/runner/backend/claude/testdata` holds sanitized recordings of real Claude Code 2.1.270
 sessions; the parser and backend tests replay them through a fake `claude`.
+
+### Agents speaking ACP
+
+Any agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) runs as the
+backend `acp:<name>`: `GATOR_ACP_AGENTS=codex:/usr/local/bin/codex-acp,gemini:/usr/local/bin/gemini
+--experimental-acp` (name, colon, the command and its arguments). The runner starts the command in
+the worktree for every run (`internal/runner/backend/acp`): `initialize`, `session/new` with Gator's
+MCP servers over HTTP (when the agent can reach them; the job's token travels in the session's
+headers, never on the command line), `session/prompt`, and `session/update` as the same job events
+as Claude's. A steer is `session/cancel`, then `session/load` of the same session and the correction
+(an agent that cannot load sessions starts over with the opening and the correction). The tool-call
+limit and a cost the agent reports (`usage_update`) are counted by the runner, which cancels the
+turn and ends the process group. The agent's permission requests are answered for the job's tier:
+a work job allows them once each; a chat job allows reading, searching, fetching, the job's own MCP
+servers and `gator-cli` alone, and refuses editing, deleting, moving and other commands, on a
+read-only worktree — and runs only on an agent whose profile names a read-only session mode, which
+the session must offer (not every tool of an agent asks first). A job with no tools (summaries)
+never goes to an ACP backend. Each supported agent has a profile (its login variables
+and files for `AuthState`, its read-only mode) and synthetic replays in `testdata/<agent>`: `codex`
+(via codex-acp) and `gemini`; anything else runs as experimental. A policy picks it per role, tier or
+agent (`"backend": "acp:codex"`). A runner tells the server which of its backends keep a job
+read-only and which run one with no tools, and a chat job or a summary is leased only to those;
+summaries run on the server's `GATOR_DEFAULT_BACKEND` whatever the role's policy says. An agent that
+leaves its read-only mode during a read-only job is stopped.
+
+**To check live before relying on it:** the adapters' current versions and flags (`codex-acp`,
+`gemini --experimental-acp`), whether they report usage (`usage` in the prompt's answer,
+`usage_update` with a cost), the ids of their session modes (codex-acp's `read-only`), and how they
+title MCP tool calls in permission requests. The recordings here are synthetic: no model session
+was started to make them.
 
 ## Autopilot, roles and artifacts
 
@@ -257,6 +358,34 @@ are listed by `GET /api/v1/plugins/catalogue` and switched on per project with
 pasted token (callback: `GATOR_PUBLIC_URL/connect/callback`). Others are installed with `PUT /api/v1/plugins/{name}`; webhooks arrive at
 `POST /hooks/<project-slug>/<plugin>`. The contract and a Go SDK live in the public package
 `plugin/`; the protocol is in [docs/plugins.md](docs/plugins.md).
+
+## Marketplace
+
+Agents, skills, remote MCP servers, native plugins, processes and knowledge packs come from
+registries (`internal/server/marketplace`): git repositories (or directories) whose `index.json` names
+every package with its version and the sha256 of its files, signed with Ed25519 in `index.json.sig`.
+Gator's own is built in (`GATOR_MARKETPLACE_URL`, default
+[onegator/gator-marketplace](https://github.com/onegator/gator-marketplace), verified against
+`GATOR_MARKETPLACE_PUBLIC_KEY`) and fetched at start; a workspace admin adds the company's own
+(`POST /api/v1/registries`). A bad signature takes nothing; a package that does not match its
+checksum, carries a link or an unsafe path, breaks the size limits, or is a published version whose
+files changed, is turned away. Installing (`POST /api/v1/projects/{id}/installations`, or
+`/workspace/installations`) needs every permission the version asks for accepted; an agent is in the
+project's agents at once. Nothing updates by itself: a newer version is offered
+(`GET /installations/{id}/update`) and applied by a person (`PATCH /installations/{id}`), accepting
+what it adds and saying what becomes of what they changed. `gator-server marketplace
+checksum|index|keygen|sign|verify` is what a registry's maintainer runs.
+
+A job's lease carries its agent's skills (Claude Code loads them with `--plugin-dir` from the
+runner's own directory; other backends read them through `skill_read`) and names the remote MCP
+servers it was given. The runner reaches each through Gator's proxy, `POST /mcp/proxy/<name>`, with the
+job's own token: the server's credentials never leave gator-server — a token, or OAuth the way the
+MCP spec has it (the server's metadata, its authorization server's, a client registered for it alone,
+PKCE), connected through `/connect/start` and `/connect/callback` in the browser that started it.
+Every call is written to `mcp_calls` (arguments masked), tools outside the allowlist (and, for chat,
+outside the read-only tools allowed for chat) are refused, answers come back bounded and fenced as
+untrusted, and a server that keeps failing is not called for a while. The server's own requests reach
+no private address (`netguard`) unless `GATOR_OUTBOUND_ALLOW_PRIVATE=1`.
 
 ## License
 

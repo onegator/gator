@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,9 @@ type Client struct {
 	Token string
 	Repo  string // owner/name
 	HTTP  *http.Client
+	// Err is why Base cannot be used (an API address the operator did not allow); every call
+	// answers it.
+	Err error
 }
 
 // APIError is a non-2xx answer from GitHub.
@@ -84,6 +88,9 @@ type CheckRun struct {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	if c.Err != nil {
+		return c.Err
+	}
 	if c.Token == "" {
 		return errors.New("github: no token configured")
 	}
@@ -274,4 +281,30 @@ func (c *Client) CreateHook(ctx context.Context, hookURL, secret string, events 
 // way to be sure it matches is to write it.
 func (c *Client) UpdateHook(ctx context.Context, id int64, hookURL, secret string, events []string) error {
 	return c.do(ctx, http.MethodPatch, fmt.Sprintf("%s/hooks/%d", c.repo(), id), hookBody(hookURL, secret, events), nil)
+}
+
+// File is one file of the repository at a commit.
+type File struct {
+	Path    string `json:"path"`
+	SHA     string `json:"sha"`
+	HTMLURL string `json:"html_url"`
+	// Content is the file's text; GitHub sends it base64-encoded.
+	Content  string `json:"content"`
+	Encoding string `json:"encoding"`
+}
+
+// File reads path at ref.
+func (c *Client) File(ctx context.Context, path, ref string) (File, error) {
+	var f File
+	if err := c.do(ctx, http.MethodGet, c.repo()+"/contents/"+path+"?ref="+url.QueryEscape(ref), nil, &f); err != nil {
+		return File{}, err
+	}
+	if f.Encoding == "base64" {
+		raw, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(f.Content, "\n", ""))
+		if err != nil {
+			return File{}, fmt.Errorf("github: %s: %w", path, err)
+		}
+		f.Content, f.Encoding = string(raw), ""
+	}
+	return f, nil
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -40,7 +42,9 @@ type session struct {
 	placement string
 	owner     pgtype.UUID
 	onlyJob   pgtype.UUID
-	seq       atomic.Uint64
+	// version is the protocol spoken on this connection.
+	version int
+	seq     atomic.Uint64
 
 	dispatchMu sync.Mutex
 	closeOnce  sync.Once
@@ -153,7 +157,7 @@ func (m *Manager) connect(ctx context.Context, cancel context.CancelFunc, c *web
 	}
 
 	s := &session{m: m, conn: c, runnerID: row.ID, tokenID: p.TokenID, name: reg.Name, caps: reg.Capabilities, projects: projects,
-		placement: reg.Placement, owner: row.OwnerID, onlyJob: p.JobID}
+		placement: reg.Placement, owner: row.OwnerID, onlyJob: p.JobID, version: version}
 	s.ctx, s.cancel = ctx, cancel
 	m.mu.Lock()
 	if old := m.sessions[row.ID.Bytes]; old != nil {
@@ -371,6 +375,8 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
 			Backends: backends, Projects: projects, Slots: int32(free),
 			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
+			PhaseOnly: s.version < turnsVersion,
+			ReadOnly:  keeping(backends, s.caps.ReadOnly), NoTools: keeping(backends, s.caps.NoTools),
 		})
 		if err != nil {
 			return err
@@ -391,6 +397,10 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 	// If this send fails the leases expire and the sweeper returns the jobs to the queue.
 	return s.send(proto.TypeLease, proto.Lease{Jobs: out})
 }
+
+// turnsVersion is the protocol that knows a job's kind, tier and agent; a runner below it only
+// runs phase jobs.
+const turnsVersion = 3
 
 // placementOrLocal is the session's placement; a session built without one (a test, an old
 // row) is local, which is what every runner was before placement existed.
@@ -429,34 +439,79 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 		Phase: j.Phase, Role: j.Role, Backend: j.Backend, Model: j.Model, Instruction: j.Instruction, Bounds: b,
 		Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
 	}
+	if s.version >= turnsVersion {
+		pj.Kind, pj.Tier = j.Kind, j.Tier
+		if j.AgentID.Valid {
+			if a, err := q.GetAgent(ctx, j.AgentID); err == nil {
+				pj.Agent = &proto.Agent{Handle: a.Handle, DisplayName: a.DisplayName}
+				pj.Skills = s.skills(ctx, q, j, a)
+				pj.MCP = s.proxied(ctx, q, j, a)
+			}
+		}
+	}
 	if t, err := q.GetTask(ctx, j.TaskID); err == nil {
 		pj.TaskTitle, pj.TaskDescription, pj.TaskOrigin = t.Title, t.Description, t.Origin
 	}
 	pj.AgentToken = s.agentToken(ctx, j)
-	if g, err := s.m.process.RoleGuide(ctx, j.ProjectID, j.Role); err == nil {
-		pj.Guide = g
+	pj.Guide = s.guide(ctx, q, j)
+	brief := s.brief(ctx, j)
+	pj.Context = s.handContext(ctx, q, j, brief)
+	if j.Kind == KindReply && j.TurnID.Valid {
+		pj.Turn = &proto.Turn{ID: uuidString(j.TurnID), Ask: brief.Ask, Repeat: brief.Repeat}
+		for _, d := range brief.Docs {
+			pj.Turn.Conversation = append(pj.Turn.Conversation, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+		}
 	}
-	pj.Context = s.handContext(ctx, q, j)
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
+		if j.Tier == TierChat {
+			// A reviewer asked about a task reads the task's work, not the default branch.
+			if b, err := q.TaskWorkBranch(ctx, j.TaskID); err == nil {
+				pj.Repo.ReadBranch = b
+			}
+		}
 	}
 	// Record what this job was handed. Context is meant to save an agent from
 	// hunting for what it needs; whether it does is a question about tokens spent
 	// against context given, and that comparison needs both numbers.
-	bytes := 0
+	bytes := len(brief.Ask) + len(brief.Repeat)
+	for _, d := range brief.Docs {
+		bytes += len(d.Body)
+	}
 	for _, d := range pj.Context {
 		bytes += len(d.Body)
 	}
 	_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
-		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context))})
+		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context) + len(brief.Docs))})
 	return pj
+}
+
+// guide is the prompt of the job's agent: its own instructions when a person wrote them, else
+// the project's prompt for the role it plays, else that of the job's role.
+func (s *session) guide(ctx context.Context, q *db.Queries, j db.Job) string {
+	role := j.Role
+	if j.AgentID.Valid {
+		if a, err := q.GetAgent(ctx, j.AgentID); err == nil {
+			if strings.TrimSpace(a.Instructions) != "" {
+				return a.Instructions
+			}
+			if a.RoleKey != nil && *a.RoleKey != "" {
+				role = *a.RoleKey
+			}
+		}
+	}
+	g, err := s.m.process.RoleGuide(ctx, j.ProjectID, role)
+	if err != nil {
+		s.m.log.Warn("reading the role's prompt", "job", uuidString(j.ID), "role", role, "err", err)
+	}
+	return g
 }
 
 // agentToken is the identity the agent talks back with. Minted per job and revoked when the
 // job ends, so it can only ever discuss the work it was handed. Empty without an issuer.
 func (s *session) agentToken(ctx context.Context, j db.Job) string {
 	issuer := s.m.cfg.AgentTokens
-	if issuer == nil {
+	if issuer == nil || j.Kind == KindSummary { // a summary reads a transcript; it has nobody to talk to
 		return ""
 	}
 	ttl := s.m.cfg.AgentTokenTTL
@@ -471,9 +526,32 @@ func (s *session) agentToken(ctx context.Context, j db.Job) string {
 	return token
 }
 
-// handContext gathers the documents the job starts from — the core's, then the plugins' —
-// and records each one, whether or not it made it into the prompt.
-func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job) []proto.ContextDoc {
+// privateLeft is what the record of a job says of a private conversation it was handed.
+const privateLeft = "said in a private conversation: handed to the agent, not kept in the job's record"
+
+// Of a person's own context the record keeps neither the words nor the title.
+const (
+	personalTitle = "Private context of the person who asked"
+	personalLeft  = "a person's own context: handed to the agent of their turn, not kept in the job's record"
+)
+
+// brief is the conversation a reply answers in, as its agent is told it; nothing for any other
+// job, or when it cannot be told.
+func (s *session) brief(ctx context.Context, j db.Job) TurnBrief {
+	if j.Kind != KindReply || s.m.cfg.Briefer == nil {
+		return TurnBrief{}
+	}
+	b, err := s.m.cfg.Briefer.Brief(ctx, j)
+	if err != nil {
+		s.m.log.Warn("telling an agent its conversation", "job", uuidString(j.ID), "err", err)
+	}
+	return b
+}
+
+// handContext gathers the documents the job starts from — the conversation a reply answers in,
+// then the core's, then the plugins' — and records each one, whether or not it made it into the
+// prompt.
+func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, brief TurnBrief) []proto.ContextDoc {
 	var out []proto.ContextDoc
 	// One counter across everything the job is handed, so the record reads in the
 	// order the prompt does.
@@ -487,15 +565,40 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job) []pr
 		}
 		pos++
 	}
-	if docs, err := s.m.process.JobContext(ctx, j.TaskID, j.Role); err == nil {
+	for _, d := range brief.Docs {
+		d.FullBytes = max(d.FullBytes, len(d.Body))
+		if brief.Private {
+			d.Body, d.Left = "", privateLeft
+		}
+		record(d, "conversation")
+	}
+	// A summary reads the transcript in its instruction and nothing else; it is handed no package.
+	var docs []process.ContextDoc
+	var err error
+	if j.Kind != KindSummary {
+		docs, err = s.m.process.ContextFor(ctx, s.contextRequest(ctx, q, j))
+	}
+	if err == nil && len(docs) > 0 {
+		var packed []pgtype.UUID
 		for _, d := range docs {
 			// A document that did not fit is kept in the record but not in the prompt:
 			// the agent never saw it, and the record should say so rather than imply
 			// it was never there.
 			if !d.Dropped {
 				out = append(out, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
+				if d.Entry.Valid {
+					packed = append(packed, d.Entry)
+				}
+			}
+			if d.Private {
+				d.Title, d.Body, d.Left = personalTitle, "", personalLeft
 			}
 			record(d, d.Origin)
+		}
+		if use := s.m.cfg.Brain; use != nil {
+			if err := use.Used(ctx, j.ID, brain.HowPacked, packed); err != nil {
+				s.m.log.Warn("recording what a job was handed from the Brain", "job", uuidString(j.ID), "err", err)
+			}
 		}
 	}
 	if p := s.m.cfg.Preparer; p != nil {
@@ -506,6 +609,18 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job) []pr
 		}
 	}
 	return out
+}
+
+// contextRequest is what j's documents are gathered for: its role and agent, and the person its
+// turn acts for, whose private context it is lent.
+func (s *session) contextRequest(ctx context.Context, q *db.Queries, j db.Job) process.ContextRequest {
+	req := process.ContextRequest{Task: j.TaskID, Role: j.Role, Job: j.ID, Agent: j.AgentID}
+	if j.TurnID.Valid {
+		if turn, err := q.GetTurnByJob(ctx, j.ID); err == nil {
+			req.OnBehalfOf = turn.OnBehalfOf
+		}
+	}
+	return req
 }
 
 // ownJob loads the job a runner reports on, refusing one it does not hold. A database
@@ -601,6 +716,12 @@ func (s *session) finish(fin proto.Finish) error {
 	if err := s.m.tx(ctx, func(q *db.Queries) error { return s.closeJob(ctx, q, job.ID, fin, status, reason) }); err != nil {
 		return errRetry
 	}
+	// What the agent says it relied on, of what it was handed or looked up.
+	if use := s.m.cfg.Brain; use != nil && status == proto.StatusDone {
+		if err := use.Cited(ctx, job.ID, fin.Summary); err != nil {
+			s.m.log.Warn("recording what a job cited from the Brain", "job", uuidString(job.ID), "err", err)
+		}
+	}
 	if job.Placement == proto.PlacementCloud {
 		s.m.provisionSoon() // the machine that ran it goes now, not on the next sweep
 	}
@@ -674,22 +795,34 @@ func (s *session) closeJob(ctx context.Context, q *db.Queries, jobID pgtype.UUID
 		if err := recordWork(ctx, q, j, fin); err != nil {
 			return err
 		}
+
 	}
 	j.Status = status
-	return s.m.emitJob(ctx, q, "job.finished", j, map[string]any{"stop_reason": reason, "summary": fin.Summary})
+	extra := map[string]any{"stop_reason": reason}
+	if j.Kind == KindPhase {
+		extra["summary"] = fin.Summary // a reply's answer is its message, read through the conversation's rules
+	}
+	return s.m.emitJob(ctx, q, "job.finished", j, extra)
 }
 
-// recordWork leaves the document the job's role produces, for the phase gate to approve, and
-// says whether the agent left a digest of what it did.
+// recordWork leaves what a done job produced. A phase job leaves the document its role
+// produces, for the phase gate to approve; a reply is its message in the conversation and
+// leaves no document to approve, and a summary is the conversation's. Phase jobs and replies say
+// whether the agent left a digest of what it did, and rebuild the task's working state.
 func recordWork(ctx context.Context, q *db.Queries, j db.Job, fin proto.Finish) error {
-	content := artifactContent(j.Role, fin)
-	typ := process.ArtifactTypeFor(j.Role)
-	a, err := q.CreateArtifact(ctx, db.CreateArtifactParams{TaskID: j.TaskID, Phase: j.Phase, Type: typ, Content: &content})
-	if err != nil {
-		return err
-	}
-	if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
-		return err
+	switch j.Kind {
+	case KindSummary:
+		return nil
+	case KindPhase:
+		content := artifactContent(j.Role, fin)
+		typ := process.ArtifactTypeFor(j.Role)
+		a, err := q.CreateArtifact(ctx, db.CreateArtifactParams{TaskID: j.TaskID, Phase: j.Phase, Type: typ, Content: &content})
+		if err != nil {
+			return err
+		}
+		if err := emit(ctx, q, "artifact.created", "task", j.TaskID, map[string]any{"phase": j.Phase, "type": typ, "version": a.Version, "job_id": fin.JobID}); err != nil {
+			return err
+		}
 	}
 	if fin.Digest != nil {
 		if err := emit(ctx, q, "job.digest", "job", j.ID, map[string]any{"task_id": uuidString(j.TaskID), "phase": j.Phase, "role": j.Role, "digest": fin.Digest}); err != nil {
@@ -737,6 +870,21 @@ func (s *session) leasable() []string {
 			continue
 		}
 		out = append(out, b)
+	}
+	return out
+}
+
+// keeping are the backends of a runner that keep a limit, as it says; a runner that says nothing
+// (one from before it could) keeps it with all of them.
+func keeping(backends, says []string) []string {
+	if says == nil {
+		return backends
+	}
+	out := []string{}
+	for _, b := range backends {
+		if slices.Contains(says, b) {
+			out = append(out, b)
+		}
 	}
 	return out
 }
