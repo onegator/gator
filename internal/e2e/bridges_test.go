@@ -49,6 +49,7 @@ type fakeSlackAPI struct {
 	mu    sync.Mutex
 	posts []map[string]any
 	next  int
+	delay time.Duration // how long chat.postMessage takes
 }
 
 func newFakeSlackAPI(t *testing.T) *fakeSlackAPI {
@@ -66,6 +67,10 @@ func newFakeSlackAPI(t *testing.T) *fakeSlackAPI {
 		case "users.info":
 			_, _ = w.Write([]byte(`{"ok":true,"user":{"name":"ada","profile":{"display_name":"Ada"}}}`))
 		case "chat.postMessage":
+			f.mu.Lock()
+			d := f.delay
+			f.mu.Unlock()
+			time.Sleep(d)
 			var p map[string]any
 			_ = json.Unmarshal(body, &p)
 			f.mu.Lock()
@@ -130,29 +135,7 @@ func slackEvent(team, user, ts, threadTS, text string) []byte {
 func TestSlackBridgeEndToEnd(t *testing.T) {
 	h := newHarness(t)
 	api := newFakeSlackAPI(t)
-	if code := h.do("PUT", "/plugins/slack", gen.InstallPlugin{Command: []string{slackPlugin(t)}}, nil); code != 200 {
-		t.Fatalf("install: %d", code)
-	}
-	slug := fmt.Sprintf("sl%d", time.Now().UnixNano())
-	var p gen.Project
-	h.do("POST", "/projects", gen.NewProject{Slug: slug, Name: "Slack"}, &p)
-	t.Cleanup(func() {
-		_, _ = h.pool.Exec(t.Context(), "UPDATE project_plugins SET enabled = false WHERE project_id = $1", p.Id.String())
-	})
-	// Secret settings go in with the rest and never come back.
-	cfg := map[string]any{"channels": "C1=eng", "api_url": api.URL + "/api", "bot_token": "xoxb-e2e", "signing_secret": slackSecret}
-	var pp gen.ProjectPlugin
-	if code := h.do("PUT", "/projects/"+p.Id.String()+"/plugins/slack", gen.ProjectPluginSettings{Enabled: true, Config: &cfg}, &pp); code != 200 {
-		t.Fatalf("enable: %d %+v", code, pp)
-	}
-	if pp.Config["bot_token"] != nil || pp.Config["signing_secret"] != nil {
-		t.Fatalf("a secret came back: %+v", pp.Config)
-	}
-	h.until("the bridge runs", func() bool {
-		var vs []gen.ProjectPlugin
-		h.do("GET", "/projects/"+p.Id.String()+"/plugins", nil, &vs)
-		return len(vs) == 1 && vs[0].Running
-	})
+	slug, p := h.slackProject(api)
 	now := time.Now().Unix()
 	ask := slackEvent("T1", "U1", "1700000000.000100", "", "<@UBOT> reviewer is the plan for search safe?")
 	if code, out := h.slack(slug, "application/json", ask, now, "forged"); code != 400 {
@@ -241,5 +224,73 @@ func TestSlackBridgeEndToEnd(t *testing.T) {
 	if n := h.count(`SELECT count(*) FROM plugin_calls c JOIN project_plugins pp ON pp.id = c.project_plugin_id
 		WHERE pp.project_id = $1 AND (c.payload::text LIKE '%xoxb-e2e%' OR c.result::text LIKE '%xoxb-e2e%')`, p.Id.String()); n != 0 {
 		t.Error("the bot token is in the plugin's calls")
+	}
+}
+
+// slackProject installs the slack plugin, makes a project and switches the bridge on in it, with
+// channel C1 as #eng and api as Slack's API.
+func (h *harness) slackProject(api *fakeSlackAPI) (string, gen.Project) {
+	t := h.t
+	t.Helper()
+	if code := h.do("PUT", "/plugins/slack", gen.InstallPlugin{Command: []string{slackPlugin(t)}}, nil); code != 200 {
+		t.Fatalf("install: %d", code)
+	}
+	slug := fmt.Sprintf("sl%d", time.Now().UnixNano())
+	var p gen.Project
+	h.do("POST", "/projects", gen.NewProject{Slug: slug, Name: "Slack"}, &p)
+	t.Cleanup(func() {
+		_, _ = h.pool.Exec(t.Context(), "UPDATE project_plugins SET enabled = false WHERE project_id = $1", p.Id.String())
+	})
+	// Secret settings go in with the rest and never come back.
+	cfg := map[string]any{"channels": "C1=eng", "api_url": api.URL + "/api", "bot_token": "xoxb-e2e", "signing_secret": slackSecret}
+	var pp gen.ProjectPlugin
+	if code := h.do("PUT", "/projects/"+p.Id.String()+"/plugins/slack", gen.ProjectPluginSettings{Enabled: true, Config: &cfg}, &pp); code != 200 {
+		t.Fatalf("enable: %d %+v", code, pp)
+	}
+	if pp.Config["bot_token"] != nil || pp.Config["signing_secret"] != nil {
+		t.Fatalf("a secret came back: %+v", pp.Config)
+	}
+	h.until("the bridge runs", func() bool {
+		var vs []gen.ProjectPlugin
+		h.do("GET", "/projects/"+p.Id.String()+"/plugins", nil, &vs)
+		return len(vs) == 1 && vs[0].Running
+	})
+	return slug, p
+}
+
+// A slow chat API holds up no other plugin: the bridges follow the outbox on a cursor of their own.
+func TestASlowBridgeHoldsUpNoOtherPlugin(t *testing.T) {
+	h := newHarness(t)
+	api := newFakeSlackAPI(t)
+	slug, p := h.slackProject(api)
+	echo := h.echoProject(map[string]any{"greeting": "hi"})
+	// A message from Slack connects #eng; then Slack becomes slow.
+	if c, out := h.slack(slug, "application/json", slackEvent("T1", "U1", "1700000001.000001", "", "hello"), time.Now().Unix(), slackSecret); c != 200 {
+		t.Fatalf("%d %s", c, out)
+	}
+	eng := ""
+	_ = h.pool.QueryRow(t.Context(), `SELECT id::text FROM conversations WHERE project_id = $1 AND kind = 'channel' AND name = 'eng'`, p.Id.String()).Scan(&eng)
+	if eng == "" {
+		t.Fatal("no #eng")
+	}
+	api.mu.Lock()
+	api.delay = 3 * time.Second
+	api.mu.Unlock()
+	for i := range 3 {
+		if code := h.do("POST", "/conversations/"+eng+"/messages", gen.NewMessage{Body: new(fmt.Sprint("slow ", i))}, nil); code != 201 {
+			t.Fatalf("post: %d", code)
+		}
+	}
+	time.Sleep(200 * time.Millisecond) // the bridge's hook is under way, waiting on Slack
+	start := time.Now()
+	var task gen.Task
+	h.do("POST", "/projects/"+echo.id+"/tasks", gen.NewTask{Kind: "bug", Title: "Not held up"}, &task)
+	h.until("the echo plugin's gate check", func() bool {
+		var s string
+		_ = h.pool.QueryRow(t.Context(), `SELECT checks::text FROM gates WHERE task_id = $1`, task.Id.String()).Scan(&s)
+		return strings.Contains(s, "echo-ci")
+	})
+	if d := time.Since(start); d > 1500*time.Millisecond {
+		t.Errorf("another project's plugin waited %s behind a slow bridge", d)
 	}
 }

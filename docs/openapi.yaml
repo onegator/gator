@@ -2115,6 +2115,15 @@ components:
         X-Has-More: { schema: { type: boolean } }
       content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Conversation" } } } }
   schemas:
+    MessageOrigin:
+      type: object
+      additionalProperties: true
+      description: "Where a message came from: {turn, job} for an agent's, {provider, external_ref} for one a bridge brought in (provider is the plugin: slack, github, or a2a for an A2A client); {} otherwise. A bridge never hears back a message whose provider is its own."
+      properties:
+        turn: { type: string, format: uuid }
+        job: { type: string, format: uuid }
+        provider: { type: string }
+        external_ref: { type: string, description: "where it is outside, in the provider's terms: T0123/C0456/1700000000.000100, owner/name#12/comment/77" }
     NewRemoteAgent:
       type: object
       required: [handle, cardUrl]
@@ -2371,6 +2380,8 @@ components:
         maxParallel: { type: integer }
         projects: { type: array, items: { type: string } }
         canLogin: { type: boolean, description: "this runner can drive an interactive backend login; when false, asking it to is refused" }
+        readOnly: { type: array, items: { type: string }, description: "its backends that keep a chat job read-only; absent from a runner that says nothing (every backend)" }
+        noTools: { type: array, items: { type: string }, description: "its backends that run a summary with no tools; absent from a runner that says nothing (every backend)" }
     RunnerInfo:
       type: object
       required: [id, name, location, placement, status, connected, capabilities, authState, protocolVersion, binaryVersion]
@@ -3556,7 +3567,7 @@ components:
         replyCount: { type: integer }
         threadId: { type: string, format: uuid, description: "the thread under this message, once opened" }
         status: { type: string, enum: [streaming, final, failed], description: "streaming while an agent is still writing it (message.edited as it grows), failed when its turn could not answer" }
-        origin: { type: object, additionalProperties: true, description: "where it came from: {turn} for an agent's message, outside Gator (phase 5); {} otherwise" }
+        origin: { $ref: "#/components/schemas/MessageOrigin" }
         clientId: { type: string }
         editedAt: { type: string, format: date-time }
         deletedAt: { type: string, format: date-time }
@@ -3585,7 +3596,7 @@ components:
         status: { type: string, enum: [active, paused], description: "a paused agent refuses turns and says so" }
         source: { type: object, additionalProperties: true, description: "{kind: builtin | custom | marketplace, …}" }
         builtin: { type: boolean, description: "one of every project's defaults: paused, never deleted" }
-        kind: { type: string, description: "local (runs on a runner) or remote (an agent outside Gator, asked over A2A)" }
+        kind: { type: string, enum: [local, remote], x-enum-varnames: [AgentKindLocal, AgentKindRemote], description: "local runs on a runner; remote is an agent outside Gator, asked over A2A" }
         remote: { $ref: "#/components/schemas/RemoteAgentInfo" }
         a2aExposed: { type: boolean, description: "shown to the project's A2A clients" }
         createdBy: { type: string, format: uuid }
@@ -3656,7 +3667,7 @@ components:
         conversationId: { type: string, format: uuid, description: where the answer goes }
         triggerMessageId: { type: string, format: uuid, description: the message that asked }
         replyMessageId: { type: string, format: uuid, description: the agent's answer }
-        requestedByKind: { type: string, enum: [user, agent, automation, process] }
+        requestedByKind: { type: string, enum: [user, agent, automation, process, external], description: "external: somebody outside the workspace (a bridge's outside identity, an A2A client), answered in chat" }
         requestedBy: { type: string, format: uuid, description: the person or the agent who asked }
         onBehalfOf: { type: string, format: uuid, description: the person at the start of the chain }
         chainId: { type: string, format: uuid, description: shared by agent-to-agent delegations }

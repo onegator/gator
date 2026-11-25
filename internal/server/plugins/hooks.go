@@ -17,11 +17,6 @@ import (
 
 // onEvent forwards domain events to the plugins of the task's project.
 func (h *Host) onEvent(ctx context.Context, e events.Event) {
-	for _, eh := range h.cfg.EventHooks {
-		if slices.Contains(eh.Events(), e.Type) {
-			h.deliver(ctx, eh, e)
-		}
-	}
 	q := db.New(h.pool)
 	switch e.Type {
 	case "task.created", "task.phase_changed", "gate.approved":

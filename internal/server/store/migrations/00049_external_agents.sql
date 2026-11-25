@@ -70,6 +70,8 @@ DELETE FROM api_tokens WHERE kind = 'a2a';
 ALTER TABLE api_tokens DROP CONSTRAINT api_tokens_kind_check;
 ALTER TABLE api_tokens ADD CONSTRAINT api_tokens_kind_check CHECK (kind IN ('user', 'runner', 'plugin', 'job'));
 -- Remote agents go with their kind; their turns go with them (agent_turns holds them RESTRICT).
+-- Their messages stay, as every agent's do once it is gone: author_kind 'agent' with an author_id
+-- that names no agent any more (messages.author_id has no foreign key), shown as "an agent".
 DELETE FROM agent_turns WHERE agent_id IN (SELECT id FROM agents WHERE kind = 'remote');
 DELETE FROM agents WHERE kind = 'remote';
 ALTER TABLE agents DROP CONSTRAINT agents_remote_check;

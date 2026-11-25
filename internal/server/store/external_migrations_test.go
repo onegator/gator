@@ -88,6 +88,13 @@ func TestExternalMigrationsRoundTrip(t *testing.T) {
 	if tables() != 7 || columns() != 4 {
 		t.Fatalf("up made %d tables and %d agent columns", tables(), columns())
 	}
+	indexes := func() int {
+		return count(`SELECT count(*) FROM pg_indexes WHERE indexname IN ('agent_turns_external_idx', 'agent_turns_parent_idx',
+			'external_conversation_refs_conversation_idx')`)
+	}
+	if indexes() != 3 {
+		t.Fatalf("up made %d of the outside budget's and bridges' indexes", indexes())
+	}
 	seed()
 	// What the constraints keep: a remote agent chats, plays no role and is no one's to expose.
 	for _, bad := range []string{
@@ -104,7 +111,7 @@ func TestExternalMigrationsRoundTrip(t *testing.T) {
 	if err := goose.DownToContext(ctx, conn, "migrations", before); err != nil {
 		t.Fatal(err)
 	}
-	if n, c := tables(), columns(); n != 0 || c != 0 {
+	if n, c := tables(), columns(); n != 0 || c != 0 || indexes() != 0 {
 		t.Fatalf("down left %d tables and %d agent columns", n, c)
 	}
 	// What was there before is still there; a turn asked from outside stays, as the process's.

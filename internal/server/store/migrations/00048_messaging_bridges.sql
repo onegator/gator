@@ -34,6 +34,8 @@ CREATE TABLE external_conversation_refs (
     PRIMARY KEY (project_id, provider, external_ref),
     UNIQUE (provider, conversation_id)
 );
+-- Which bridges a conversation (or the one its root lives in) has, whatever the provider.
+CREATE INDEX external_conversation_refs_conversation_idx ON external_conversation_refs (conversation_id);
 
 -- A message's counterpart outside: the Slack message (team/channel/ts) a message came from or was
 -- mirrored to. A redelivered event finds its message here and writes nothing new.
@@ -64,8 +66,14 @@ CREATE INDEX external_link_codes_user_idx ON external_link_codes (user_id);
 ALTER TABLE agent_turns DROP CONSTRAINT agent_turns_requested_by_kind_check;
 ALTER TABLE agent_turns ADD CONSTRAINT agent_turns_requested_by_kind_check
     CHECK (requested_by_kind IN ('user', 'agent', 'automation', 'process', 'external'));
+-- What somebody outside asked for, and what agents delegated from it: an outsider's daily budget
+-- reads both.
+CREATE INDEX agent_turns_external_idx ON agent_turns (requested_by, created_at) WHERE requested_by_kind = 'external';
+CREATE INDEX agent_turns_parent_idx ON agent_turns (parent_turn_id) WHERE parent_turn_id IS NOT NULL;
 
 -- +goose Down
+DROP INDEX IF EXISTS agent_turns_parent_idx;
+DROP INDEX IF EXISTS agent_turns_external_idx;
 -- Turns asked for from outside stay, as asked by the process: their record outlives the bridge.
 UPDATE agent_turns SET requested_by_kind = 'process' WHERE requested_by_kind = 'external';
 ALTER TABLE agent_turns DROP CONSTRAINT agent_turns_requested_by_kind_check;

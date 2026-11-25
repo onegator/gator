@@ -178,7 +178,8 @@ func toAgent(a db.Agent) gen.Agent {
 	_ = json.Unmarshal(a.Tools, &out.Tools)
 	_ = json.Unmarshal(a.Skills, &out.Skills)
 	_ = json.Unmarshal(a.Source, &out.Source)
-	out.Kind, out.A2aExposed = &a.Kind, &a.A2aExposed
+	kind := gen.AgentKind(a.Kind)
+	out.Kind, out.A2aExposed = &kind, &a.A2aExposed
 	if a.Kind == agents.KindRemote {
 		info := a2a.InfoOf(a)
 		ri := gen.RemoteAgentInfo{CardUrl: info.CardURL, Url: info.URL, Name: info.Name, Description: optString(info.Description),

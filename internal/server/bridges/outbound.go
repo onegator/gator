@@ -68,6 +68,14 @@ func (s *Service) Project(ctx context.Context, e events.Event) (pgtype.UUID, boo
 	if !ok {
 		return pgtype.UUID{}, false, nil
 	}
+	// A conversation never changes projects: every message event of it after the first is answered
+	// without the database, which every message in the server passes through.
+	s.mu.Lock()
+	p, known := s.projects[id.Bytes]
+	s.mu.Unlock()
+	if known {
+		return p, p.Valid, nil
+	}
 	conv, err := s.q.GetConversation(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return pgtype.UUID{}, false, nil
@@ -75,6 +83,12 @@ func (s *Service) Project(ctx context.Context, e events.Event) (pgtype.UUID, boo
 	if err != nil {
 		return pgtype.UUID{}, false, err
 	}
+	s.mu.Lock()
+	if len(s.projects) >= maxKnownConversations {
+		clear(s.projects)
+	}
+	s.projects[id.Bytes] = conv.ProjectID
+	s.mu.Unlock()
 	return conv.ProjectID, conv.ProjectID.Valid, nil
 }
 

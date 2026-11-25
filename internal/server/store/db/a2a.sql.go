@@ -249,7 +249,9 @@ func (q *Queries) EndOpenA2ACall(ctx context.Context, arg EndOpenA2ACallParams) 
 
 const externalCostSince = `-- name: ExternalCostSince :one
 WITH RECURSIVE asked AS (
+    -- Turns asked for since a day before: a job started yesterday may still spend today.
     SELECT t.id FROM agent_turns t WHERE t.requested_by_kind = 'external' AND t.requested_by = $2
+      AND t.created_at >= $1::timestamptz - interval '1 day'
     UNION
     SELECT c.id FROM agent_turns c JOIN asked a ON c.parent_turn_id = a.id
 )

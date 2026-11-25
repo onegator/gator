@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -247,6 +248,9 @@ func (h *Host) Run(ctx context.Context) {
 	if err := db.New(h.pool).InitEventCursor(ctx, cursorName); err != nil && ctx.Err() == nil {
 		h.log.Warn("plugin event cursor", "err", err)
 	}
+	for i, eh := range h.cfg.EventHooks {
+		go h.runEventHook(ctx, fmt.Sprintf("%s_%d", eventHookCursor, i), eh)
+	}
 	syncT := time.NewTicker(h.cfg.SyncEvery)
 	defer syncT.Stop()
 	poll := time.NewTicker(h.cfg.PollEvery)
@@ -279,19 +283,10 @@ const cursorName = "plugins"
 // hookEvents are the domain events plugins hear about.
 var hookEvents = []string{"task.created", "task.phase_changed", "task.closed", "gate.approved", "job.finished"}
 
-// eventTypes are hookEvents and those of the event hooks.
-func (h *Host) eventTypes() []string {
-	out := append([]string{}, hookEvents...)
-	for _, eh := range h.cfg.EventHooks {
-		out = append(out, eh.Events()...)
-	}
-	return out
-}
-
 // drain delivers events after the cursor, at least once: a crash between delivery and the
 // cursor update repeats a batch, which hooks must tolerate.
 func (h *Host) drain(ctx context.Context) {
-	events.DrainCursor(ctx, h.pool, cursorName, h.eventTypes(), func(r db.EventsAfterRow) {
+	events.DrainCursor(ctx, h.pool, cursorName, hookEvents, func(r db.EventsAfterRow) {
 		if h.active() {
 			h.onEvent(ctx, events.Event{ID: r.ID, Type: r.Type, Aggregate: r.Aggregate, AggregateID: uuidString(r.AggregateID), Payload: r.Payload})
 		}
@@ -866,4 +861,46 @@ func (h *Host) PruneDeliveries(ctx context.Context, before time.Time) {
 	} else if n > 0 {
 		h.log.Info("pruned webhook deliveries", "count", n)
 	}
+}
+
+// eventHookCursor names the cursors of the event hooks: each follows the outbox on its own, so that
+// a slow outside system (a chat's API) never holds up the hooks of every other plugin.
+const eventHookCursor = "plugins_event_hook"
+
+// runEventHook delivers an event hook's events from its own cursor until ctx ends.
+func (h *Host) runEventHook(ctx context.Context, cursor string, eh EventHook) {
+	if err := db.New(h.pool).InitEventCursor(ctx, cursor); err != nil && ctx.Err() == nil {
+		h.log.Warn("event hook cursor", "cursor", cursor, "err", err)
+	}
+	wake, unsub := h.hub.Subscribe("*")
+	defer unsub()
+	poll := time.NewTicker(h.cfg.PollEvery)
+	defer poll.Stop()
+	for {
+		// Nothing is read of an event while no running plugin has the hook's capability: the
+		// cursor moves past it, as for every other hook.
+		events.DrainCursor(ctx, h.pool, cursor, eh.Events(), func(r db.EventsAfterRow) {
+			if h.hasCapability(eh.Capability()) {
+				h.deliver(ctx, eh, events.Event{ID: r.ID, Type: r.Type, Aggregate: r.Aggregate, AggregateID: uuidString(r.AggregateID), Payload: r.Payload})
+			}
+		})
+		select {
+		case <-ctx.Done():
+			return
+		case <-wake:
+		case <-poll.C:
+		}
+	}
+}
+
+// hasCapability says whether any running plugin declares c.
+func (h *Host) hasCapability(c string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, i := range h.inst {
+		if slices.Contains(i.b.manifest.Capabilities, c) {
+			return true
+		}
+	}
+	return false
 }

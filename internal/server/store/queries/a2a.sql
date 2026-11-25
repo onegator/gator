@@ -37,7 +37,9 @@ UPDATE a2a_clients SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 RE
 -- and every turn agents delegated from those, finished jobs as they cost, jobs queued and running
 -- at their cap.
 WITH RECURSIVE asked AS (
+    -- Turns asked for since a day before: a job started yesterday may still spend today.
     SELECT t.id FROM agent_turns t WHERE t.requested_by_kind = 'external' AND t.requested_by = sqlc.arg(identity_id)
+      AND t.created_at >= sqlc.arg(since)::timestamptz - interval '1 day'
     UNION
     SELECT c.id FROM agent_turns c JOIN asked a ON c.parent_turn_id = a.id
 )

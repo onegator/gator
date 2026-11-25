@@ -95,8 +95,9 @@ type Service struct {
 	// connected channel or comment on a public repository can, and each ask is a turn.
 	asks *limits.Limiter
 
-	mu   sync.Mutex
-	sent map[editKey]time.Time // when an edit of a message last went out to a bridge
+	mu       sync.Mutex
+	sent     map[editKey]time.Time    // when an edit of a message last went out to a bridge
+	projects map[[16]byte]pgtype.UUID // the project of each conversation seen
 }
 
 // New builds the service.
@@ -106,7 +107,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Service {
 	}
 	return &Service{pool: pool, q: db.New(pool), deps: deps, links: limits.NewLimiter(5.0/60, 5),
 		asks: limits.NewLimiter(float64(AsksPerMinute)/60, AsksPerMinute),
-		sent: map[editKey]time.Time{}}
+		sent: map[editKey]time.Time{}, projects: map[[16]byte]pgtype.UUID{}}
 }
 
 func invalid(format string, a ...any) error {
@@ -120,6 +121,9 @@ func notFound(format string, a ...any) error {
 func forbidden(format string, a ...any) error {
 	return plugin.Errorf(plugin.CodeForbidden, format, a...)
 }
+
+// maxKnownConversations bounds what is remembered of conversations' projects.
+const maxKnownConversations = 50000
 
 // AsksPerMinute is how many messages asking agents one outside identity may post a minute.
 // ProviderA2A's clients have rates of their own (a2a_clients.per_minute).
