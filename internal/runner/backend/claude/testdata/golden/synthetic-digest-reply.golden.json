@@ -1,0 +1,28 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.270","mcp_servers":[],"model":"claude-opus-5","session_id":"00000000-0000-4000-8000-000000000001"}},
+    {"type":"result","payload":{"cost_usd":0.001,"is_error":false,"num_turns":1,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-opus-5",
+    "result": {
+      "cost_estimated": true,
+      "cost_usd": 0.001,
+      "is_error": false,
+      "subtype": "success",
+      "terminal_reason": "completed",
+      "text_bytes": 117,
+      "tokens": {
+        "Input": 5,
+        "Output": 7,
+        "CacheRead": 0,
+        "CacheWrite": 0
+      }
+    },
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "tool_calls": 0,
+    "unknown": 0,
+    "version": "2.1.270"
+  }
+}

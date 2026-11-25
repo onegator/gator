@@ -30,6 +30,7 @@ type world struct {
 	chat    *conversations.Module
 	mgr     *runners.Manager
 	mod     *Module
+	roles   auth.Authorizer
 	admin   auth.Principal
 	viewer  auth.Principal
 	project pgtype.UUID
@@ -48,7 +49,7 @@ func newWorld(t *testing.T) *world {
 	roles := auth.Authorizer{Pool: pool}
 	chat := conversations.New(pool, conversations.Deps{Roles: roles, Decisions: svc, Tasks: svc})
 	mgr := runners.New(pool, svc, events.NewHub(), slog.Default(), runners.Config{})
-	w := &world{t: t, ctx: ctx, pool: pool, q: db.New(pool), svc: svc, chat: chat, mgr: mgr,
+	w := &world{t: t, ctx: ctx, pool: pool, q: db.New(pool), svc: svc, chat: chat, mgr: mgr, roles: roles,
 		mod: New(pool, Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: roles})}
 	w.project = newProject(t, pool)
 	w.admin = w.person("admin")

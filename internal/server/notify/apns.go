@@ -70,6 +70,12 @@ func (a *APNs) Send(ctx context.Context, device db.Device, m Message) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	body := payload.NewPayload().AlertTitle(m.Title).AlertBody(m.Body).Sound("default").Custom("link", m.Link)
+	if m.Category != "" {
+		body = body.Category(m.Category)
+	}
+	for k, v := range m.Data {
+		body = body.Custom(k, v)
+	}
 	res, err := a.client.PushWithContext(ctx, &apns2.Notification{
 		DeviceToken: device.Token,
 		Topic:       a.topicFor(device.Platform),

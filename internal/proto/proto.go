@@ -19,10 +19,16 @@ import (
 // its Tier (chat is read-only), its Agent and, for a reply, the conversation it answers in. A v2
 // runner knows none of it and would run a reply as a phase (committing, pushing, objecting to
 // itself), so it is only ever handed phase jobs, which are all of the work tier.
-const Version = 3
+//
+// v4 added live sessions: a runner says what each of its backends can do (BackendCapabilities),
+// sends a checkpoint of the worktree after every turn, asks a person before a tool the project
+// wants asked about (runtime_request, answered by runtime_decision), and is handed the
+// attachments of the conversation and the approval policy with a job. A v3 runner knows none of
+// it and runs a job as it always did; the server no longer speaks v2.
+const Version = 4
 
 // MinSupportedVersion is the oldest runner protocol the server still speaks.
-const MinSupportedVersion = 2
+const MinSupportedVersion = 3
 
 // Timing both sides agree on.
 const (
@@ -48,6 +54,13 @@ const (
 	TypeFinish       MessageType = "finish"
 	TypeLoginPrompt  MessageType = "login_prompt"
 	TypeTurnEnding   MessageType = "turn_ending" // v2
+	TypeCheckpoint   MessageType = "checkpoint"  // v4, kept until acked like events
+	// TypeRuntimeRequest asks a person, mid-turn, before a tool (v4). Kept until acked, and sent
+	// again after a reconnect: the server answers a request it already decided with its decision.
+	TypeRuntimeRequest MessageType = "runtime_request"
+	// TypeRuntimeCancel says the runner no longer waits on a request (v4): the agent took it back,
+	// or its turn ended. Best effort: a request nobody cancels expires.
+	TypeRuntimeCancel MessageType = "runtime_cancel"
 )
 
 // Server → runner.
@@ -60,6 +73,8 @@ const (
 	TypeLoginBackend MessageType = "login_backend"
 	TypeError        MessageType = "error"
 	TypeContinue     MessageType = "continue" // v2, the answer to turn_ending
+	// TypeRuntimeDecision answers a runtime_request (v4), once it is decided or expired.
+	TypeRuntimeDecision MessageType = "runtime_decision"
 )
 
 // Envelope wraps every message. Seq is monotonic per sender per connection.
@@ -160,6 +175,40 @@ type Capabilities struct {
 	// every backend keeps both, as Claude Code, the only one there was, does.
 	ReadOnly []string `json:"read_only,omitempty"`
 	NoTools  []string `json:"no_tools,omitempty"`
+	// PerBackend is what each backend can do in a live session (v4), by backend name. A backend
+	// missing from it (and every backend of a v3 runner) can do none of it: the zero value.
+	PerBackend map[string]BackendCapabilities `json:"per_backend,omitempty"`
+}
+
+// Enforcement says who holds an agent to its tier: the agent's CLI itself (its own flags and
+// permission modes), or the runner answering the agent's permission requests.
+const (
+	EnforcementNative = "native"
+	EnforcementRunner = "runner"
+)
+
+// BackendCapabilities is what one backend can do while a job runs (v4). Clients hide an action a
+// job's backend cannot carry out rather than offer a button that does nothing.
+type BackendCapabilities struct {
+	// ActiveSteering: a person's message reaches the running turn without restarting it.
+	ActiveSteering bool `json:"active_steering"`
+	// SteeringInterruptsTool: such a message interrupts a tool that is running.
+	SteeringInterruptsTool bool `json:"steering_interrupts_tool"`
+	// NativeInterrupt: stop ends the turn without killing the process.
+	NativeInterrupt bool `json:"native_interrupt"`
+	// ToolApprovals: the backend asks before a tool and waits for the answer.
+	ToolApprovals bool `json:"tool_approvals"`
+	// ApprovalsLiveOnly: an approval waiting when the process dies is lost with it.
+	ApprovalsLiveOnly bool `json:"approvals_live_only"`
+	// StreamsText and StreamsReasoning: text (and reasoning) arrives in pieces, not whole messages.
+	StreamsText      bool `json:"streams_text"`
+	StreamsReasoning bool `json:"streams_reasoning"`
+	// Attachments: files (paths or images) can be given to the agent as input.
+	Attachments bool `json:"attachments"`
+	// Checkpoints: the runner checkpoints the worktree of this backend's jobs after every turn.
+	Checkpoints bool `json:"checkpoints"`
+	// Enforcement is EnforcementNative or EnforcementRunner.
+	Enforcement string `json:"enforcement,omitempty"`
 }
 
 // Registered acknowledges a registration.
@@ -177,6 +226,9 @@ type Heartbeat struct {
 	// logged out and has a different fix.
 	AuthState  map[string]string `json:"auth_state"`
 	ActiveJobs []string          `json:"active_jobs"`
+	// Capabilities are the backends' capabilities as they are now (v4), when they changed since
+	// the registration: a backend switched to its fallback mode can do less than it said.
+	Capabilities map[string]BackendCapabilities `json:"capabilities,omitempty"`
 }
 
 // LeaseRequest asks for up to Slots jobs.
@@ -275,6 +327,90 @@ type Job struct {
 	// at <server>/mcp/proxy/<name> with the job's own token, and only there: no credential of a
 	// remote server is in a job, ever. Additive in v3.
 	MCP []string `json:"mcp,omitempty"`
+	// NoCheckpoints says the project turned checkpoints off (v4): on a large repository adding
+	// every file after every turn can cost more than the diff is worth.
+	NoCheckpoints bool `json:"no_checkpoints,omitempty"`
+	// Approvals are the tools of a work job that wait for a person (v4), for a backend that can
+	// ask (ToolApprovals). Nil: nothing is asked, as before.
+	Approvals *Approvals `json:"approvals,omitempty"`
+	// Attachments are the files people sent in the conversation a reply answers in (v4), at most
+	// MaxAttachments. The runner fetches each from AttachmentPath with the job's own token, into a
+	// directory outside the worktree.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment limits: files a job is handed, and the bytes of one.
+const (
+	MaxAttachments     = 10
+	MaxAttachmentBytes = 25 << 20
+)
+
+// AttachmentPath is where a job fetches one of its attachments, under the server's API.
+const AttachmentPath = "/api/v1/agent/attachments/"
+
+// Attachment is one file a job is handed.
+type Attachment struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+}
+
+// Approvals is the project's approvals policy as a runner holds a job to it: rules to ask a person
+// about, rules never allowed, and how long a request waits before it is refused.
+type Approvals struct {
+	Ask            []string `json:"ask,omitempty"`
+	Deny           []string `json:"deny,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+}
+
+// Kinds of a runtime request.
+const (
+	RequestToolApproval = "tool_approval"
+	RequestQuestion     = "question"
+)
+
+// MaxRequestInput bounds the input of a tool a runtime request carries.
+const MaxRequestInput = 64 << 10
+
+// RuntimeRequest is an agent waiting for a person mid-turn (v4): a tool the approvals policy asks
+// about, or a question. ID is the runner's, a UUID: a request sent again is the same request.
+type RuntimeRequest struct {
+	ID    string          `json:"id"`
+	JobID string          `json:"job_id"`
+	Kind  string          `json:"kind"`
+	Tool  string          `json:"tool,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+	// Rule is the rule of the policy that asks; empty for a question.
+	Rule      string `json:"rule,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// TimeoutSeconds is how long the runner waits for the answer.
+	TimeoutSeconds int `json:"timeout_seconds"`
+}
+
+// Runtime decisions.
+const (
+	DecisionAllow           = "allow"
+	DecisionAllowForSession = "allow_for_session"
+	DecisionDeny            = "deny"
+	DecisionStop            = "stop"
+	DecisionExpired         = "expired"
+	DecisionCancelled       = "cancelled"
+)
+
+// RuntimeDecision answers a RuntimeRequest. Feedback is why it was denied (the agent reads it) or,
+// for a question, the person's answer.
+type RuntimeDecision struct {
+	ID       string `json:"id"`
+	JobID    string `json:"job_id"`
+	Decision string `json:"decision"`
+	Feedback string `json:"feedback,omitempty"`
+	By       string `json:"by,omitempty"`
+}
+
+// Allows says whether the decision lets the tool run.
+func (d RuntimeDecision) Allows() bool {
+	return d.Decision == DecisionAllow || d.Decision == DecisionAllowForSession
 }
 
 // Skill is one skill of a job's agent: its SKILL.md and whatever else the folder holds
@@ -400,6 +536,79 @@ type Finish struct {
 	// Objections counts the times this turn was sent back to work before it was allowed to
 	// end. A receipt that hides them would make a two-hour job look like a one-hour one.
 	Objections int `json:"objections,omitempty"`
+	// Checkpoints are the turns' checkpoints the runner sent (v4), counted; their diffs went
+	// before, each in its own checkpoint message.
+	Checkpoints []CheckpointSummary `json:"checkpoints,omitempty"`
+}
+
+// Checkpoint bounds: each diff a checkpoint carries is cut at MaxDiffBytes (both fit one runner
+// message, base64 and all), and at most MaxCheckpointFiles files are listed.
+const (
+	MaxDiffBytes       = 1 << 20
+	MaxCheckpointFiles = 1000
+	// MaxCheckpointPathBytes bounds the paths one list of files carries: two lists, two diffs and
+	// their base64 stay under the connection's 4 MiB.
+	MaxCheckpointPathBytes = 192 << 10
+)
+
+// File statuses in a checkpoint.
+const (
+	FileAdded    = "added"
+	FileModified = "modified"
+	FileDeleted  = "deleted"
+)
+
+// FileChange is one file a turn changed, by how much. A binary file is listed as changed, with no
+// line counts and nothing of it in the diff.
+type FileChange struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Removed int    `json:"removed"`
+	Status  string `json:"status"`
+	Binary  bool   `json:"binary,omitempty"`
+}
+
+// Checkpoint is the worktree of a job after one of its turns (v4): a commit the runner made on a
+// hidden ref, without touching the agent's branch or index, and what changed since the turn
+// before — Seq 1 is the first turn, against the worktree as the job found it. Whole is the job
+// so far (the worktree as the job found it, to this turn), for a view of all of it.
+type Checkpoint struct {
+	JobID      string       `json:"job_id"`
+	Repo       string       `json:"repo"`
+	Seq        int          `json:"seq"`
+	BaseCommit string       `json:"base_commit"`
+	HeadCommit string       `json:"head_commit"`
+	Files      []FileChange `json:"files"`
+	// FilesTruncated says more files changed than Files lists (MaxCheckpointFiles, or the bytes of
+	// their paths): the message stays well under the connection's limit.
+	FilesTruncated      bool         `json:"files_truncated,omitempty"`
+	WholeFilesTruncated bool         `json:"whole_files_truncated,omitempty"`
+	Diff                []byte       `json:"diff,omitempty"`
+	Truncated           bool         `json:"truncated,omitempty"`
+	WholeFiles          []FileChange `json:"whole_files,omitempty"`
+	Whole               []byte       `json:"whole,omitempty"`
+	// WholeTruncated says Whole was cut at MaxDiffBytes.
+	WholeTruncated bool `json:"whole_truncated,omitempty"`
+	// TookMS is how long the checkpoint took: on a large repository it is the price of the feature.
+	TookMS int64 `json:"took_ms"`
+}
+
+// CheckpointSummary is a checkpoint as the receipt counts it.
+type CheckpointSummary struct {
+	Seq     int `json:"seq"`
+	Files   int `json:"files"`
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
+}
+
+// Summary counts what a checkpoint's turn changed.
+func (c Checkpoint) Summary() CheckpointSummary {
+	out := CheckpointSummary{Seq: c.Seq, Files: len(c.Files)}
+	for _, f := range c.Files {
+		out.Added += f.Added
+		out.Removed += f.Removed
+	}
+	return out
 }
 
 // TurnEnding is the runner asking, before it sends a Finish, whether the turn may end. The

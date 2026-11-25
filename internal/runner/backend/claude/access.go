@@ -38,7 +38,13 @@ func permissionArgs(a backend.Access, mcp []string, skills bool) []string {
 		return []string{"--permission-mode", "dontAsk", "--tools", "", "--disallowedTools", strings.Join(writingTools, ",")}
 	}
 	if !a.ReadOnly {
-		return []string{"--permission-mode", "bypassPermissions"}
+		args := []string{"--permission-mode", "bypassPermissions"}
+		if refused := a.Refused(); len(refused) > 0 {
+			// Nobody is asked in this mode, so what the policy asks about is refused with what it
+			// denies; deny rules hold in every permission mode, bypass included.
+			args = append(args, "--disallowedTools", strings.Join(cliRules(refused), ","))
+		}
+		return args
 	}
 	tools := append([]string{}, readOnlyTools...)
 	allowed := append([]string{}, readOnlyTools...)
@@ -58,4 +64,22 @@ func permissionArgs(a backend.Access, mcp []string, skills bool) []string {
 		"--tools", strings.Join(tools, ","),
 		"--allowedTools", strings.Join(allowed, ","),
 		"--disallowedTools", strings.Join(writingTools, ",")}
+}
+
+// cliRules are approvals rules as Claude Code writes them: mcp:<server>/* is mcp__<server>, and
+// mcp:<server>/<tool> is mcp__<server>__<tool>; the others are written alike.
+func cliRules(rules []string) []string {
+	out := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if rest, ok := strings.CutPrefix(r, "mcp:"); ok {
+			server, tool, _ := strings.Cut(rest, "/")
+			if tool == "*" || tool == "" {
+				r = "mcp__" + server
+			} else {
+				r = "mcp__" + server + "__" + tool
+			}
+		}
+		out = append(out, r)
+	}
+	return out
 }

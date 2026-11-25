@@ -330,6 +330,9 @@ func writeConversationList(w http.ResponseWriter, rows []conversations.Listed, m
 
 func toDraft(in gen.NewMessage) conversations.Draft {
 	d := conversations.Draft{Body: deref(in.Body), ClientID: deref(in.ClientId)}
+	if in.Intent != nil {
+		d.Intent = string(*in.Intent)
+	}
 	if in.Mentions != nil {
 		for _, m := range *in.Mentions {
 			d.Mentions = append(d.Mentions, conversations.Member{Kind: string(m.Kind), ID: fromUUID(m.Id)})
@@ -344,6 +347,38 @@ func toDraft(in gen.NewMessage) conversations.Draft {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// ListConversationQueue answers what waits for the agent's turn to end.
+func (s *Server) ListConversationQueue(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	views, err := s.Conversations.Queue.List(r.Context(), p, fromUUID(conversationId))
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	out := make([]gen.Message, 0, len(views))
+	for _, v := range views {
+		out = append(out, toMessage(v))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// SendQueuedMessageNow sends a queued message as a steer.
+func (s *Server) SendQueuedMessageNow(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	msg, err := s.Conversations.Queue.SendNow(r.Context(), p, fromUUID(messageId))
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	s.respondMessage(w, r, p, msg.ID, http.StatusOK)
+}
 
 // GetTaskConversation answers the task's thread, opening it for a task that has none yet.
 func (s *Server) GetTaskConversation(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {

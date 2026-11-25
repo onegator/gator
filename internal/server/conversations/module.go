@@ -46,6 +46,8 @@ type Module struct {
 	Attachments *Attachments
 	// Bridged writes what messaging bridges carry in.
 	Bridged *Bridged
+	// Queue is what people asked to be done once an agent's turn ends.
+	Queue *Queue
 
 	pool *pgxpool.Pool
 	deps Deps
@@ -65,6 +67,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Search:    NewSearch(pool, access),
 		Packer:    NewPacker(db.New(pool), 0),
 		Bridged:   NewBridged(pool),
+		Queue:     NewQueue(pool, access),
 		pool:      pool,
 		deps:      deps,
 	}

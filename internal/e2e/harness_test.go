@@ -27,6 +27,7 @@ import (
 	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
 	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/approvals"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/brain"
@@ -42,6 +43,7 @@ import (
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
+	"github.com/onegator/gator/internal/server/review"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -57,6 +59,7 @@ type harness struct {
 	srv     *httptest.Server
 	pool    *pgxpool.Pool
 	mgr     *runners.Manager
+	waits   *approvals.Service
 	hub     *events.Hub
 	plugins *plugins.Host
 	quality *quality.Service
@@ -108,7 +111,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	catalogue, bundled := catalogueDir(t)
 	// Conversations, and what the team and its agents know, read under the same rules.
 	chat := conversations.New(pool, conversations.Deps{Roles: auth.Authorizer{Pool: pool}, Decisions: svc, Tasks: svc,
-		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool))}})
+		Blobs:       conversations.DiskStore{Root: t.TempDir()},
+		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool)), approvals.NewCards(db.New(pool))}})
 	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
 	svc.UseBrain(knows.Packer, knows.Legacy)
 	// Remote MCP servers; one that signs in with OAuth signs in at the fake provider, and comes back
@@ -134,20 +138,29 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	hostDone := make(chan struct{})
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
+	reviews := review.New(pool, review.Deps{Messages: chat.Messages, Threads: chat.Threads})
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations}
+		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations,
+		Checkpoints: reviews.Checkpoints}
 	for _, c := range configure {
 		c(&rcfg)
 	}
 	mgr := runners.New(pool, svc, hub, slog.Default(), rcfg)
+	waits := approvals.New(pool, approvals.Deps{Rights: chat.Access, Roles: auth.Authorizer{Pool: pool}, Threads: chat.Threads, Policies: svc})
+	waits.UseRuntime(mgr)
+	mgr.UseRuntime(waits)
 	// Conversations and the agents who answer in them, each following the outbox on its own.
-	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default()})
+	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default(),
+		Waits: waits})
 	mgr.UseBriefer(team.Briefer)
 	consumers, stopConsumers := context.WithCancel(context.Background())
 	t.Cleanup(stopConsumers)
 	go chat.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
 	go team.Streamer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
+	cancelWaits := conversations.NewCursorConsumer("approvals", pool, hub, slog.Default(), 50*time.Millisecond)
+	cancelWaits.On(waits.Handler(), "job.finished", "job.requeued")
+	go cancelWaits.Run(consumers)
 	scorecards := quality.New(pool, svc, host, slog.Default())
 	// The curator follows the outbox on its own; sweeping for quiet threads is a test's to ask.
 	curate := curator.New(db.New(pool), curator.PoolTx(pool), team.Curations, chat.Packer, chat.Access, knows.Service, slog.Default())
@@ -168,7 +181,9 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
 		Marketplace: market,
 		Remote:      remote,
-		Bridges:     bridge}
+		Bridges:     bridge,
+		Review:      reviews,
+		Approvals:   waits}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
@@ -184,7 +199,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, waits: waits, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.
@@ -302,6 +317,13 @@ type rawRunner struct {
 
 func (h *harness) dialRaw(token, backend string, version, maxParallel int) (*rawRunner, proto.RawEnvelope) {
 	h.t.Helper()
+	reg := proto.Register{Name: "raw-" + backend, Location: "other", Capabilities: proto.Capabilities{Backends: []string{backend}, MaxParallel: maxParallel}}
+	return h.dialRegistered(token, reg, version)
+}
+
+// dialRegistered connects a raw runner that registers as reg.
+func (h *harness) dialRegistered(token string, reg proto.Register, version int) (*rawRunner, proto.RawEnvelope) {
+	h.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	u := strings.Replace(h.srv.URL, "http", "ws", 1) + proto.Path
@@ -311,7 +333,6 @@ func (h *harness) dialRaw(token, backend string, version, maxParallel int) (*raw
 	}
 	h.t.Cleanup(func() { c.CloseNow() })
 	r := &rawRunner{t: h.t, c: c}
-	reg := proto.Register{Name: "raw-" + backend, Location: "other", Capabilities: proto.Capabilities{Backends: []string{backend}, MaxParallel: maxParallel}}
 	b, _ := json.Marshal(proto.Envelope{Type: proto.TypeRegister, Seq: 1, Version: version, Payload: reg})
 	r.seq = 1
 	if err := c.Write(ctx, websocket.MessageText, b); err != nil {

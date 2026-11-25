@@ -15,6 +15,11 @@ RETURNING *;
 -- name: RunnerHeartbeat :exec
 UPDATE runners SET last_heartbeat_at = now(), auth_state = $2, status = $3, updated_at = now() WHERE id = $1;
 
+-- name: SetRunnerBackendCapabilities :exec
+-- What a runner's backends can do now, when its heartbeat says it changed since the registration.
+UPDATE runners SET capabilities = jsonb_set(capabilities, '{per_backend}', sqlc.arg(per_backend)::jsonb), updated_at = now()
+WHERE id = sqlc.arg(id);
+
 -- name: SetRunnerStatus :exec
 UPDATE runners SET status = sqlc.arg(status), updated_at = now(),
     offline_reason = CASE WHEN sqlc.arg(status)::text = 'offline' THEN sqlc.arg(reason)::text ELSE '' END,
@@ -76,7 +81,7 @@ UPDATE jobs
 SET status = 'leased', runner_id = sqlc.arg(runner_id), lease_expires_at = sqlc.arg(lease_until),
     attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
 WHERE id IN (
-    SELECT j.id FROM jobs j
+    SELECT j.id FROM jobs j JOIN projects pj ON pj.id = j.project_id
     WHERE j.status = 'queued'
       AND j.backend = ANY(sqlc.arg(backends)::text[])
       AND (cardinality(sqlc.arg(projects)::uuid[]) = 0 OR j.project_id = ANY(sqlc.arg(projects)::uuid[]))
@@ -86,26 +91,45 @@ WHERE id IN (
            OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
       -- A runner older than protocol v3 runs every job as a phase; it gets only those.
       AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
+      -- A runner older than protocol v4 cannot hold a work job to an approvals policy, and it would
+      -- let what the policy asks about run unseen: it gets work only of a project that asks nothing.
+      AND (sqlc.arg(asks)::boolean OR (j.tier <> 'work'
+           OR (jsonb_typeof(pj.process_config->'policy'->'approvals'->'ask') = 'array'
+               AND jsonb_array_length(pj.process_config->'policy'->'approvals'->'ask') = 0
+               AND COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(pj.process_config->'policy'->'approvals'->'deny') = 'array'
+                                                    THEN pj.process_config->'policy'->'approvals'->'deny' END), 0) = 0
+               AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.id = j.agent_id AND a.policy ? 'approvals'))))
       -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
       -- with no tools: a runner would refuse it anywhere else.
       AND (j.tier <> 'chat' OR j.backend = ANY(sqlc.arg(read_only)::text[]))
       AND (j.kind <> 'summary' OR j.backend = ANY(sqlc.arg(no_tools)::text[]))
     ORDER BY j.created_at
     LIMIT sqlc.arg(slots)
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF j SKIP LOCKED
 )
 RETURNING *;
 
 -- name: ExtendLeases :execrows
 UPDATE jobs SET lease_expires_at = sqlc.arg(lease_until), updated_at = now()
 WHERE runner_id = sqlc.arg(runner_id) AND id = ANY(sqlc.arg(job_ids)::uuid[])
-  AND status IN ('leased', 'running', 'stalled');
+  AND status IN ('leased', 'running', 'stalled', 'settling');
 
 -- name: MarkJobActive :one
--- First event moves leased → running; any event revives a stalled job.
+-- First event moves leased → running; any event revives a stalled job. A job settling (its agent
+-- done, the runner checkpointing and pushing) stays settling, and one that stalled while settling
+-- goes back to it.
 UPDATE jobs
-SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
-WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
+SET status = CASE WHEN status = 'settling'
+                    OR (status = 'stalled' AND EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = jobs.id AND e.type = 'settling'))
+                  THEN 'settling' ELSE 'running' END,
+    started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled', 'settling')
+RETURNING *;
+
+-- name: MarkJobSettling :one
+-- The agent is done; the runner settles what it left (checkpoint, digest, push) before its receipt.
+UPDATE jobs SET status = 'settling', last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('running', 'stalled')
 RETURNING *;
 
 -- name: InsertJobEvent :execrows
@@ -128,7 +152,7 @@ SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
     runner_id = CASE WHEN attempts >= max_attempts THEN runner_id ELSE NULL END,
     finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
     lease_expires_at = NULL, updated_at = now()
-WHERE status IN ('leased', 'running', 'stalled') AND lease_expires_at < sqlc.arg(now)
+WHERE status IN ('leased', 'running', 'stalled', 'settling') AND lease_expires_at < sqlc.arg(now)
 RETURNING id, task_id, status;
 
 -- name: MarkUnassignableJobs :many
@@ -140,7 +164,7 @@ RETURNING id, task_id, status;
 -- alone (skip_cloud): nobody is missing, the runner is on its way.
 UPDATE jobs SET unassignable_since = now(), updated_at = now()
 WHERE id IN (
-    SELECT j.id FROM jobs j
+    SELECT j.id FROM jobs j JOIN projects p2 ON p2.id = j.project_id
     WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < sqlc.arg(before)
       AND NOT (sqlc.arg(skip_cloud)::boolean AND j.placement = 'cloud')
       AND NOT EXISTS (
@@ -157,8 +181,14 @@ WHERE id IN (
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
             AND (j.kind = 'phase' OR r.protocol_version >= 3)
+            AND (r.protocol_version >= 4 OR (j.tier <> 'work'
+           OR (jsonb_typeof(p2.process_config->'policy'->'approvals'->'ask') = 'array'
+               AND jsonb_array_length(p2.process_config->'policy'->'approvals'->'ask') = 0
+               AND COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(p2.process_config->'policy'->'approvals'->'deny') = 'array'
+                                                    THEN p2.process_config->'policy'->'approvals'->'deny' END), 0) = 0
+               AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.id = j.agent_id AND a.policy ? 'approvals'))))
       )
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF j SKIP LOCKED
 )
 RETURNING id, task_id, project_id, backend, placement;
 
@@ -170,7 +200,7 @@ WHERE j.status = 'queued' AND j.unassignable_since IS NOT NULL AND t.closed_at I
 
 -- name: MarkStalledJobs :many
 UPDATE jobs SET status = 'stalled', updated_at = now()
-WHERE status = 'running' AND last_event_at < sqlc.arg(before)
+WHERE status IN ('running', 'settling') AND last_event_at < sqlc.arg(before)
 RETURNING id, task_id;
 
 -- name: StopQueuedJob :execrows
@@ -178,7 +208,7 @@ UPDATE jobs SET status = 'stopped', stop_reason = $2, finished_at = now(), updat
 WHERE id = $1 AND status = 'queued';
 
 -- name: CountActiveJobsForRunner :one
-SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled');
+SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled', 'settling');
 
 -- name: InsertReceipt :exec
 INSERT INTO receipts (source, subject_kind, subject_id, status, payload, verified_at)
@@ -193,7 +223,7 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(key)::text, 0));
 -- including a phone, which has no task detail open.
 SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, j.placement, t.title AS task_title
 FROM jobs j JOIN tasks t ON t.id = j.task_id
-WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
+WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled', 'settling')
 ORDER BY j.started_at NULLS LAST;
 
 -- name: RecordAgentCall :exec

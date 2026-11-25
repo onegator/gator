@@ -67,6 +67,13 @@ func (b Backend) AuthState() string {
 	return b.Profile.authState(getenv, h)
 }
 
+// Capabilities implements backend.Backend. A steer cancels the prompt and loads the session in a
+// new process; the runner answers every permission request by the job's tier, so it is the
+// runner that holds the agent to it.
+func (b Backend) Capabilities() proto.BackendCapabilities {
+	return proto.BackendCapabilities{Checkpoints: true, Enforcement: proto.EnforcementRunner}
+}
+
 // Supports implements backend.Limited. A read-only job runs only on an agent whose profile names a
 // read-only session mode, which the session must offer (start fails otherwise): an agent's own
 // tools do not all ask before they act, so the permission answers alone are not a promise. The
@@ -91,7 +98,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = spec.Dir
 	// An allow-list, as for Claude: the agent's login variables pass, the runner's token never.
-	cmd.Env = append(agentenv.Filter(os.Environ(), append(append([]string{}, b.AllowEnv...), b.Profile.Env...)), spec.Env...)
+	cmd.Env = backend.AgentEnv(spec, append(append([]string{}, b.AllowEnv...), b.Profile.Env...))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

@@ -80,6 +80,10 @@ func toMessage(v conversations.View) gen.Message {
 	if len(m.Origin) > 0 {
 		_ = json.Unmarshal(m.Origin, &out.Origin)
 	}
+	if m.InputIntent != nil {
+		intent := gen.MessageInputIntent(*m.InputIntent)
+		out.InputIntent = &intent
+	}
 	for _, mm := range v.Mentions {
 		out.Mentions = append(out.Mentions, gen.MemberRef{Kind: gen.MemberRefKind(mm.Kind), Id: toUUID(mm.ID)})
 	}

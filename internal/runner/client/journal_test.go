@@ -37,3 +37,20 @@ func TestJournalSurvivesRestart(t *testing.T) {
 		t.Fatal("acked finish should release the job")
 	}
 }
+
+// A checkpoint survives a restart like an event; a request for a person's decision does not: the
+// agent that waited on it went with the process.
+func TestJournalKeepsCheckpointsButNotRuntimeRequests(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	c1 := New(Config{JournalPath: path}, Unconfigured{}, slog.Default())
+	c1.sendReliable(&outMsg{typ: proto.TypeCheckpoint, payload: proto.Checkpoint{JobID: "j1", Seq: 1, Diff: []byte("diff")}})
+	c1.sendReliable(&outMsg{typ: proto.TypeRuntimeRequest, payload: proto.RuntimeRequest{ID: "r1", JobID: "j1"}})
+	if len(c1.pending) != 2 {
+		t.Fatalf("pending in memory: %d", len(c1.pending))
+	}
+	c2 := New(Config{JournalPath: path}, Unconfigured{}, slog.Default())
+	c2.restore()
+	if len(c2.pending) != 1 || c2.pending[0].typ != proto.TypeCheckpoint {
+		t.Fatalf("restored: %+v", c2.pending)
+	}
+}

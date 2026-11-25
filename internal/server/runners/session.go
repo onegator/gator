@@ -34,7 +34,7 @@ type session struct {
 	tokenID  pgtype.UUID
 	name     string
 	caps     proto.Capabilities
-	authMu   sync.Mutex
+	authMu   sync.Mutex        // guards auth and caps.PerBackend, which heartbeats change
 	auth     map[string]string // backend → login state from the last heartbeat
 	projects []pgtype.UUID
 	// placement is where this runner takes work from; owner is the person whose machine it is,
@@ -272,6 +272,15 @@ func (s *session) handle(env proto.RawEnvelope) {
 				s.m.log.Warn("dispatch after finish", "runner", s.name, "err", err)
 			}
 		}
+	case proto.TypeCheckpoint:
+		report(s, env, "checkpoint", s.checkpoint)
+	case proto.TypeRuntimeRequest:
+		report(s, env, "runtime_request", s.runtimeRequest)
+	case proto.TypeRuntimeCancel:
+		var d proto.RuntimeDecision
+		if err := env.Into(&d); err == nil {
+			s.runtimeCancel(d)
+		}
 	case proto.TypeTurnEnding:
 		report(s, env, "turn_ending", func(te proto.TurnEnding) error {
 			s.turnEnding(te)
@@ -338,6 +347,15 @@ func (s *session) heartbeat(hb proto.Heartbeat) {
 			return emit(ctx, q, "runner.auth_changed", "runner", s.runnerID, map[string]any{"auth": hb.AuthState})
 		})
 	}
+	if hb.Capabilities != nil && s.version >= liveVersion {
+		s.authMu.Lock()
+		s.caps.PerBackend = hb.Capabilities
+		s.authMu.Unlock()
+		per, _ := json.Marshal(hb.Capabilities)
+		if err := q.SetRunnerBackendCapabilities(ctx, db.SetRunnerBackendCapabilitiesParams{ID: s.runnerID, PerBackend: per}); err != nil {
+			s.m.log.Warn("backend capabilities", "runner", s.name, "err", err)
+		}
+	}
 	ids := make([]pgtype.UUID, 0, len(hb.ActiveJobs))
 	for _, id := range hb.ActiveJobs {
 		if u, ok := parseUUID(id); ok {
@@ -376,6 +394,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			Backends: backends, Projects: projects, Slots: int32(free),
 			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
 			PhaseOnly: s.version < turnsVersion,
+			Asks:      s.version >= liveVersion, // only a v4 runner holds a work job to its approvals
 			ReadOnly:  keeping(backends, s.caps.ReadOnly), NoTools: keeping(backends, s.caps.NoTools),
 		})
 		if err != nil {
@@ -401,6 +420,10 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 // turnsVersion is the protocol that knows a job's kind, tier and agent; a runner below it only
 // runs phase jobs.
 const turnsVersion = 3
+
+// liveVersion is the protocol of live sessions: backend capabilities, checkpoints, approvals and
+// attachments. A runner below it runs a job as it always did.
+const liveVersion = 4
 
 // placementOrLocal is the session's placement; a session built without one (a test, an old
 // row) is local, which is what every runner was before placement existed.
@@ -457,10 +480,17 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	brief := s.brief(ctx, j)
 	pj.Context = s.handContext(ctx, q, j, brief)
 	if j.Kind == KindReply && j.TurnID.Valid {
+		if s.version >= liveVersion {
+			pj.Attachments = brief.Files
+		}
 		pj.Turn = &proto.Turn{ID: uuidString(j.TurnID), Ask: brief.Ask, Repeat: brief.Repeat}
 		for _, d := range brief.Docs {
 			pj.Turn.Conversation = append(pj.Turn.Conversation, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
 		}
+	}
+	if s.version >= liveVersion && j.Tier != TierChat {
+		pj.NoCheckpoints = !s.m.process.CheckpointsOn(ctx, j.ProjectID)
+		pj.Approvals = s.approvals(ctx, q, j)
 	}
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
@@ -484,6 +514,23 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 	_ = q.SetJobContextSize(ctx, db.SetJobContextSizeParams{
 		ID: j.ID, ContextBytes: int32(bytes), ContextDocs: int32(len(pj.Context) + len(brief.Docs))})
 	return pj
+}
+
+// approvals are the tools of a work job that wait for a person: the project's policy, tightened by
+// the job's agent's own. A policy that cannot be read is the default one, never none.
+func (s *session) approvals(ctx context.Context, q *db.Queries, j db.Job) *proto.Approvals {
+	var agentPolicy []byte
+	if j.AgentID.Valid {
+		if a, err := q.GetAgent(ctx, j.AgentID); err == nil {
+			agentPolicy = a.Policy
+		}
+	}
+	a, err := s.m.process.JobApprovals(ctx, j.ProjectID, agentPolicy)
+	if err != nil {
+		s.m.log.Warn("reading the approvals policy", "job", uuidString(j.ID), "err", err)
+		a = process.DefaultApprovals
+	}
+	return &proto.Approvals{Ask: a.Ask, Deny: a.Deny, TimeoutSeconds: int(a.TimeoutOrDefault().Seconds())}
 }
 
 // guide is the prompt of the job's agent: its own instructions when a person wrote them, else
@@ -652,7 +699,8 @@ func (s *session) events(ev proto.Events) error {
 	}
 	jobID := job.ID
 	prev := job.Status
-	if _, err := q.MarkJobActive(ctx, db.MarkJobActiveParams{ID: jobID, RunnerID: s.runnerID}); err != nil {
+	active, err := q.MarkJobActive(ctx, db.MarkJobActiveParams{ID: jobID, RunnerID: s.runnerID})
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("job %s is %s, not active", ev.JobID, job.Status)
 		}
@@ -663,7 +711,7 @@ func (s *session) events(ev proto.Events) error {
 		if prev == "stalled" {
 			typ = "job.resumed"
 		}
-		job.Status = "running"
+		job.Status = active.Status // running, or settling again after a stall
 		_ = s.m.tx(ctx, func(q *db.Queries) error { return s.m.emitJob(ctx, q, typ, job, nil) })
 	}
 	for _, e := range ev.Events {
@@ -679,12 +727,119 @@ func (s *session) events(ev proto.Events) error {
 		if err != nil {
 			return errRetry
 		}
+		// Settling holds on a resend too: the step is idempotent, and a failure of it the first
+		// time would otherwise be lost with the event already stored.
+		if n == 1 || e.Type == EventSettling {
+			if err := s.lifecycle(ctx, q, job, e); err != nil {
+				return errRetry
+			}
+		}
 		if n == 1 {
 			out, _ := json.Marshal(e)
 			s.m.hub.Publish(events.Event{Type: "job.output", Aggregate: "job", AggregateID: ev.JobID, Payload: out, CreatedAt: at})
 		}
 	}
 	return nil
+}
+
+// Job events that say where a job's life is, which its card follows.
+const (
+	// EventSettling: the agent is done; the runner settles what it left before the receipt.
+	EventSettling = "settling"
+	// EventStartupPhase: how far the start got (checkout, mcp, initialize, ready).
+	EventStartupPhase = "startup_phase"
+)
+
+// startupPhases are the phases a runner may say a start is in.
+var startupPhases = map[string]bool{"checkout": true, "mcp": true, "initialize": true, "ready": true}
+
+// lifecycle reads what a job event says of the job's life: settling moves it to settling
+// (job.settling), a startup phase tells its card how far the start got (job.startup).
+func (s *session) lifecycle(ctx context.Context, q *db.Queries, job db.Job, e proto.JobEvent) error {
+	switch e.Type {
+	case EventSettling:
+		j, err := q.MarkJobSettling(ctx, db.MarkJobSettlingParams{ID: job.ID, RunnerID: s.runnerID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // ended meanwhile, or never ran
+		}
+		if err != nil {
+			return err
+		}
+		return s.m.tx(ctx, func(q *db.Queries) error { return s.m.emitJob(ctx, q, "job.settling", j, nil) })
+	case EventStartupPhase:
+		var p struct {
+			Phase string `json:"phase"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil || !startupPhases[p.Phase] {
+			return nil
+		}
+		return s.m.tx(ctx, func(q *db.Queries) error {
+			return emit(ctx, q, "job.startup", "job", job.ID, map[string]any{"task_id": uuidString(job.TaskID), "phase": p.Phase})
+		})
+	}
+	return nil
+}
+
+// checkpoint keeps what a turn of a job this runner holds changed. A checkpoint that cannot be
+// kept for a reason of ours is resent; one that is wrong is refused, and acked.
+func (s *session) checkpoint(cp proto.Checkpoint) error {
+	ctx := s.ctx
+	job, err := s.ownJob(ctx, db.New(s.m.pool), cp.JobID)
+	if err != nil {
+		return err
+	}
+	rec := s.m.cfg.Checkpoints
+	if rec == nil {
+		return nil
+	}
+	if err := rec.Record(ctx, job, cp); err != nil {
+		if refused(err) {
+			return err
+		}
+		s.m.log.Warn("keeping a checkpoint", "job", cp.JobID, "seq", cp.Seq, "err", err)
+		return errRetry
+	}
+	return nil
+}
+
+// runtimeRequest keeps what the agent of a job this runner holds waits for a person on, and answers
+// at once one that was decided already (the runner sends a request again after a reconnect).
+// Without anyone to take requests, the agent is told no: a request nobody can see is never a yes.
+func (s *session) runtimeRequest(r proto.RuntimeRequest) error {
+	ctx := s.ctx
+	job, err := s.ownJob(ctx, db.New(s.m.pool), r.JobID)
+	if err != nil {
+		return err
+	}
+	rt := s.m.cfg.Runtime
+	if rt == nil {
+		return s.send(proto.TypeRuntimeDecision, proto.RuntimeDecision{ID: r.ID, JobID: r.JobID, Decision: proto.DecisionCancelled,
+			Feedback: "this server takes no approvals"})
+	}
+	decided, err := rt.Request(ctx, job, r)
+	if err != nil {
+		if refused(err) {
+			_ = s.send(proto.TypeRuntimeDecision, proto.RuntimeDecision{ID: r.ID, JobID: r.JobID, Decision: proto.DecisionCancelled, Feedback: err.Error()})
+			return err
+		}
+		s.m.log.Warn("keeping a runtime request", "job", r.JobID, "err", err)
+		return errRetry
+	}
+	if decided != nil {
+		return s.send(proto.TypeRuntimeDecision, *decided)
+	}
+	return nil
+}
+
+// runtimeCancel ends a request of a job this runner holds that it no longer waits on.
+func (s *session) runtimeCancel(d proto.RuntimeDecision) {
+	job, err := s.ownJob(s.ctx, db.New(s.m.pool), d.JobID)
+	if err != nil || s.m.cfg.Runtime == nil {
+		return
+	}
+	if err := s.m.cfg.Runtime.Cancel(s.ctx, job, d.ID); err != nil {
+		s.m.log.Warn("cancelling a runtime request", "job", d.JobID, "err", err)
+	}
 }
 
 func (s *session) finish(fin proto.Finish) error {

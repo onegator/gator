@@ -4,9 +4,18 @@ package backend
 
 import (
 	"context"
+	"os"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/agentenv"
 )
+
+// AgentEnv is the environment of an agent's process: what it may inherit of the runner's (allow
+// names more than agentenv's list), and the job's own variables last, so they win. Every backend
+// builds its process's environment here, and only here.
+func AgentEnv(spec Spec, allow []string) []string {
+	return append(agentenv.Filter(os.Environ(), allow), spec.Env...)
+}
 
 // Spec describes one agent run.
 type Spec struct {
@@ -31,6 +40,67 @@ type Spec struct {
 	// Skills are the skills the job's agent carries, for a backend that loads skills by itself
 	// (SkillLoader). Any other backend is told of them in its prompt instead.
 	Skills []Skill
+	// Live is what a backend that keeps its session open (ActiveSteering) is given while the run
+	// goes on; nil for a backend that runs one prompt per process.
+	Live *Live
+	// Attachments are the files people sent, on disk outside the worktree. Every backend is told
+	// their paths in the prompt; one that takes images (Capabilities.Attachments) is shown the
+	// images among them as well.
+	Attachments []Attachment
+}
+
+// Attachment is one file a job was handed, fetched by the runner.
+type Attachment struct {
+	Path      string
+	Name      string
+	MediaType string // what its bytes say it is
+	Size      int64
+	// Image says it may be shown as an image: an image type by its bytes, small enough, and not a
+	// program by its name or its bytes.
+	Image bool
+}
+
+// Live is the running side of a live session: what a person adds while a turn runs, who answers
+// before a tool, and the end of every turn.
+type Live struct {
+	// Steer carries what a person says while the session runs: a message into the turn, without
+	// a restart. The backend reads it while it can still deliver; one it no longer reads is the
+	// caller's to send another way (a resumed run).
+	Steer <-chan string
+	// Approve answers the agent's requests to use a tool; nil leaves the backend's own rules,
+	// which never ask anybody.
+	Approve Approver
+	// TurnEnded is told each time a turn of the session ends (the agent answered), for the caller
+	// to checkpoint the worktree; nil for nobody.
+	TurnEnded func()
+}
+
+// Kinds of a runtime request.
+const (
+	RequestToolApproval = "tool_approval"
+	RequestQuestion     = "question"
+)
+
+// ToolRequest is an agent asking, mid-turn, to use a tool — or asking a person a question.
+type ToolRequest struct {
+	Kind      string // RequestToolApproval | RequestQuestion
+	Tool      string
+	Input     []byte // the tool's input as JSON
+	ToolUseID string
+}
+
+// Decision answers a ToolRequest. A denial carries why, which the agent reads; Stop also ends the
+// turn. Answer is a person's answer to a question.
+type Decision struct {
+	Allow   bool
+	Message string
+	Stop    bool
+	Answer  string
+}
+
+// Approver decides an agent's requests. It may wait for a person; it must answer before ctx ends.
+type Approver interface {
+	Decide(ctx context.Context, r ToolRequest) Decision
 }
 
 // Skill is one skill of the job's agent: an Agent Skills folder (SKILL.md, scripts/,
@@ -76,7 +146,16 @@ type Access struct {
 	NoTools bool
 	// Commands are the only commands a read-only agent may run, by name: gator-cli, to talk back.
 	Commands []string
+	// Deny are rules (Rule) of tools the agent is refused, whatever else it may do.
+	Deny []string
+	// Ask are rules of tools a person is asked about first (Live.Approve). A backend that does not
+	// ask — print mode, a session that fell back to it, an ACP agent — refuses them like Deny:
+	// nothing the policy asks about runs unseen.
+	Ask []string
 }
+
+// Refused are the rules a backend refuses by itself when it does not ask: Deny and Ask.
+func (a Access) Refused() []string { return append(append([]string{}, a.Deny...), a.Ask...) }
 
 // Emit streams one event.
 type Emit func(typ string, payload any)
@@ -92,6 +171,9 @@ type Outcome struct {
 	ToolCalls   int
 	Summary     string
 	Usage       proto.Usage
+	// Unread are messages a live session took from Live.Steer and could not deliver, its input
+	// closed: the caller's to send in the next run.
+	Unread []string
 }
 
 // Backend runs an agent CLI.
@@ -104,6 +186,10 @@ type Backend interface {
 	// fixes, and reporting the first as the second sends a person to log in again on a machine
 	// they were already logged in on.
 	AuthState() string
+	// Capabilities says what the backend can do while a job runs (steer without a restart, stop
+	// without a kill, ask before a tool, take attachments), for the runner to report and the
+	// server to show only the actions a job's backend can carry out.
+	Capabilities() proto.BackendCapabilities
 }
 
 // Limited is a backend that can hold an agent to less than full access. A backend says which

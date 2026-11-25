@@ -265,6 +265,17 @@ to nagrania w `testdata` i decyzja zapisana w tym pliku.
   człowieka.
 - `work`: zgody dotyczą tylko narzędzi spoza polityki projektu (7.5).
 
+**Decyzja po spike'u (zapisana przy implementacji).** Własna implementacja protokołu w Go, bez
+helpera w Node: protokół stdio Claude Code to linie JSON w obie strony i kilka control requestów,
+a helper dokładałby runnerowi środowisko uruchomieniowe i drugi proces do pilnowania. Flagi wzięte z
+`claude --help` 2.1.332 (zapisane w `testdata/claude-2.1.332-help.txt`): `--print --input-format
+stream-json --output-format stream-json --verbose --replay-user-messages`, `--permission-prompts
+host|none` i tryb `manual` dla pracy ze zgodami. Interrupt to `control_request` z `{"subtype":
+"interrupt"}`, prośba o zgodę to `control_request` `can_use_tool` z odpowiedzią `{"behavior":
+"allow","updatedInput":…}` albo `{"behavior":"deny","message":…,"interrupt":…}`. Nagrania sesji są
+syntetyczne (`testdata/synthetic-session-*.ndjson`, skrypty odgrywane przez `fake-claude.sh`), bo
+prawdziwa sesja jest płatna.
+
 **Gotowe, gdy:** steer w trakcie tury nie restartuje procesu (w nagraniu jeden `session_id` i
 brak drugiego `init`), stop kończy turę w mniej niż 2 s bez ubijania procesu, a stary tryb `-p`
 działa za flagą `GATOR_CLAUDE_MODE=print` jako fallback.
@@ -463,3 +474,197 @@ to częsty kontekst. Wzór: `provider/userInputAttachments.ts`, `AttachmentClaim
   pełny.
 - **Licencja.** Przeniesiony kod Swift musi mieć notę MIT. PR z portem nie przechodzi review bez
   `THIRD_PARTY_NOTICES.md`.
+
+## Odstępstwa od planu (zapisane przy implementacji)
+
+- **Migracje** mają numery z planu, 00050–00054, z kolumnami ponad plan:
+  - `turn_checkpoints`: diff całego joba do tej tury (`whole_files`, `whole_key`, `whole_diff`,
+    `whole_bytes`, `whole_truncated`), `took_ms` (`checkpoint_ms`) i `diff`/`whole_diff` jako `bytea`
+    dla serwera bez magazynu załączników (z magazynem: klucze `diff_key`, `whole_key`);
+  - `review_comments`: `snippet` (kod z diffu, zapisany przy tworzeniu) i `updated_at`;
+  - `runtime_requests`: `id` nadaje runner (powtórzona prośba to ta sama prośba), `rule`,
+    `tool_use_id`, `stopped`, CHECK „pending ⇔ bez `decided_at`”;
+  - `messages.input_intent` jest NULL dla wiadomości pisanej bez aktywnej tury;
+  - `00054` przebudowuje też indeksy aktywnych jobów o `settling`.
+  `store/review_migrations_test.go` robi na osobnej bazie: wejście na 00049 z jobem i rozmową, up,
+  dane wszystkich pięciu migracji, CHECK-i, down do 00049 (job `settling` wraca jako `running`) i
+  znów up.
+- **Proto v4.** Struktura z planu nazywa się `proto.BackendCapabilities` (`Capabilities` to już
+  możliwości runnera) i leży w `Capabilities.PerBackend`; heartbeat powtarza ją tylko po zmianie.
+  Serwer mówi v4 i v3; runner v2 jest odrzucany przy rejestracji. Runner v3 dostaje joby jak
+  dotąd: bez checkpointów, zgód i załączników. `Checkpoints` jest prawdą dla każdego backendu
+  (checkpoint robi runner, nie CLI).
+- **Nagrania i replay.** Golden files leżą w `testdata/golden/` obok nagrań, a test, który ich nie
+  znajduje, nie przechodzi (`GATOR_UPDATE_GOLDEN=1` je pisze). Nagrania ACP i sesji Claude są
+  syntetyczne, więc nazywają się `synthetic-*`, a nie `claude-<wersja>-session-*`.
+- **Tryb sesji** jest domyślny w runnerze (`GATOR_CLAUDE_MODE=session`); zerowa wartość
+  `claude.Backend.Mode` to `print`, więc testy i kod sprzed fazy dalej działają jak wcześniej. CLI,
+  który odrzuca flagi sesji (`unknown option` przed `init`), przełącza backend na `print` na stałe
+  (`Fallback`), a następny heartbeat mówi o mniejszych możliwościach. Wejście sesji zamyka się po
+  `result`, gdy CLI odtworzył wszystkie wysłane wiadomości (`--replay-user-messages`); bez odtwarzania
+  — od razu po `result`. Steer, którego sesja nie zdążyła przyjąć, wraca do executora i idzie
+  wznowionym runem (`--resume`), więc nic nie ginie. Stop: interrupt, do 2 s na `result`, zamknięcie
+  wejścia, grace, kill grupy. Koszt sesji to wartości ostatniego `result` (zakładamy, że są
+  narastające) — do sprawdzenia na żywo.
+- **Checkpointy.** Tura to każdy run backendu (pierwszy, po steerze w trybie `print`, po sprzeciwie)
+  albo koniec tury żywej sesji (`result`); `seq` 1 to pierwsza tura, a checkpoint 0 (stan wejściowy)
+  nie jest wysyłany. Diff idzie niezawodną wiadomością runnera `checkpoint` (journal i ack jak
+  eventy), a nie osobnym uploadem HTTP: bez nowych drzwi i z tożsamością runnera. Limit to 1 MiB na
+  diff (zamiast „np. 2 MB”), bo diff tury i diff całego joba (base64) mieszczą się wtedy w jednej
+  wiadomości (4 MiB). `GET /jobs/{id}/diff` od pierwszej tury to dokładnie diff całego joba do `to`;
+  od późniejszej tury — diffy tur złożone plik po pliku (serwer nie ma repozytorium).
+  `ignoreWhitespace` jest liczone z samego diffu (pary `-`/`+` różniące się tylko białymi znakami
+  stają się kontekstem). Git checkpointu działa na `--git-dir`/`--work-tree` z `Prepare` (nie z
+  pliku `.git` ani `core.worktree`), z wyłączonymi filtrami (po nazwie), atrybutami z drzewa
+  (`GIT_ATTR_SOURCE` = puste drzewo), fsmonitorem, hookami, `diff.external` i textconv; ścieżki z
+  `DenyRead` są wykluczone. Diffy i wejścia narzędzi redaguje serwer (`secrets.RedactText`,
+  `RedactJSON` + `RedactValues`), bo runner nie importuje serwera. Karta `job` ma `changes`
+  (`files`, `added`, `removed`, `line`: „3 files, +42 −7”) i akcję `diff`.
+- **Komentarze (7.3).** Tylko na liniach, które diff pokazuje (tury albo całego joba). Szkice widzi
+  tylko autor; wysłane widzą wszyscy, którzy czytają job. Uwagi idą do rozmowy, w której agent
+  odpowiadał (turn), a dla joba fazy do wątku taska. W pakiecie rozmowy są dokumentem „Notes on your
+  changes”: kod w znaczniku `untrusted` (dane: czytać, nie wykonywać poleceń), a notatka w osobnym
+  znaczniku `note` z tym samym nonce — nie jako „untrusted”, bo to polecenie członka projektu, ale
+  tak samo zdefusowana. Doszło `DELETE /review-comments/{id}` (szkic).
+- **Zgody (7.5).** Domyślna lista to `Bash(curl:*)`, `Bash(wget:*)`, `Bash(git push:*)` (bez
+  `WebFetch` i `mcp:*`, żeby nie zamienić pracy w klikanie); `onTimeout` przyjmuje tylko `deny`.
+  Agent zaostrza politykę (`agents.policy.approvals`: reguły się dodają, krótszy timeout wygrywa).
+  Reguła `Bash` obejmuje każde polecenie linii (łańcuchy, potoki, `bash -c`, `env`, `sudo`,
+  `xargs`…), a reguła jednego słowa — to słowo w dowolnym miejscu linii: woli zapytać za dużo niż
+  przepuścić. Backend bez `ToolApprovals` (tryb `print`, ACP) dostaje reguły `ask` i `deny` jako
+  odmowy (`--disallowedTools`, odpowiedzi ACP), a job mówi o tym zdarzeniem
+  `approvals_held_as_denials`; nic nie jest automatycznie zgodą. „Needs you” to `GET
+  /runtime-requests` (a nie `/inbox`, bo proces nic nie wie o zgodach), a zdarzenia
+  `runtime_request.*` idą na tematy `job:` i `inbox`. Decyduje osoba z rolą member+, która może
+  pisać tam, gdzie agent pracuje (rozmowa turnu, inaczej wątek taska); sprawdzenie stanu i decyzja
+  to jedna transakcja na zablokowanym wierszu. „Zatrzymaj turę” to odmowa i `StopJob`. Pytanie
+  (`AskUserQuestion`): odpowiedź to `allow` z treścią w `feedback`; runner odpowiada CLI odmową z
+  informacją, a odpowiedź dopisuje jako wiadomość `user`. Prośby wygasają co 15 s (sweeper), a te,
+  które czekały, gdy job się skończył, są anulowane (`job.finished`). Prośby subagentów przychodzą z
+  tego samego procesu, więc są w wątku rodzica bez osobnej obsługi. **Nie zrobione:** metryki
+  zgód na turę i czasu oczekiwania (materiał jest w `job_events`: `runtime_request`,
+  `runtime_decision`).
+- **Steer czy kolejka (7.6).** Wiadomość z kolejki nie pyta i nie steruje. Po końcu tury
+  (`job.finished` joba odpowiedzi) pierwsza z kolejki startuje następną turę i pyta agentów, dla
+  których była kolejkowana, obok wzmiankowanych (`message.dequeued`). „Wyślij teraz jako steer” to
+  `POST /messages/{id}/steer`, tylko dla autora. Tura zakończona bez joba (odmowa, stop przed
+  startem) kolejki nie rusza; następna wiadomość z kolejki czeka na koniec kolejnego joba w rozmowie.
+- **Załączniki (7.7)** dotyczą jobów odpowiedzi (pakiet rozmowy): najwyżej 10 plików, najpierw pytania,
+  potem najnowsze. Agent pobiera je przez `GET /agent/attachments/{id}` (jobscope `attachment
+  read`, tylko reply), który oddaje tylko pliki rozmowy turnu (i wiadomości-korzenia jej wątku), zawsze
+  jako `application/octet-stream`. Runner trzyma je w `$WORKDIR/attachments/<job>/` (0700, pliki
+  0600). Obraz to PNG, JPEG, GIF lub WebP po bajtach, do 5 MB; program po nazwie albo bajtach
+  (skrypt, ELF, Mach-O, PE) jest tylko ścieżką. Obrazy jako bloki obrazu ma tylko tryb sesji.
+- **Domknięcia (7.8).** Runner wysyła zdarzenie `settling` zaraz po pętli agenta (przed digestem,
+  gitem i pushem); serwer przenosi job z `running`/`stalled` w `settling` i emituje `job.settling`.
+  Kolejne zdarzenia nie przywracają `running`; job `settling` bez zdarzeń też staje się `stalled`
+  (i wraca wtedy jako `running`). Czas i koszt bez zmian: usage liczy backend. `startup_phase`
+  (`checkout`, `mcp`, `initialize`, `ready` przy `init` sesji) idzie zdarzeniem outboxu
+  `job.startup` na kartę (`startup`), do pierwszego narzędzia. `GET /tasks/{id}/jobs?kind=` filtruje
+  po rodzaju. „Pisze…” należy do aplikacji. **Nie zrobione:** commit message, nazwa gałęzi i tytuł PR
+  z tanim modelem — to nowy rodzaj joba po stronie serwera, a nazwa gałęzi jest ustalana przed pracą;
+  gałąź dalej ma `gator/<task>-<job>`.
+- **Powiadomienia (7.9).** Push `TOOL_APPROVAL`/`QUESTION` idzie do osoby `on_behalf_of` turnu, a bez
+  niej do właściciela taska (nie do wszystkich członków); `TURN_FINISHED` do osoby, która zapytała,
+  gdy odpowiedź jest gotowa. Odbiorca musi móc czytać rozmowę agenta. Reguły rejestruje się w
+  `Notifier.On`; APNs niesie `category` i dane (`request_id`). **Nie zrobione po stronie serwera:**
+  Live Activity (tokeny i aktualizacje ActivityKit) i ustawienia osoby dla nowych reguł — aplikacja
+  filtruje po kategorii.
+- **CLI:** `gator job checkpoints`, `gator job diff`, `gator approvals`, `gator decide`.
+- **Po przeglądzie** (szczegóły w commicie): wyłączenia filtrów checkpointu idą przez
+  `GIT_CONFIG_KEY_n`/`VALUE_n` (nazwa sterownika z `=` nie rozcina już `-c`), a konfiguracja
+  globalna nie jest czytana; reguły `mcp:` są tłumaczone na nazwy Claude Code w `--disallowedTools`;
+  runner wysyła czekające prośby jeszcze raz po każdym połączeniu (decyzja podjęta, gdy go nie było,
+  dochodzi), a prośby nie trafiają do journala (zgody są tylko na żywo); job wzięty ponownie zaczyna
+  checkpointy od nowa (stare są usuwane, klucze diffów mają numer próby); sesja zamyka wejście po
+  `UnreadWait` także wtedy, gdy odtworzenia wiadomości nie da się dopasować; `settling` przeżywa
+  ponowienie zdarzenia i zastój; „Needs you” filtruje projekty osoby w SQL; ścieżka z diffu w
+  wiadomości z uwagami jest oczyszczona. Prośby są anulowane też przy `job.requeued`.
+- **Po przeglądzie PR #28** (szczegóły w commicie):
+  - checkpoint nie daje gitowi czytać plików worktree: runner listuje nazwy (`ls-files`), czyta pliki
+    przez `os.Root` worktree (żaden link, podmieniony choćby w trakcie, nie wyprowadza poza niego),
+    sam zapisuje bloby i oddaje gitowi gotowe wpisy (`update-index --index-info`); żaden filtr ani
+    atrybut repozytorium nie jest więc wykonywany, kiedykolwiek go skonfigurowano;
+  - reguły `Bash` zdejmują opcje gita przed podkomendą (`-C`, `-c`, `--git-dir`…), `eval`,
+    `sudo -u X`, `env -u X VAR=…`, `command`, `exec`, `xargs -n N`; to dalej próg, nie piaskownica:
+    skrypt zapisany do pliku i uruchomiony przechodzi;
+  - backend, który przestał pytać w trakcie joba (sesja → `print`), odmawia także reguł `ask`
+    (`Access.Ask` zawsze dochodzi do backendu, a `--disallowedTools` niesie `ask` i `deny`);
+  - steer turnu `work` tylko od członka projektu, który może pisać w rozmowie; inaczej wiadomość idzie
+    dalej jak zwykła, przez strażników; odmowa czekającej prośby wiadomością tylko, gdy pisze osoba
+    turnu, w DM-ie, w wątku agenta albo ze wzmianką agenta;
+  - runner v3 nie dostaje jobów `work` projektu, który o cokolwiek pyta (polityka domyślna pyta), i
+    takie joby czekają jak bez runnera (`no_runner`), aż przyjdzie runner v4;
+  - sesja: czytnik i nadzór startują przed pierwszym zapisem, zamknięcie wejścia nie czeka na zapis
+    (zamknięcie rury kończy zapis zablokowany), steer jest „applied” dopiero po odtworzeniu przez CLI
+    (albo po końcu tury, gdy CLI nie odtwarza), a steer, którego CLI nie przeczytało przed śmiercią,
+    wraca jako nieprzeczytany; po przejściu na `print` tura dalej ma checkpoint;
+    `control_cancel_request` przestaje pytać człowieka, a runner mówi serwerowi
+    (`runtime_cancel`), że już nie czeka; wejście narzędzia powyżej 64 KiB jest odrzucane, nie
+    pokazywane w skrócie; błąd czytania wyjścia CLI kończy run od razu;
+  - wiadomość z kolejki pamięta agentów, dla których była kolejkowana (`messages.queued_for`), i
+    pyta właśnie ich; „Wyślij teraz” wiadomości, która nikogo nie pyta, to 409;
+  - checkpointy mają numer próby (`attempt`): job wzięty ponownie zaczyna tury od nowa, a komentarze
+    ludzi zostają przy checkpointach wcześniejszej próby; listy plików są ucinane z flagą
+    (`filesTruncated`), żeby wiadomość zmieściła się w 4 MiB; karta liczy zmiany wszystkich repozytoriów;
+  - `GET /runners` i `GET /runners/{id}` pokazują tylko joby, które wołający może czytać;
+  - migracje 00050, 00053 i 00054 poprawione w miejscu (PR nie był scalony): `attempt`,
+    `files_truncated`, `queued_for`, indeks zdarzeń cyklu życia joba.
+  - **Przygotowanie pod PR #27:** środowisko procesu agenta buduje jedna funkcja
+    (`backend.AgentEnv`, ta sama nazwa i podpis co w #27), a wszystko, co job wysyła na serwer w
+    trakcie (zdarzenia, koniec tury, checkpointy z diffami i ścieżkami, prośby z wejściem narzędzia),
+    przechodzi przez jeden haczyk `client.JobIO.Masked(mask)` — tu zastąpi `maskIO` z #27.
+- **Zawężone:** kolejka wiadomości rusza tylko na końcu joba odpowiedzi; ponownie dostarczone
+  `job.finished` zanim następna tura wystartuje może wziąć z kolejki drugą wiadomość. Pliki diffów
+  wcześniejszej próby joba zostają w magazynie (wiersze są usuwane).
+
+## Do zrobienia w gator-app
+
+Wszystko poniżej ma już API w `docs/openapi.yaml` (regeneracja `GatorAPI`): endpointy, zdarzenia
+WebSocket fazy (`job.checkpoint`, `job.settling`, `job.startup`, `runtime_request.*`,
+`message.dequeued`, z treścią) i kategorie pushy z danymi i linkami są opisane w `info.description`.
+
+1. **Możliwości.** `Job.capabilities` (i `RunnerInfo.capabilities.perBackend`, `GET
+   /runners/{id}`): chować Steer, natywny Stop, karty zgód i podpowiedź „Steruj przerywa turę”, gdy
+   job ich nie obsłuży.
+2. **Widok diffu** przeniesiony z t3code (`T3ReviewDiffView.swift`, `ReviewDiffCodeLayout.swift`):
+   nota MIT w nagłówkach plików, `THIRD_PARTY_NOTICES.md`, nazwy bez „T3”, `UIViewRepresentable`
+   zamiast `ExpoView` i propsów JSON; macOS po spike'u (AppKit albo Catalyst). Sticky nagłówki plików,
+   word-diff, notatki na liniach. Źródła: `GET /jobs/{id}/checkpoints` (tury, pliki, `+`/`-`), `GET
+   /checkpoints/{id}/diff?whole=&ignoreWhitespace=`, `GET /jobs/{id}/diff?from=&to=` (diff unified,
+   `text/x-diff`); `truncated` mówi, że diff ucięto na 1 MiB.
+3. **Drzewo plików** z licznikami, przełącznik „ta tura / cały job” (`whole=true` albo `/jobs/{id}/diff`),
+   ignorowanie białych znaków.
+4. **Komentarze na liniach:** zaznaczenie zakresu po stronie `old`/`new`, `POST
+   /checkpoints/{id}/comments` (szkic), `GET /jobs/{id}/comments` do nałożenia na diff, `PATCH`
+   (treść szkicu, `resolved`), `DELETE` szkicu, „Wyślij uwagi do @worker” = `POST
+   /jobs/{id}/comments/send {agentId?}`.
+5. **Karta `job`:** linia `card.changes.line` i przycisk „Zmiany” (akcja `diff`), stan `settling`
+   („kończy…”), `card.startup` (na czym stoi start).
+6. **Karty `tool_approval` i `question`** (klucz `approval:<id>`): Pozwól, Pozwól do końca sesji,
+   Odmów z uzasadnieniem, Zatrzymaj turę; pytanie — pole odpowiedzi. `POST
+   /runtime-requests/{id}/decide`. „Needs you”: `GET /runtime-requests`, aktualizowane zdarzeniami
+   `runtime_request.*` (temat `inbox`).
+7. **Composer:** Steruj / Do kolejki przy aktywnej turze (⌘⏎ odwraca), `NewMessage.intent`; kolejka
+   nad composerem (`GET /conversations/{id}/queue`, `Message.inputIntent`) z edycją, usunięciem i
+   „Wyślij teraz jako steer” (`POST /messages/{id}/steer`).
+8. **Załączniki w composerze:** przycisk, przeciągnięcie, wklejony obrazek przez `POST /attachments`;
+   wklejka powyżej 32 KiB jako załącznik tekstowy.
+9. **Widok taska:** joby `kind=phase` domyślnie (`GET /tasks/{id}/jobs?kind=phase`), odpowiedzi i
+   streszczenia pod przełącznikiem; „is running”, „nic do uruchomienia” i pasek faz tylko z jobów fazy.
+10. **„Pisze…”:** `{"typing":"<conversationId>"}` przez WebSocket najwyżej co 3 s.
+11. **Powiadomienia:** kategorie `TOOL_APPROVAL` (Pozwól, Odmów — Odmów otwiera aplikację),
+    `QUESTION`, `TURN_FINISHED` z `request_id`/`turn_id` w danych; Live Activity dla własnego turnu
+    `work` z `job.progress` i `startup_phase`; ustawienia jak `NotifyRule`.
+12. **Snapshoty** widoku diffu w obu motywach.
+
+## Do sprawdzenia na żywo
+
+- Tryb sesji Claude Code na prawdziwym CLI: flagi, `--replay-user-messages` (czy odtwarza wiadomości
+  tak, jak je wysłano), steer w trakcie tury (jeden `session_id`, jeden `init`), interrupt i czas
+  stopu, `--permission-prompts host` z `--permission-mode manual` (czy pyta o wszystko poza odczytem),
+  kształt `can_use_tool` i odpowiedzi, `AskUserQuestion` (czy odmowa z odpowiedzią jako wiadomość
+  działa), bloki obrazu, narastający koszt w `result`, prośby subagentów.
+- `--disallowedTools` z regułami `Bash(curl:*)` w `bypassPermissions` (tryb `print`).
+- Koszt checkpointów na dużym repozytorium (`checkpoint_ms` w zdarzeniu `checkpoint`).
+- APNs z kategorią i danymi na urządzeniu.

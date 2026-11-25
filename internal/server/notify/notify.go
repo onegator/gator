@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -31,6 +32,10 @@ type Message struct {
 	Title string
 	Body  string
 	Link  string // gator://tasks/<id>
+	// Category names the buttons the app shows on it (CategoryToolApproval); empty for none.
+	Category string
+	// Data is what those buttons act on (request_id), beside the link.
+	Data map[string]string
 }
 
 // Sender delivers a message to one device.
@@ -59,6 +64,8 @@ type Notifier struct {
 	poll    time.Duration
 	// chat, when set, has messages notify the people they concern (see WithChat).
 	chat ChatAccess
+	// rules are more kinds of notifications, by event type (On).
+	rules map[string][]Rule
 }
 
 // New builds a notifier; PollEvery defaults to two seconds.
@@ -100,9 +107,22 @@ func (n *Notifier) Run(ctx context.Context) {
 
 // drain delivers the events after the cursor, at least once.
 func (n *Notifier) drain(ctx context.Context) {
-	events.DrainCursor(ctx, n.pool, cursorName, watched, func(r db.EventsAfterRow) {
-		if err := n.handle(ctx, r); err != nil && ctx.Err() == nil {
-			n.log.Warn("notify", "event", r.Type, "err", err)
+	types := append([]string{}, watched...)
+	for t := range n.rules {
+		if !slices.Contains(types, t) {
+			types = append(types, t)
+		}
+	}
+	events.DrainCursor(ctx, n.pool, cursorName, types, func(r db.EventsAfterRow) {
+		if slices.Contains(watched, r.Type) {
+			if err := n.handle(ctx, r); err != nil && ctx.Err() == nil {
+				n.log.Warn("notify", "event", r.Type, "err", err)
+			}
+		}
+		for _, rule := range n.rules[r.Type] {
+			if err := rule(ctx, n, r); err != nil && ctx.Err() == nil {
+				n.log.Warn("notify", "event", r.Type, "err", err)
+			}
 		}
 	})
 }

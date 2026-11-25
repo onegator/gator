@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -31,6 +32,13 @@ type JobIO struct {
 	// returns what objects, or nothing when nothing does — including when the server is old,
 	// unreachable or slow, because an agent must never be held by a question nobody answers.
 	TurnEnding func(proto.TurnEnding) []proto.Objection
+	// Checkpoint delivers a checkpoint of the worktree, reliably, in order with the events.
+	// Nil: the server does not take them.
+	Checkpoint func(proto.Checkpoint)
+	// Request asks a person, through the server, before a tool, and waits for the decision: until
+	// it comes, ctx ends (cancelled) or the request's own timeout passes (expired). Nil: nobody can
+	// be asked from this runner's connection.
+	Request func(ctx context.Context, r proto.RuntimeRequest) proto.RuntimeDecision
 }
 
 // Executor runs one job and returns its receipt. It must stop when ctx is cancelled
@@ -47,6 +55,12 @@ type Loginer interface {
 // AuthReporter is implemented by executors that know which backends are logged in.
 type AuthReporter interface {
 	AuthState() map[string]string
+}
+
+// CapabilityReporter is implemented by executors that know what each backend can do while a job
+// runs (proto v4).
+type CapabilityReporter interface {
+	BackendCapabilities() map[string]proto.BackendCapabilities
 }
 
 // Config for a runner.
@@ -111,6 +125,11 @@ type runningJob struct {
 	steer  chan string
 	// cont carries the server's answer to a turn_ending question, one per question.
 	cont chan proto.Continue
+	// decisions are the runtime requests waiting for a person, by request id, and waiting the
+	// requests themselves, sent again on every new connection: a decision sent while this runner
+	// was away is heard when the server answers the request again.
+	decisions map[string]chan proto.RuntimeDecision
+	waiting   map[string]proto.RuntimeRequest
 }
 
 // Client is one runner.
@@ -134,6 +153,13 @@ type Client struct {
 	took         bool
 	finished     chan struct{}
 	finishedOnce sync.Once
+
+	// version is the protocol the server speaks on the current connection (0 before one).
+	version int
+
+	// told is what the server was last told of the backends' capabilities; a heartbeat carries
+	// them again only when they changed.
+	told map[string]proto.BackendCapabilities
 }
 
 // New builds a client.
@@ -195,6 +221,10 @@ func (c *Client) persistLocked() {
 	}
 	entries := make([]journalEntry, 0, len(c.pending))
 	for _, m := range c.pending {
+		if m.typ == proto.TypeRuntimeRequest {
+			// Live only: a restarted runner has no agent waiting on it any more.
+			continue
+		}
 		b, err := json.Marshal(m.payload)
 		if err != nil {
 			continue
@@ -327,9 +357,13 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 	defer cancel()
 	defer conn.CloseNow()
 
+	perBackend := c.backendCapabilities()
+	c.mu.Lock()
+	c.told = perBackend
+	c.mu.Unlock()
 	reg := proto.Register{Name: c.cfg.Name, Location: c.cfg.Location, Placement: c.cfg.Placement, BinaryVersion: c.cfg.BinaryVersion,
 		Capabilities: proto.Capabilities{Backends: c.cfg.Backends, MaxParallel: c.cfg.MaxParallel, Projects: c.cfg.Projects,
-			CanLogin: c.canLogin(), ReadOnly: nonNil(c.cfg.ReadOnly), NoTools: nonNil(c.cfg.NoTools)}}
+			CanLogin: c.canLogin(), ReadOnly: nonNil(c.cfg.ReadOnly), NoTools: nonNil(c.cfg.NoTools), PerBackend: perBackend}}
 	if err := write(sctx, conn, proto.TypeRegister, 1, reg); err != nil {
 		return false, err
 	}
@@ -354,6 +388,9 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 	var ok proto.Registered
 	_ = env.Into(&ok)
 	c.log.Info("runner registered", "runner_id", ok.RunnerID, "proto", ok.Version)
+	c.mu.Lock()
+	c.version = ok.Version
+	c.mu.Unlock()
 
 	c.attach(sctx, conn)
 	defer c.detach(conn)
@@ -371,6 +408,11 @@ func (c *Client) attach(ctx context.Context, conn *websocket.Conn) {
 	for _, m := range c.pending {
 		c.writeLocked(m)
 	}
+	for _, rj := range c.jobs {
+		for _, r := range rj.waiting {
+			c.writeLocked(&outMsg{typ: proto.TypeRuntimeRequest, payload: r})
+		}
+	}
 }
 
 func (c *Client) detach(conn *websocket.Conn) {
@@ -387,12 +429,27 @@ func (c *Client) writeLocked(m *outMsg) {
 		return
 	}
 	c.seq++
-	if m.typ == proto.TypeEvents || m.typ == proto.TypeFinish {
+	if reliable(m.typ) {
 		c.inflight[c.seq] = m
 	}
 	if err := write(c.connCtx, c.conn, m.typ, c.seq, m.payload); err != nil {
 		c.log.Debug("write failed; will resend after reconnect", "type", m.typ, "err", err)
 	}
+}
+
+// liveVersion is the protocol of checkpoints, runtime requests and backend capabilities.
+const liveVersion = 4
+
+// speaks says whether the server on the current connection speaks protocol v.
+func (c *Client) speaks(v int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.version >= v
+}
+
+// reliable are the messages kept until the server acks them and resent after a reconnect.
+func reliable(t proto.MessageType) bool {
+	return t == proto.TypeEvents || t == proto.TypeFinish || t == proto.TypeCheckpoint || t == proto.TypeRuntimeRequest
 }
 
 func (c *Client) sendReliable(m *outMsg) {
@@ -450,14 +507,19 @@ func (c *Client) beat() {
 	if ar, ok := c.exec.(AuthReporter); ok {
 		authState = ar.AuthState()
 	}
+	caps := c.backendCapabilities()
 	c.mu.Lock()
 	active := c.activeLocked()
 	free := c.cfg.MaxParallel - len(c.jobs)
 	if c.cfg.Once && c.took {
 		free = 0 // its one job is taken; the machine ends with it
 	}
+	var changed map[string]proto.BackendCapabilities
+	if caps != nil && !maps.Equal(caps, c.told) {
+		changed, c.told = caps, caps
+	}
 	c.mu.Unlock()
-	c.sendBestEffort(proto.TypeHeartbeat, proto.Heartbeat{Load: len(active), AuthState: authState, ActiveJobs: active})
+	c.sendBestEffort(proto.TypeHeartbeat, proto.Heartbeat{Load: len(active), AuthState: authState, ActiveJobs: active, Capabilities: changed})
 	if free > 0 && len(c.cfg.Backends) > 0 {
 		c.sendBestEffort(proto.TypeLeaseRequest, proto.LeaseRequest{Slots: free})
 	}
@@ -512,6 +574,20 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 				}
 				c.mu.Unlock()
 			}
+		case proto.TypeRuntimeDecision:
+			var d proto.RuntimeDecision
+			if env.Into(&d) == nil {
+				c.mu.Lock()
+				if rj := c.jobs[d.JobID]; rj != nil {
+					if ch := rj.decisions[d.ID]; ch != nil {
+						select {
+						case ch <- d:
+						default: // answered already
+						}
+					}
+				}
+				c.mu.Unlock()
+			}
 		case proto.TypeStop:
 			var sp proto.Stop
 			if env.Into(&sp) == nil {
@@ -535,6 +611,14 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 			}
 		}
 	}
+}
+
+// backendCapabilities are what the executor's backends can do, when it says.
+func (c *Client) backendCapabilities() map[string]proto.BackendCapabilities {
+	if r, ok := c.exec.(CapabilityReporter); ok {
+		return r.BackendCapabilities()
+	}
+	return nil
 }
 
 // canLogin reports whether this runner can drive an interactive backend login. Today no
@@ -584,7 +668,8 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 		prev := cancel
 		cancel = func(err error) { prev(err); tcancel() }
 	}
-	rj := &runningJob{cancel: cancel, steer: make(chan string, 8), cont: make(chan proto.Continue, 1)}
+	rj := &runningJob{cancel: cancel, steer: make(chan string, 8), cont: make(chan proto.Continue, 1),
+		decisions: map[string]chan proto.RuntimeDecision{}, waiting: map[string]proto.RuntimeRequest{}}
 	c.jobs[job.JobID] = rj
 	c.mu.Unlock()
 
@@ -602,9 +687,18 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 			seqMu.Unlock()
 			c.sendReliable(&outMsg{typ: proto.TypeEvents, payload: proto.Events{JobID: job.JobID, Events: []proto.JobEvent{ev}}})
 		}
-		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer, TurnEnding: func(te proto.TurnEnding) []proto.Objection {
-			return c.askTurnEnding(jctx, rj, te)
-		}})
+		checkpoint := func(cp proto.Checkpoint) {
+			if !c.speaks(liveVersion) {
+				return // a server that does not know checkpoints would refuse one until the end of time
+			}
+			cp.JobID = job.JobID
+			c.sendReliable(&outMsg{typ: proto.TypeCheckpoint, payload: cp})
+		}
+		request := func(ctx context.Context, r proto.RuntimeRequest) proto.RuntimeDecision {
+			return c.request(ctx, job.JobID, rj, r)
+		}
+		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer, Checkpoint: checkpoint, Request: request,
+			TurnEnding: func(te proto.TurnEnding) []proto.Objection { return c.askTurnEnding(jctx, rj, te) }})
 		cause := context.Cause(jctx)
 		cancel(nil)
 		fin.JobID = job.JobID
@@ -680,6 +774,46 @@ func (c *Client) askTurnEnding(ctx context.Context, rj *runningJob, te proto.Tur
 		return nil
 	case <-ctx.Done():
 		return nil
+	}
+}
+
+// requestGrace is how long past a request's own timeout the runner waits for the server's
+// decision: the server expires it and says so, and that answer should be the one that counts.
+const requestGrace = 30 * time.Second
+
+// request sends a runtime request and waits for its decision. It is reliable like events: a
+// reconnect sends it again and the server answers with the decision it already made. Every way of
+// not getting one — no server that asks, a stop, the timeout — is a refusal, never a yes.
+func (c *Client) request(ctx context.Context, jobID string, rj *runningJob, r proto.RuntimeRequest) proto.RuntimeDecision {
+	r.JobID = jobID
+	no := proto.RuntimeDecision{ID: r.ID, JobID: jobID, Decision: proto.DecisionCancelled}
+	if !c.speaks(liveVersion) {
+		no.Feedback = "this server cannot ask anyone"
+		return no
+	}
+	ch := make(chan proto.RuntimeDecision, 1)
+	c.mu.Lock()
+	rj.decisions[r.ID], rj.waiting[r.ID] = ch, r
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(rj.decisions, r.ID)
+		delete(rj.waiting, r.ID)
+		c.mu.Unlock()
+	}()
+	c.sendReliable(&outMsg{typ: proto.TypeRuntimeRequest, payload: r})
+	timer := time.NewTimer(time.Duration(r.TimeoutSeconds)*time.Second + requestGrace)
+	defer timer.Stop()
+	select {
+	case d := <-ch:
+		return d
+	case <-ctx.Done():
+		// Its card must not go on asking a person for what nobody waits on any more.
+		c.sendBestEffort(proto.TypeRuntimeCancel, proto.RuntimeDecision{ID: r.ID, JobID: jobID, Decision: proto.DecisionCancelled})
+		return no
+	case <-timer.C:
+		no.Decision, no.Feedback = proto.DecisionExpired, "nobody answered in time"
+		return no
 	}
 }
 

@@ -40,6 +40,16 @@ type Workspace struct {
 	bare     string
 	hooks    string // the job's git hooks, outside the checkout; see SignCommits
 	m        *Manager
+	// job is the job's id; gitDir the worktree's git directory as Prepare made it, which a
+	// checkpoint names rather than reads from the worktree's .git file; checkpoints are the
+	// commits of the checkpoints so far.
+	job         string
+	gitDir      string
+	checkpoints []string
+	// format is the repository's object format (sha1, sha256); hashed what each file was when the
+	// runner last hashed it, so the next checkpoint hashes only what changed.
+	format string
+	hashed map[string]staged
 }
 
 // HasRepo reports whether the workspace is a git checkout.
@@ -102,7 +112,13 @@ func (m *Manager) Prepare(ctx context.Context, job proto.Job) (*Workspace, error
 	if err != nil {
 		return nil, err
 	}
-	return &Workspace{Dir: dir, Branch: br, Base: strings.TrimSpace(base), bare: bare, m: m}, nil
+	gitDir, err := m.run(ctx, dir, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return nil, err
+	}
+	w := &Workspace{Dir: dir, Branch: br, Base: strings.TrimSpace(base), bare: bare, m: m, job: job.JobID, gitDir: strings.TrimSpace(gitDir)}
+	w.dropCheckpoints(ctx) // an earlier attempt's
+	return w, nil
 }
 
 // PrepareReadOnly creates a job directory its agent cannot change: a checkout of origin/<default
@@ -302,6 +318,7 @@ func (w *Workspace) Cleanup(ctx context.Context, keepBranch bool) error {
 	lock := w.m.repoLock(w.bare)
 	lock.Lock()
 	defer lock.Unlock()
+	w.dropCheckpoints(ctx)
 	if _, err := w.m.run(ctx, w.bare, "worktree", "remove", "--force", w.Dir); err != nil {
 		_ = os.RemoveAll(w.Dir)
 		_, _ = w.m.run(ctx, w.bare, "worktree", "prune")

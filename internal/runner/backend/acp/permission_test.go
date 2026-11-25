@@ -65,3 +65,23 @@ func TestAnswerPicksOnceNeverAlways(t *testing.T) {
 		t.Errorf("no way to say no: %+v", r)
 	}
 }
+
+// A work agent is refused what the approvals policy holds for it (nobody can be asked through
+// ACP): the commands, wherever they are in a line, and the MCP tools.
+func TestWorkPermissionsHoldTheDenyList(t *testing.T) {
+	p := Permissions{Access: backend.Access{Deny: []string{"Bash(curl:*)", "mcp:sentry/*"}}}
+	for _, c := range []struct {
+		call permissionToolCall
+		want bool
+	}{
+		{permissionToolCall{Kind: kindExecute, RawInput: []byte(`{"command":"echo hi && curl x"}`)}, false},
+		{permissionToolCall{Kind: kindExecute, RawInput: []byte(`{"command":["bash","-lc","curl x"]}`)}, false},
+		{permissionToolCall{Kind: kindExecute, RawInput: []byte(`{"command":"go test ./..."}`)}, true},
+		{permissionToolCall{Kind: kindOther, Title: "sentry/resolve_issue"}, false},
+		{permissionToolCall{Kind: kindEdit, Title: "Edit main.go"}, true},
+	} {
+		if v := p.Decide(c.call); v.Allow != c.want {
+			t.Errorf("%+v: %+v, want allow=%v", c.call, v, c.want)
+		}
+	}
+}

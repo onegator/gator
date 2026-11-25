@@ -36,3 +36,16 @@ func (m Marker) Fence(who, body string) string {
 
 // defuse breaks anything shaped like a fence, whatever its nonce.
 func defuse(s string) string { return strings.ReplaceAll(s, "<<<", "<‹<") }
+
+// Quote fences body under a fence of its own kind (a note, code), with this marker's nonce: what
+// is inside cannot close the fence and go on as something else. It says nothing of trust; the
+// prompt around it says how to read it.
+func (m Marker) Quote(kind, body string) string {
+	return fmt.Sprintf("<<<%s-%s>>>\n%s\n<<<end-%s-%s>>>", kind, m.nonce, defuse(strings.TrimSpace(body)), kind, m.nonce)
+}
+
+// Data fences body as data to read, never instructions to follow, without saying who wrote it:
+// code an agent wrote, a snippet of a file.
+func (m Marker) Data(body string) string {
+	return fmt.Sprintf("%s\n%s\n%s", m.Open(), defuse(strings.TrimRight(body, "\n")), m.Close())
+}

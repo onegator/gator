@@ -22,6 +22,7 @@ import (
 // scripted is an in-process backend whose behaviour each test chooses.
 type scripted struct {
 	noLimits bool
+	live     bool // keeps its session open: steers go into the run
 	mu       sync.Mutex
 	specs    []backend.Spec
 	run      func(ctx context.Context, n int, spec backend.Spec, emit backend.Emit) backend.Outcome
@@ -29,6 +30,9 @@ type scripted struct {
 
 func (s *scripted) Name() string      { return "fake" }
 func (s *scripted) AuthState() string { return "ok" }
+func (s *scripted) Capabilities() proto.BackendCapabilities {
+	return proto.BackendCapabilities{ActiveSteering: s.live, NativeInterrupt: s.live, ToolApprovals: s.live, Enforcement: proto.EnforcementNative}
+}
 
 // Supports implements backend.Limited unless a test says the backend keeps no limits.
 func (s *scripted) Supports(backend.Access) bool { return !s.noLimits }
@@ -109,7 +113,7 @@ func TestCommitIsPushedAndWorkspaceCleaned(t *testing.T) {
 	if _, err := os.Stat(be.specs[0].Dir); !os.IsNotExist(err) {
 		t.Fatal("workspace not cleaned up")
 	}
-	if strings.Join(*evs, ",") != "workspace,text,git" {
+	if strings.Join(*evs, ",") != "startup_phase,workspace,startup_phase,text,settling,git" {
 		t.Fatalf("events: %v", *evs)
 	}
 }

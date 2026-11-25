@@ -46,6 +46,9 @@ type Verdict struct {
 
 // Decide answers one request.
 func (p Permissions) Decide(call permissionToolCall) Verdict {
+	if r, ok := p.denied(call); ok {
+		return Verdict{Reason: "the project does not allow " + r}
+	}
 	switch {
 	case p.Access.NoTools:
 		return Verdict{Reason: "this job has no tools"}
@@ -68,6 +71,33 @@ func (p Permissions) Decide(call permissionToolCall) Verdict {
 		kind = kindOther
 	}
 	return Verdict{Reason: "read-only: " + kind + " is refused"}
+}
+
+// denied is the rule of the job's deny list a call falls under: a command (execute), or an MCP
+// tool by its title. An agent's own tools do not all ask before they act, so this holds what they
+// ask about; it is the runner's part of the approvals policy for an agent that cannot wait for a
+// person.
+func (p Permissions) denied(call permissionToolCall) (string, bool) {
+	rules := backend.ParseRules(p.Access.Refused()) // an ACP agent's requests are answered here, never put to a person
+	if len(rules) == 0 {
+		return "", false
+	}
+	if call.Kind == kindExecute {
+		words := commandWords(call.RawInput)
+		input, _ := json.Marshal(map[string]string{"command": strings.Join(words, " ")})
+		if r, ok := backend.Matching(rules, "Bash", input); ok {
+			return r.Raw, true
+		}
+		return "", false
+	}
+	title := strings.TrimSpace(call.Title)
+	if !strings.HasPrefix(title, "mcp__") {
+		title = "mcp__" + strings.NewReplacer("/", "__", ": ", "__", ":", "__", ".", "__").Replace(title)
+	}
+	if r, ok := backend.Matching(rules, title, call.RawInput); ok {
+		return r.Raw, true
+	}
+	return "", false
 }
 
 // shellMeta are what would let a permitted command run another: a read-only agent's gator-cli is

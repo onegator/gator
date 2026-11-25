@@ -31,6 +31,9 @@ type Deps struct {
 	// Now is the clock of the daily budget; nil is time.Now.
 	Now func() time.Time
 	Log *slog.Logger
+	// Waits are what agents wait for a person on (approvals.Service): a person's message to an
+	// agent that waits refuses it, with the message as the reason. Nil: nothing is refused so.
+	Waits waitAnswerer
 }
 
 // Module is the package's services wired to one database, for the server to hand out.
@@ -76,10 +79,12 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	}
 	summaries := conversations.NewSummaries(pool, summaryQueue{jobs: deps.Jobs})
 	consent := NewConsent(q, voice, chat.Access, deps.Roles, deps.Process, guards, starter)
+	steerer := NewSteerer(q, deps.Jobs, voice, chat.Access, deps.Roles, deps.Log)
+	steerer.waits = deps.Waits
 	return &Module{
 		Consent:    consent,
 		Directory:  NewDirectory(q, deps.Roles, chat.Access),
-		Dispatcher: NewDispatcher(q, guards, starter, NewSteerer(q, deps.Jobs, voice, deps.Log)),
+		Dispatcher: NewDispatcher(q, guards, starter, steerer),
 		Control:    NewControl(q, chat.Access, deps.Jobs, voice),
 		Starter:    starter,
 		Voice:      voice,
@@ -105,6 +110,8 @@ func (m *Module) Consumer(hub *events.Hub, log *slog.Logger, poll time.Duration)
 	c.On(m.Dispatcher, m.Dispatcher.Events()...)
 	c.On(m.Summaries.Handler(), "job.finished")
 	c.On(m.Tracker, m.Tracker.Events()...)
+	// After the tracker ended the turn: the next queued message there starts the next one.
+	c.On(QueueRunner{pool: m.pool}, "job.finished")
 	return c
 }
 

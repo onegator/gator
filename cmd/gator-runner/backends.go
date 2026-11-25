@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"slices"
+	"sync/atomic"
 
 	"github.com/onegator/gator/internal/runner/backend"
 	"github.com/onegator/gator/internal/runner/backend/acp"
@@ -21,9 +23,27 @@ var builtins = map[string]builtin{
 		if err := claude.PrepareMCPDir(claude.DefaultMCPDir()); err != nil {
 			return nil, err
 		}
+		mode, err := claudeMode(os.Getenv("GATOR_CLAUDE_MODE"))
+		if err != nil {
+			return nil, err
+		}
 		return claude.Backend{Bin: os.Getenv("GATOR_RUNNER_CLAUDE_BIN"), Model: os.Getenv("GATOR_RUNNER_CLAUDE_MODEL"),
-			MCPConfig: os.Getenv("GATOR_RUNNER_CLAUDE_MCP_CONFIG"), Log: log, AllowEnv: cfg.AgentEnv}, nil
+			MCPConfig: os.Getenv("GATOR_RUNNER_CLAUDE_MCP_CONFIG"), Log: log, AllowEnv: cfg.AgentEnv,
+			// One live session per job; a CLI that refuses the protocol sends the backend to
+			// print mode for good, and the runner's next heartbeat says so.
+			Mode: mode, Fallback: &atomic.Bool{}}, nil
 	},
+}
+
+// claudeMode is GATOR_CLAUDE_MODE: a live session unless it says print.
+func claudeMode(v string) (string, error) {
+	switch v {
+	case "", claude.ModeSession:
+		return claude.ModeSession, nil
+	case claude.ModePrint:
+		return claude.ModePrint, nil
+	}
+	return "", fmt.Errorf("GATOR_CLAUDE_MODE is %q; it is session (the default) or print", v)
 }
 
 // backends are the backends this runner runs and advertises: the built-in ones it is told to

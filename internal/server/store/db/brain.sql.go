@@ -1301,7 +1301,7 @@ func (q *Queries) LockLineage(ctx context.Context, lineage pgtype.UUID) error {
 }
 
 const messageAtSeq = `-- name: MessageAtSeq :one
-SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE conversation_id = $1 AND seq = $2
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at, input_intent, queued_for FROM messages WHERE conversation_id = $1 AND seq = $2
 `
 
 type MessageAtSeqParams struct {
@@ -1330,6 +1330,8 @@ func (q *Queries) MessageAtSeq(ctx context.Context, arg MessageAtSeqParams) (Mes
 		&i.EditedAt,
 		&i.DeletedAt,
 		&i.CreatedAt,
+		&i.InputIntent,
+		&i.QueuedFor,
 	)
 	return i, err
 }

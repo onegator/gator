@@ -116,3 +116,36 @@ func toAttachment(a db.MessageAttachment) gen.Attachment {
 	return gen.Attachment{Id: toUUID(a.ID), ConversationId: toUUID(a.ConversationID), MessageId: toUUIDPtr(a.MessageID),
 		Name: a.Name, ContentType: a.ContentType, SizeBytes: a.SizeBytes, CreatedAt: a.CreatedAt.Time}
 }
+
+// AgentAttachment answers a file of the conversation a reply answers in, for the job's own
+// identity: a reply reads its conversation, files included, and nothing else.
+func (s *Server) AgentAttachment(w http.ResponseWriter, r *http.Request, attachmentId gen.AttachmentId) {
+	job, ok := s.agentJob(w, r, cmdAttachmentRead)
+	if !ok || s.conversationsOff(w) || s.attachmentsOff(w) {
+		return
+	}
+	q := db.New(s.Pool)
+	turn, err := q.GetTurnByJob(r.Context(), job.ID)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	conv, err := q.GetConversation(r.Context(), turn.ConversationID)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	att, body, err := s.Conversations.Attachments.OpenIn(r.Context(), conv, fromUUID(attachmentId))
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	defer body.Close()
+	s.note(r, job, "attachment read", map[string]any{"attachment": att.Name, "bytes": att.SizeBytes})
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(att.SizeBytes, 10))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": att.Name}))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
+}

@@ -96,8 +96,16 @@ func TestClaudeJobCommitsPushesAndReportsUsage(t *testing.T) {
 	for _, e := range evs {
 		kinds = append(kinds, e.Type)
 	}
-	if got := strings.Join(kinds, ","); got != "workspace,rate_limit,session,tool_call,tool_result,text,result,digest_requested,session,result,git" {
+	// Claude Code in print mode cannot ask before a tool: what the default approvals policy asks
+	// about is refused instead (--disallowedTools), and the job says so.
+	if got := strings.Join(kinds, ","); got != "approvals_held_as_denials,startup_phase,workspace,startup_phase,rate_limit,startup_phase,session,tool_call,tool_result,text,result,checkpoint,settling,digest_requested,session,result,git" {
 		t.Fatalf("event stream: %s", got)
+	}
+	// The turn was checkpointed on the runner and its diff kept here: the commit the agent made.
+	var cps []gen.Checkpoint
+	if code := h.do("GET", "/jobs/"+job.Id.String()+"/checkpoints", nil, &cps); code != 200 || len(cps) != 1 ||
+		len(cps[0].Files) != 1 || cps[0].Files[0].Path != "gator.txt" || cps[0].Files[0].Status != gen.FileAdded {
+		t.Fatalf("checkpoints: %d %+v", code, cps)
 	}
 
 	var m gen.TaskMetrics

@@ -23,7 +23,7 @@ func (q *Queries) BumpJobObjections(ctx context.Context, id pgtype.UUID) (int32,
 }
 
 const countActiveJobsForRunner = `-- name: CountActiveJobsForRunner :one
-SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled')
+SELECT count(*) FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled', 'settling')
 `
 
 func (q *Queries) CountActiveJobsForRunner(ctx context.Context, runnerID pgtype.UUID) (int64, error) {
@@ -123,7 +123,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 const extendLeases = `-- name: ExtendLeases :execrows
 UPDATE jobs SET lease_expires_at = $1, updated_at = now()
 WHERE runner_id = $2 AND id = ANY($3::uuid[])
-  AND status IN ('leased', 'running', 'stalled')
+  AND status IN ('leased', 'running', 'stalled', 'settling')
 `
 
 type ExtendLeasesParams struct {
@@ -337,7 +337,7 @@ UPDATE jobs
 SET status = 'leased', runner_id = $1, lease_expires_at = $2,
     attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
 WHERE id IN (
-    SELECT j.id FROM jobs j
+    SELECT j.id FROM jobs j JOIN projects pj ON pj.id = j.project_id
     WHERE j.status = 'queued'
       AND j.backend = ANY($3::text[])
       AND (cardinality($4::uuid[]) = 0 OR j.project_id = ANY($4::uuid[]))
@@ -347,13 +347,21 @@ WHERE id IN (
            OR $7::uuid IS NULL OR j.created_by = $7::uuid)
       -- A runner older than protocol v3 runs every job as a phase; it gets only those.
       AND (NOT $8::boolean OR j.kind = 'phase')
+      -- A runner older than protocol v4 cannot hold a work job to an approvals policy, and it would
+      -- let what the policy asks about run unseen: it gets work only of a project that asks nothing.
+      AND ($9::boolean OR (j.tier <> 'work'
+           OR (jsonb_typeof(pj.process_config->'policy'->'approvals'->'ask') = 'array'
+               AND jsonb_array_length(pj.process_config->'policy'->'approvals'->'ask') = 0
+               AND COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(pj.process_config->'policy'->'approvals'->'deny') = 'array'
+                                                    THEN pj.process_config->'policy'->'approvals'->'deny' END), 0) = 0
+               AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.id = j.agent_id AND a.policy ? 'approvals'))))
       -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
       -- with no tools: a runner would refuse it anywhere else.
-      AND (j.tier <> 'chat' OR j.backend = ANY($9::text[]))
-      AND (j.kind <> 'summary' OR j.backend = ANY($10::text[]))
+      AND (j.tier <> 'chat' OR j.backend = ANY($10::text[]))
+      AND (j.kind <> 'summary' OR j.backend = ANY($11::text[]))
     ORDER BY j.created_at
-    LIMIT $11
-    FOR UPDATE SKIP LOCKED
+    LIMIT $12
+    FOR UPDATE OF j SKIP LOCKED
 )
 RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
 `
@@ -367,6 +375,7 @@ type LeaseJobsParams struct {
 	OnlyJob    pgtype.UUID        `json:"only_job"`
 	Owner      pgtype.UUID        `json:"owner"`
 	PhaseOnly  bool               `json:"phase_only"`
+	Asks       bool               `json:"asks"`
 	ReadOnly   []string           `json:"read_only"`
 	NoTools    []string           `json:"no_tools"`
 	Slots      int32              `json:"slots"`
@@ -389,6 +398,7 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 		arg.OnlyJob,
 		arg.Owner,
 		arg.PhaseOnly,
+		arg.Asks,
 		arg.ReadOnly,
 		arg.NoTools,
 		arg.Slots,
@@ -447,7 +457,7 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 const listActiveJobsOnRunners = `-- name: ListActiveJobsOnRunners :many
 SELECT j.id, j.runner_id, j.task_id, j.phase, j.role, j.backend, j.status, j.started_at, j.placement, t.title AS task_title
 FROM jobs j JOIN tasks t ON t.id = j.task_id
-WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled')
+WHERE j.runner_id IS NOT NULL AND j.status IN ('leased', 'running', 'stalled', 'settling')
 ORDER BY j.started_at NULLS LAST
 `
 
@@ -802,8 +812,11 @@ func (q *Queries) LockTask(ctx context.Context, key string) error {
 
 const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
-SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
-WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
+SET status = CASE WHEN status = 'settling'
+                    OR (status = 'stalled' AND EXISTS (SELECT 1 FROM job_events e WHERE e.job_id = jobs.id AND e.type = 'settling'))
+                  THEN 'settling' ELSE 'running' END,
+    started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled', 'settling')
 RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
 `
 
@@ -812,9 +825,63 @@ type MarkJobActiveParams struct {
 	RunnerID pgtype.UUID `json:"runner_id"`
 }
 
-// First event moves leased → running; any event revives a stalled job.
+// First event moves leased → running; any event revives a stalled job. A job settling (its agent
+// done, the runner checkpointing and pushing) stays settling, and one that stalled while settling
+// goes back to it.
 func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (Job, error) {
 	row := q.db.QueryRow(ctx, markJobActive, arg.ID, arg.RunnerID)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.ProjectID,
+		&i.Phase,
+		&i.Role,
+		&i.Backend,
+		&i.Instruction,
+		&i.Status,
+		&i.RunnerID,
+		&i.Attempts,
+		&i.MaxAttempts,
+		&i.LeaseExpiresAt,
+		&i.LastEventAt,
+		&i.Bounds,
+		&i.Receipt,
+		&i.StopReason,
+		&i.CreatedByKind,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+		&i.Model,
+		&i.UnassignableSince,
+		&i.ContextBytes,
+		&i.ContextDocs,
+		&i.Objections,
+		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
+	)
+	return i, err
+}
+
+const markJobSettling = `-- name: MarkJobSettling :one
+UPDATE jobs SET status = 'settling', last_event_at = now(), updated_at = now()
+WHERE id = $1 AND runner_id = $2 AND status IN ('running', 'stalled')
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
+`
+
+type MarkJobSettlingParams struct {
+	ID       pgtype.UUID `json:"id"`
+	RunnerID pgtype.UUID `json:"runner_id"`
+}
+
+// The agent is done; the runner settles what it left (checkpoint, digest, push) before its receipt.
+func (q *Queries) MarkJobSettling(ctx context.Context, arg MarkJobSettlingParams) (Job, error) {
+	row := q.db.QueryRow(ctx, markJobSettling, arg.ID, arg.RunnerID)
 	var i Job
 	err := row.Scan(
 		&i.ID,
@@ -887,7 +954,7 @@ func (q *Queries) MarkSilentRunnersOffline(ctx context.Context, before pgtype.Ti
 
 const markStalledJobs = `-- name: MarkStalledJobs :many
 UPDATE jobs SET status = 'stalled', updated_at = now()
-WHERE status = 'running' AND last_event_at < $1
+WHERE status IN ('running', 'settling') AND last_event_at < $1
 RETURNING id, task_id
 `
 
@@ -919,7 +986,7 @@ func (q *Queries) MarkStalledJobs(ctx context.Context, before pgtype.Timestamptz
 const markUnassignableJobs = `-- name: MarkUnassignableJobs :many
 UPDATE jobs SET unassignable_since = now(), updated_at = now()
 WHERE id IN (
-    SELECT j.id FROM jobs j
+    SELECT j.id FROM jobs j JOIN projects p2 ON p2.id = j.project_id
     WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < $1
       AND NOT ($2::boolean AND j.placement = 'cloud')
       AND NOT EXISTS (
@@ -936,8 +1003,14 @@ WHERE id IN (
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
             AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
             AND (j.kind = 'phase' OR r.protocol_version >= 3)
+            AND (r.protocol_version >= 4 OR (j.tier <> 'work'
+           OR (jsonb_typeof(p2.process_config->'policy'->'approvals'->'ask') = 'array'
+               AND jsonb_array_length(p2.process_config->'policy'->'approvals'->'ask') = 0
+               AND COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(p2.process_config->'policy'->'approvals'->'deny') = 'array'
+                                                    THEN p2.process_config->'policy'->'approvals'->'deny' END), 0) = 0
+               AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.id = j.agent_id AND a.policy ? 'approvals'))))
       )
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF j SKIP LOCKED
 )
 RETURNING id, task_id, project_id, backend, placement
 `
@@ -1015,7 +1088,7 @@ SET status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
     runner_id = CASE WHEN attempts >= max_attempts THEN runner_id ELSE NULL END,
     finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END,
     lease_expires_at = NULL, updated_at = now()
-WHERE status IN ('leased', 'running', 'stalled') AND lease_expires_at < $1
+WHERE status IN ('leased', 'running', 'stalled', 'settling') AND lease_expires_at < $1
 RETURNING id, task_id, status
 `
 
@@ -1128,6 +1201,22 @@ func (q *Queries) SaveJobContextDoc(ctx context.Context, arg SaveJobContextDocPa
 		arg.LeftOut,
 		arg.Dropped,
 	)
+	return err
+}
+
+const setRunnerBackendCapabilities = `-- name: SetRunnerBackendCapabilities :exec
+UPDATE runners SET capabilities = jsonb_set(capabilities, '{per_backend}', $1::jsonb), updated_at = now()
+WHERE id = $2
+`
+
+type SetRunnerBackendCapabilitiesParams struct {
+	PerBackend []byte      `json:"per_backend"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+// What a runner's backends can do now, when its heartbeat says it changed since the registration.
+func (q *Queries) SetRunnerBackendCapabilities(ctx context.Context, arg SetRunnerBackendCapabilitiesParams) error {
+	_, err := q.db.Exec(ctx, setRunnerBackendCapabilities, arg.PerBackend, arg.ID)
 	return err
 }
 

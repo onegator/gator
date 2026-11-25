@@ -595,6 +595,8 @@ type Message struct {
 	EditedAt       pgtype.Timestamptz `json:"edited_at"`
 	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	InputIntent    *string            `json:"input_intent"`
+	QueuedFor      []pgtype.UUID      `json:"queued_for"`
 }
 
 type MessageAttachment struct {
@@ -839,6 +841,22 @@ type Release struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
+type ReviewComment struct {
+	ID           pgtype.UUID        `json:"id"`
+	CheckpointID pgtype.UUID        `json:"checkpoint_id"`
+	AuthorID     pgtype.UUID        `json:"author_id"`
+	Path         string             `json:"path"`
+	Side         string             `json:"side"`
+	LineStart    int32              `json:"line_start"`
+	LineEnd      int32              `json:"line_end"`
+	Body         string             `json:"body"`
+	Snippet      string             `json:"snippet"`
+	MessageID    pgtype.UUID        `json:"message_id"`
+	ResolvedAt   pgtype.Timestamptz `json:"resolved_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Runner struct {
 	ID              pgtype.UUID        `json:"id"`
 	TokenID         pgtype.UUID        `json:"token_id"`
@@ -858,6 +876,24 @@ type Runner struct {
 	RetiredAt       pgtype.Timestamptz `json:"retired_at"`
 	Placement       string             `json:"placement"`
 	OwnerID         pgtype.UUID        `json:"owner_id"`
+}
+
+type RuntimeRequest struct {
+	ID        pgtype.UUID        `json:"id"`
+	JobID     pgtype.UUID        `json:"job_id"`
+	TurnID    pgtype.UUID        `json:"turn_id"`
+	Kind      string             `json:"kind"`
+	Tool      *string            `json:"tool"`
+	Input     []byte             `json:"input"`
+	Rule      string             `json:"rule"`
+	ToolUseID string             `json:"tool_use_id"`
+	Status    string             `json:"status"`
+	Stopped   bool               `json:"stopped"`
+	Feedback  *string            `json:"feedback"`
+	DecidedBy pgtype.UUID        `json:"decided_by"`
+	DecidedAt pgtype.Timestamptz `json:"decided_at"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Skill struct {
@@ -898,6 +934,31 @@ type Task struct {
 	AgentsAllowedAt     pgtype.Timestamptz `json:"agents_allowed_at"`
 	AgentsAllowedBy     pgtype.UUID        `json:"agents_allowed_by"`
 	Automation          *string            `json:"automation"`
+}
+
+type TurnCheckpoint struct {
+	ID                  pgtype.UUID        `json:"id"`
+	JobID               pgtype.UUID        `json:"job_id"`
+	TurnID              pgtype.UUID        `json:"turn_id"`
+	Attempt             int32              `json:"attempt"`
+	Seq                 int32              `json:"seq"`
+	Repo                string             `json:"repo"`
+	BaseCommit          string             `json:"base_commit"`
+	HeadCommit          string             `json:"head_commit"`
+	Files               []byte             `json:"files"`
+	FilesTruncated      bool               `json:"files_truncated"`
+	DiffKey             *string            `json:"diff_key"`
+	Diff                []byte             `json:"diff"`
+	DiffBytes           int64              `json:"diff_bytes"`
+	Truncated           bool               `json:"truncated"`
+	WholeFiles          []byte             `json:"whole_files"`
+	WholeKey            *string            `json:"whole_key"`
+	WholeDiff           []byte             `json:"whole_diff"`
+	WholeBytes          int64              `json:"whole_bytes"`
+	WholeTruncated      bool               `json:"whole_truncated"`
+	WholeFilesTruncated bool               `json:"whole_files_truncated"`
+	TookMs              int32              `json:"took_ms"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
 type UsageRecord struct {

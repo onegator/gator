@@ -108,7 +108,7 @@ func (f *fixture) session(t *testing.T) *session {
 	sctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	return &session{m: f.m, ctx: sctx, cancel: cancel, runnerID: row.ID, tokenID: tok, name: name, caps: caps, projects: []pgtype.UUID{f.project},
-		placement: proto.PlacementLocal}
+		placement: proto.PlacementLocal, version: proto.Version}
 }
 
 // queuedJob queues a job in the fixture's project, for the fixture's backend.
@@ -132,7 +132,7 @@ func (f *fixture) leasedJob(t *testing.T, s *session) db.Job {
 	t.Helper()
 	ctx := context.Background()
 	job := f.queuedJob(t)
-	leased, err := f.q.LeaseJobs(ctx, db.LeaseJobsParams{RunnerID: s.runnerID, LeaseUntil: ts(time.Now().Add(time.Minute)),
+	leased, err := f.q.LeaseJobs(ctx, db.LeaseJobsParams{Asks: true, RunnerID: s.runnerID, LeaseUntil: ts(time.Now().Add(time.Minute)),
 		Backends: []string{f.backend}, Projects: []pgtype.UUID{f.project}, Slots: 1, Placement: job.Placement})
 	if err != nil || len(leased) != 1 || leased[0].ID != job.ID {
 		t.Fatalf("lease: %v %v", leased, err)

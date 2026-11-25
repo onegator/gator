@@ -248,7 +248,32 @@ and `/stop`; live output streams on the WebSocket topic `job:<id>`.
    runner restart in `$WORKDIR/outbox.json`.
 
 `internal/runner/backend/claude/testdata` holds sanitized recordings of real Claude Code 2.1.270
-sessions; the parser and backend tests replay them through a fake `claude`.
+sessions; the parser and backend tests replay them through a fake `claude`, and every recording
+(Claude's and the ACP agents') replays into the job events of a golden file beside it
+(`backend/replay`; `GATOR_UPDATE_GOLDEN=1` rewrites them).
+
+### Live sessions, checkpoints and approvals (phase 7)
+
+- **Session mode.** By default (`GATOR_CLAUDE_MODE=session`) a job's Claude Code is one process with
+  stream-json in and out: a steer goes into the running turn as a user message, without a restart;
+  Stop is an interrupt that ends the turn in under 2 s; the CLI asks the runner before a tool its
+  permission mode does not settle. `GATOR_CLAUDE_MODE=print` is `claude -p` per turn as above; a
+  CLI that refuses the session flags falls back to it by itself. What each backend can do (steer
+  live, stop natively, ask, take images) is reported per backend and shown on every job
+  (`Job.capabilities`), so a client hides what a job cannot do.
+- **Checkpoints.** Before a work job's first turn and after each one the runner commits the whole
+  worktree on a hidden ref (`refs/gator/checkpoints/<job>/<n>`, never pushed) in an index of its
+  own, without touching the agent's branch or index, and sends the turn's diff and the job's
+  (each cut at 1 MiB, redacted on the server). `GET /jobs/{id}/checkpoints`, `GET
+  /checkpoints/{id}/diff`, `GET /jobs/{id}/diff`; people comment on lines and send the notes to the
+  agent (`POST /jobs/{id}/comments/send`). `process_config.checkpoints.enabled=false` turns them off.
+- **Approvals.** `process_config.policy.approvals` names the tools of a work turn that wait for a
+  person (default: `Bash(curl:*)`, `Bash(wget:*)`, `Bash(git push:*)`, 30 minutes, refused when
+  nobody answers). The request is a `tool_approval` card in the task's thread, `GET
+  /runtime-requests` lists what waits for you, and a member decides it once. A backend that cannot
+  ask refuses those tools instead.
+- **Files.** A reply's agent is handed the files sent with the ask and the latest messages, fetched
+  with the job's own token outside the worktree; a Claude session sees the images as images.
 
 ### Agents speaking ACP
 

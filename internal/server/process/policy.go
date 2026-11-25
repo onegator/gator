@@ -16,6 +16,9 @@ type RolePolicy struct {
 	Backend    string  `json:"backend,omitempty"`
 	Model      string  `json:"model,omitempty"`
 	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
+	// Approvals, in an agent's own policy, tightens the project's (Approvals.Tighten); in a role's
+	// or a tier's it means nothing.
+	Approvals *Approvals `json:"approvals,omitempty"`
 }
 
 // Policy is the project's choice of backends and models per role, and its daily spend limit.
@@ -33,6 +36,8 @@ type Policy struct {
 	// started the task, or any shared one) or "cloud". Empty is local. A person starting a
 	// job by hand chooses for themselves.
 	Placement string `json:"placement,omitempty"`
+	// Approvals are the tools of a work turn that wait for a person; nil is DefaultApprovals.
+	Approvals *Approvals `json:"approvals,omitempty"`
 }
 
 // backendName is what names a backend: a runner's built-in one (claude) or an agent speaking
@@ -43,8 +48,9 @@ var backendName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}(:[a-z][a-z0-9-]{0,31
 // policy's business: a job waits for a runner with its backend logged in.
 func ValidBackend(s string) bool { return backendName.MatchString(s) }
 
-// CheckBackends refuses a configuration that names a backend no runner could ever advertise, at
-// the moment it is written: a typo would otherwise leave every job of the role waiting for good.
+// CheckBackends refuses a configuration that names a backend no runner could ever advertise (or
+// approvals a runner could not hold), at the moment it is written: a typo would otherwise leave
+// every job of the role waiting for good.
 func (c ProjectConfig) CheckBackends() error {
 	check := func(where, b string) error {
 		if b != "" && !ValidBackend(b) {
@@ -59,6 +65,11 @@ func (c ProjectConfig) CheckBackends() error {
 	}
 	if c.Policy == nil {
 		return nil
+	}
+	if a := c.Policy.Approvals; a != nil {
+		if err := a.Check(); err != nil {
+			return err
+		}
 	}
 	if err := check("policy.default", c.Policy.Default.Backend); err != nil {
 		return err

@@ -13,6 +13,26 @@ info:
     events carry ids and seq, never message bodies; a client reads the messages after its last
     seq. A client sends {"typing":"<conversationId>"} to say it is typing; the others in the
     conversation get a conversation.typing event, which is never stored.
+
+
+    Events of a job (topic job:<id>; the inbox topic too for runtime_request.*), payloads as
+    stored: job.checkpoint {task_id, checkpoint_id, seq, repo, summary: {seq, files, added,
+    removed}, took_ms} — a turn was checkpointed, read GET /jobs/{id}/checkpoints; job.settling
+    {task_id, status: settling, …} — the agent is done, the runner settles before the receipt;
+    job.startup {task_id, phase: checkout|mcp|initialize|ready}; runtime_request.created,
+    runtime_request.decided, runtime_request.expired, runtime_request.cancelled {request_id, kind:
+    tool_approval|question, tool, status, turn_id} — read GET /runtime-requests/{id}; a client
+    drops a decided, expired or cancelled one from "Needs you". Of a conversation (topic
+    conversation:<id>, and me): message.dequeued {messageId, seq, kind, authorKind, authorId,
+    intent: turn_start|promoted_to_steer, agents: [agent ids it was queued for]} — a queued message
+    left the queue (read the message again; it is no longer in GET /conversations/{id}/queue).
+
+
+    Push notifications (APNs) carry a link and a category the app gives its buttons: TOOL_APPROVAL
+    (Allow, Deny — Deny opens the app for the reason; data request_id, task_id; link
+    gator://runtime-requests/<id>), QUESTION (opens the app to answer; the same data and link),
+    TURN_FINISHED (data turn_id; link gator://conversations/<id>). Decide with POST
+    /runtime-requests/{id}/decide.
 servers:
   - url: /api/v1
 paths:
@@ -1109,6 +1129,20 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/AgentThread" } } } }
         "403": { $ref: "#/components/responses/Error" }
+  /agent/attachments/{attachmentId}:
+    get:
+      operationId: agentAttachment
+      description: |
+        A file sent in the conversation the job's reply answers in (or with the message its thread
+        hangs under), for the job's own identity: what the runner fetches of Job.attachments into a
+        directory outside the worktree. Never shown inline: application/octet-stream, whatever the
+        file says it is.
+      parameters: [ { $ref: "#/components/parameters/attachmentId" } ]
+      responses:
+        "200": { description: the file, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /agent/tasks:
     post:
       operationId: agentProposeTask
@@ -1147,7 +1181,13 @@ paths:
   /tasks/{taskId}/jobs:
     get:
       operationId: listTaskJobs
-      parameters: [ { $ref: "#/components/parameters/taskId" } ]
+      description: |
+        The task's jobs. kind=phase is what the task view shows by default (the work of its phases;
+        "is running", "nothing to run" and the phase bar look at these alone); the answers and
+        summaries in its conversation are kind=reply and kind=summary.
+      parameters:
+        - { $ref: "#/components/parameters/taskId" }
+        - { name: kind, in: query, schema: { type: string, enum: [phase, reply, summary] } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Job" } } } } }
     post:
@@ -1213,12 +1253,219 @@ paths:
       responses:
         "202": { description: delivered to the runner }
         "409": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/checkpoints:
+    get:
+      operationId: listJobCheckpoints
+      description: |
+        What each turn of the job changed, turn by turn: the runner checkpoints the worktree after
+        every turn of a work job (a commit on a hidden ref, never pushed; the agent's branch and index
+        are left alone) and sends the turn's files with their line counts. A chat job, a job without a
+        repository, a v3 runner and a project with process_config.checkpoints.enabled=false have none.
+        For whoever may read the job.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Checkpoint" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/diff:
+    get:
+      operationId: getJobDiff
+      description: |
+        The job's diff over its turns from..to (seq numbers, both included; default the first and the
+        last), as a unified diff ("this turn / the whole job" in the diff view). From the first turn
+        it is exactly the worktree as the job found it against turn `to`. From a later turn it is the
+        turns' own diffs put together file by file, each file's parts one after another: the server
+        keeps diffs, not the repository. Every diff is redacted like logs before it is kept and cut at
+        1 MiB (Checkpoint.truncated).
+      parameters:
+        - { $ref: "#/components/parameters/jobId" }
+        - { name: from, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: to, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: repo, in: query, schema: { type: string }, description: "the repository, for a project with more than one; default the job's first" }
+        - { name: ignoreWhitespace, in: query, schema: { type: boolean }, description: "leave out changes that only change whitespace" }
+      responses:
+        "200": { description: a unified diff, content: { text/x-diff: { schema: { type: string } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /checkpoints/{checkpointId}/diff:
+    get:
+      operationId: getCheckpointDiff
+      description: |
+        One turn's diff against the turn before (the first turn's against the worktree as the job
+        found it), or with whole=true the job's diff up to this turn. For whoever may read its job.
+      parameters:
+        - { $ref: "#/components/parameters/checkpointId" }
+        - { name: whole, in: query, schema: { type: boolean } }
+        - { name: ignoreWhitespace, in: query, schema: { type: boolean } }
+      responses:
+        "200": { description: a unified diff, content: { text/x-diff: { schema: { type: string } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /checkpoints/{checkpointId}/comments:
+    post:
+      operationId: createReviewComment
+      description: |
+        A draft comment on lines of the checkpoint's diff (its turn's, or the job's up to it): a path,
+        a side (new numbers the file after the change, old before) and a range of lines the diff
+        shows; the server keeps the code there with it (snippet). It stays the author's draft until
+        they send their drafts. A member of the job's project who may read the job.
+      parameters: [ { $ref: "#/components/parameters/checkpointId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewReviewComment" } } }
+      responses:
+        "201": { description: kept as a draft, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewComment" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/comments:
+    get:
+      operationId: listJobReviewComments
+      description: The job's comments to lay over its diff, turn by turn — every comment sent, and the caller's own drafts.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ReviewComment" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/comments/send:
+    post:
+      operationId: sendReviewComments
+      description: |
+        "Send the notes to @worker": the caller's drafts on the job become one message, by the
+        caller, mentioning the agent (the job's own unless agentId says another), where the job's
+        agent answered (its turn's conversation, else the task's thread). The mention asks the agent
+        as any mention does — a work agent on a task nobody allowed agents on answers in chat and a
+        consent card asks. The comments go as structure, not as text to parse: the agent reads each
+        (file, lines, the code there, the note) in the package of its turn, under "Notes on your
+        changes". 400 when the caller has no drafts on the job.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      requestBody:
+        content: { application/json: { schema: { $ref: "#/components/schemas/SendReviewComments" } } }
+      responses:
+        "201": { description: sent, content: { application/json: { schema: { $ref: "#/components/schemas/SentReviewComments" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /review-comments/{commentId}:
+    patch:
+      operationId: updateReviewComment
+      description: What a draft says (its author only), or whether a comment is resolved (anyone who may comment on the job).
+      parameters: [ { $ref: "#/components/parameters/commentId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReviewCommentChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewComment" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteReviewComment
+      description: Take back one of the caller's drafts; a comment that was sent stays (resolve it instead).
+      parameters: [ { $ref: "#/components/parameters/commentId" } ]
+      responses:
+        "204": { description: taken back }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /conversations/{conversationId}/queue:
+    get:
+      operationId: listConversationQueue
+      description: |
+        The conversation's queue: messages people queued while an agent answered, oldest first.
+        When the turn ends the first of them starts the next turn; each can be edited (PATCH
+        /messages/{id}), deleted, or sent at once as a steer. For whoever may read the conversation.
+      parameters: [ { $ref: "#/components/parameters/conversationId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Message" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /messages/{messageId}/steer:
+    post:
+      operationId: sendQueuedMessageNow
+      description: '"Send now as a steer": its author takes a queued message out of the queue and it steers the running turn (or starts a turn, when none runs any more). 409 when it is no longer queued.'
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      responses:
+        "200": { description: sent, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /runtime-requests:
+    get:
+      operationId: listWaitingRuntimeRequests
+      description: |
+        What agents wait for the caller to decide, newest first ("Needs you"): tool approvals and
+        questions of turns in conversations where the caller, a member of the project, may write.
+        A request leaves the list when someone decides it (from any device: runtime_request.decided
+        reaches the job's and the inbox's WebSocket topics), when it expires, or when its turn ends.
+      parameters:
+        - { name: projectId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RuntimeRequest" } } } } }
+        "503": { $ref: "#/components/responses/Error" }
+  /runtime-requests/{requestId}:
+    get:
+      operationId: getRuntimeRequest
+      description: One request, for whoever may read where its agent works.
+      parameters: [ { $ref: "#/components/parameters/requestId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeRequest" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /runtime-requests/{requestId}/decide:
+    post:
+      operationId: decideRuntimeRequest
+      description: |
+        The tool_approval card's buttons: allow, allow until the session ends (the same rule is let
+        through from then on), deny (feedback is the reason the agent reads) or stop (deny and stop
+        the turn). A question is answered with allow and the answer as feedback. A member of the
+        job's project who may write where the agent works (its turn's conversation, else the task's
+        thread), like Allow on a consent card; nobody from outside the workspace. The request is
+        decided once: 409 when it is no longer waiting (decided, expired, its turn ended). Text a
+        member writes in the conversation while the agent waits is a denial with that text as the
+        reason, and steers the agent too.
+      parameters: [ { $ref: "#/components/parameters/requestId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeDecision" } } }
+      responses:
+        "200": { description: decided, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeRequest" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/runtime-requests:
+    get:
+      operationId: listJobRuntimeRequests
+      description: Everything the job's agent asked a person, oldest first, for whoever may read the job.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RuntimeRequest" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /runners:
     get:
       operationId: listRunners
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RunnerInfo" } } } } }
   /runners/{runnerId}:
+    get:
+      operationId: getRunner
+      description: |
+        One runner, with what each of its backends can do in a live session
+        (capabilities.perBackend): a client hides Steer, a native Stop and approval cards for a job
+        whose backend cannot carry them out.
+      parameters: [ { $ref: "#/components/parameters/runnerId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RunnerInfo" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
     delete:
       operationId: forgetRunner
       description: |
@@ -2090,6 +2337,9 @@ components:
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    checkpointId: { name: checkpointId, in: path, required: true, schema: { type: string, format: uuid } }
+    commentId: { name: commentId, in: path, required: true, schema: { type: string, format: uuid } }
+    requestId: { name: requestId, in: path, required: true, schema: { type: string, format: uuid } }
     turnId: { name: turnId, in: path, required: true, schema: { type: string, format: uuid } }
     agentId: { name: agentId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2312,7 +2562,7 @@ components:
         placement: { type: string, enum: [local, cloud], description: "where the job runs" }
         model: { type: string }
         instruction: { type: string }
-        status: { type: string, enum: [queued, leased, running, stalled, done, failed, stopped] }
+        status: { type: string, enum: [queued, leased, running, stalled, settling, done, failed, stopped], description: "settling: the agent is done and the runner is settling what it left (the last checkpoint, the digest, the push) before its receipt; the card says it is finishing" }
         runnerId: { type: string, format: uuid }
         attempts: { type: integer }
         maxAttempts: { type: integer }
@@ -2323,9 +2573,110 @@ components:
         contextBytes: { type: integer, description: "how much of the prompt was documents this job was handed" }
         contextDocs: { type: integer, description: "how many documents" }
         objections: { type: integer, description: "how many times this turn was sent back to work before it was allowed to end" }
+        capabilities: { $ref: "#/components/schemas/BackendCapabilities" }
         createdAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
+    Checkpoint:
+      type: object
+      description: One turn of a job, checkpointed. files and the diff are the turn's; wholeFiles and the whole diff are the job's up to it.
+      required: [id, jobId, seq, repo, baseCommit, headCommit, files, diffBytes, truncated, wholeFiles, wholeBytes, wholeTruncated, tookMs, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        jobId: { type: string, format: uuid }
+        turnId: { type: string, format: uuid, description: "the conversation turn the job answered, for a reply" }
+        seq: { type: integer, description: "the turn of the job: 1 is the first, then one more after every steer or objection" }
+        attempt: { type: integer, description: "the attempt of the job (a job its runner lost is leased again and starts its turns over); the list holds the latest" }
+        filesTruncated: { type: boolean, description: "more files changed than files lists" }
+        wholeFilesTruncated: { type: boolean }
+        repo: { type: string }
+        baseCommit: { type: string, description: "the checkpoint before (the worktree as the job found it, for seq 1); on the runner only" }
+        headCommit: { type: string }
+        files: { type: array, items: { $ref: "#/components/schemas/FileChange" } }
+        diffBytes: { type: integer, format: int64 }
+        truncated: { type: boolean, description: "the turn's diff was cut at 1 MiB" }
+        wholeFiles: { type: array, items: { $ref: "#/components/schemas/FileChange" } }
+        wholeBytes: { type: integer, format: int64 }
+        wholeTruncated: { type: boolean }
+        tookMs: { type: integer, description: "how long the runner took to checkpoint (checkpoint_ms)" }
+        createdAt: { type: string, format: date-time }
+    RuntimeRequest:
+      type: object
+      description: An agent waiting for a person mid-turn. The card is tool_approval (or question), keyed approval:<id>, in the task's thread.
+      required: [id, jobId, kind, input, rule, status, expiresAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        jobId: { type: string, format: uuid }
+        turnId: { type: string, format: uuid }
+        kind: { type: string, enum: [tool_approval, question] }
+        tool: { type: string }
+        input: { type: object, additionalProperties: true, description: "the tool's input, redacted like logs" }
+        rule: { type: string, description: "the rule of the approvals policy that asks; empty for a question" }
+        status: { type: string, enum: [pending, allowed, allowed_for_session, denied, expired, cancelled], x-enum-varnames: [RequestPending, RequestAllowed, RequestAllowedForSession, RequestDenied, RequestExpired, RequestCancelled] }
+        stopped: { type: boolean, description: "denied by stopping the turn" }
+        feedback: { type: string, description: "why it was denied, or the answer to a question" }
+        decidedBy: { type: string, format: uuid }
+        decidedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+    RuntimeDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [allow, allow_for_session, deny, stop], x-enum-varnames: [DecideAllow, DecideAllowForSession, DecideDeny, DecideStop] }
+        feedback: { type: string, maxLength: 4000, description: "the reason of a denial, which the agent reads; the answer to a question" }
+    NewReviewComment:
+      type: object
+      required: [path, side, lineStart, body]
+      properties:
+        path: { type: string }
+        side: { type: string, enum: [old, new] }
+        lineStart: { type: integer, minimum: 1 }
+        lineEnd: { type: integer, minimum: 1, description: "default lineStart; at most 500 lines" }
+        body: { type: string, maxLength: 8000 }
+    ReviewComment:
+      type: object
+      required: [id, checkpointId, authorId, path, side, lineStart, lineEnd, body, snippet, state, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        checkpointId: { type: string, format: uuid }
+        checkpointSeq: { type: integer, description: "the turn it is on (in a job's list)" }
+        authorId: { type: string, format: uuid }
+        path: { type: string }
+        side: { type: string, enum: [old, new] }
+        lineStart: { type: integer }
+        lineEnd: { type: integer }
+        body: { type: string }
+        snippet: { type: string, description: "the lines it is about as the diff showed them, each with its diff marker" }
+        messageId: { type: string, format: uuid, description: "the message it went to the agent with; absent for a draft" }
+        state: { type: string, enum: [draft, sent, resolved], x-enum-varnames: [CommentDraft, CommentSent, CommentResolved] }
+        resolvedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ReviewCommentChange:
+      type: object
+      properties:
+        body: { type: string, maxLength: 8000 }
+        resolved: { type: boolean }
+    SendReviewComments:
+      type: object
+      properties:
+        agentId: { type: string, format: uuid, description: "the agent the notes are for; default the job's" }
+    SentReviewComments:
+      type: object
+      required: [message, sent]
+      properties:
+        message: { $ref: "#/components/schemas/Message" }
+        sent: { type: integer, description: "how many comments went with it" }
+    FileChange:
+      type: object
+      required: [path, added, removed, status]
+      properties:
+        path: { type: string }
+        added: { type: integer }
+        removed: { type: integer }
+        status: { type: string, enum: [added, modified, deleted], x-enum-varnames: [FileAdded, FileModified, FileDeleted] }
+        binary: { type: boolean, description: "changed, with no line counts and nothing of it in the diff" }
     JobEvent:
       type: object
       required: [seq, type, at, payload]
@@ -2382,6 +2733,28 @@ components:
         canLogin: { type: boolean, description: "this runner can drive an interactive backend login; when false, asking it to is refused" }
         readOnly: { type: array, items: { type: string }, description: "its backends that keep a chat job read-only; absent from a runner that says nothing (every backend)" }
         noTools: { type: array, items: { type: string }, description: "its backends that run a summary with no tools; absent from a runner that says nothing (every backend)" }
+        perBackend:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/BackendCapabilities" }
+          description: "what each backend can do in a live session (protocol v4); a backend missing here can do none of it"
+    BackendCapabilities:
+      type: object
+      description: |
+        What one backend of a runner can do while a job runs. Every flag false is a backend that
+        restarts to steer, kills to stop and never asks before a tool (a v3 runner, or Claude Code in
+        print mode).
+      required: [activeSteering, steeringInterruptsTool, nativeInterrupt, toolApprovals, approvalsLiveOnly, streamsText, streamsReasoning, attachments, checkpoints, enforcement]
+      properties:
+        activeSteering: { type: boolean, description: "a message reaches the running turn without restarting it; without it Steer interrupts and resumes" }
+        steeringInterruptsTool: { type: boolean, description: "a steer interrupts the tool that is running" }
+        nativeInterrupt: { type: boolean, description: "Stop ends the turn without killing the process (within about 2 s)" }
+        toolApprovals: { type: boolean, description: "the backend asks before a tool the project's approvals policy names, and waits (tool_approval cards)" }
+        approvalsLiveOnly: { type: boolean, description: "an approval still waiting when the process dies is lost (the agent is told no)" }
+        streamsText: { type: boolean }
+        streamsReasoning: { type: boolean }
+        attachments: { type: boolean, description: "takes images as images; without it the agent gets files as paths only" }
+        checkpoints: { type: boolean, description: "the runner checkpoints the worktree after every turn (GET /jobs/{id}/checkpoints)" }
+        enforcement: { type: string, enum: [native, runner, ""], description: "who holds the agent to its tier: the CLI's own flags, or the runner answering its permission requests" }
     RunnerInfo:
       type: object
       required: [id, name, location, placement, status, connected, capabilities, authState, protocolVersion, binaryVersion]
@@ -3546,6 +3919,15 @@ components:
         clientId: { type: string, maxLength: 200, description: "the sender's idempotency key, unique per sender in the conversation" }
         mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
         attachments: { type: array, items: { type: string, format: uuid }, description: "files the sender uploaded into this conversation (POST /attachments) and has not sent yet" }
+        intent:
+          type: string
+          enum: [steer, queued]
+          description: |
+            While an agent answers in the conversation: steer (the default) corrects the running turn,
+            queued waits for its end and then starts the next turn (the composer's "Steer" and "Queue";
+            ⌘⏎ swaps them). A message that starts with / is always queued while a turn runs. Without a
+            turn running it is an ordinary message. Steering a backend without activeSteering
+            (Job.capabilities) interrupts and resumes the turn.
     MessagePatch:
       type: object
       required: [body]
@@ -3556,6 +3938,10 @@ components:
       required: [id, conversationId, seq, authorKind, kind, body, replyCount, status, origin, createdAt, mentions, reactions, attachments]
       properties:
         id: { type: string, format: uuid }
+        inputIntent:
+          type: string
+          enum: [turn_start, steer, queued, promoted_to_steer]
+          description: "what a person wrote it for while an agent answered: a steer, queued for after the turn (shown above the composer, GET /conversations/{id}/queue), the start of the next turn once dequeued, or sent at once as a steer; absent for a message written with no turn running"
         conversationId: { type: string, format: uuid }
         seq: { type: integer, format: int64 }
         authorKind: { type: string, enum: [user, agent, system, plugin, external] }
@@ -3610,6 +3996,21 @@ components:
         model: { type: string }
         maxCostUsd: { type: number, format: double }
         dailyBudgetUsd: { type: number, format: double, description: "what the agent may spend in a UTC day, jobs still running counted at their cap; absent: only the project's budget" }
+        approvals: { $ref: "#/components/schemas/ApprovalsPolicy" }
+    ApprovalsPolicy:
+      type: object
+      description: |
+        Tools of a work turn that wait for a person (process_config.policy.approvals; an agent's own
+        policy only tightens the project's: its rules are added, its timeout counts when shorter). A
+        rule is Tool, Tool(pattern) — Bash(curl:*) is any command starting with the word curl,
+        anywhere in a pipeline or a chain; a pattern ending in * is a prefix — or mcp:<server>/<tool>
+        with * for every tool of a server. A project that says nothing asks about Bash(curl:*),
+        Bash(wget:*) and Bash(git push:*), with 30m to answer. A request nobody answers is refused.
+      properties:
+        ask: { type: array, items: { type: string } }
+        deny: { type: array, items: { type: string } }
+        timeout: { type: string, description: "a duration, 1m to 24h; default 30m" }
+        onTimeout: { type: string, enum: [deny] }
     NewAgent:
       type: object
       required: [handle, displayName]
@@ -3721,6 +4122,10 @@ components:
       description: >-
         What a card shows. It points at an object (ref) whose current state a client reads; the
         rest is a summary for the list. Its buttons call the endpoints the object already has.
+        A job card's state is the job's status (settling: "finishing"); a tool_approval or question
+        card (ref kind runtime_request, key approval:<id>) has the actions allow,
+        allow_for_session, deny, stop (a question: answer, stop) while it waits — POST
+        /runtime-requests/{id}/decide — and none once decided.
       properties:
         ref: { $ref: "#/components/schemas/CardRef" }
         title: { type: string }
@@ -3729,6 +4134,23 @@ components:
         actions: { type: array, items: { type: string } }
         day: { type: string, description: "brain_proposal: the day (YYYY-MM-DD) whose proposals the card lists" }
         proposals: { type: array, items: { $ref: "#/components/schemas/BrainCardProposal" }, description: "brain_proposal: what the Brain was proposed from the task that day" }
+        changes: { $ref: "#/components/schemas/CardChanges" }
+        startup: { type: string, enum: [checkout, mcp, initialize, ready], x-enum-varnames: [CardStartupCheckout, CardStartupMCP, CardStartupInitialize, CardStartupReady], description: "job: how far the start got, until the first tool call" }
+        tool: { type: string, description: "tool_approval: the tool the agent asks to use" }
+        rule: { type: string, description: "tool_approval: the rule of the approvals policy that asks" }
+        input: { type: object, additionalProperties: true, description: "tool_approval and question: the tool's input, redacted (a note of its size when long)" }
+        expiresAt: { type: string, format: date-time, description: "tool_approval and question: when nobody answering makes it a denial" }
+        decidedBy: { type: string, description: "tool_approval and question: who decided, by name" }
+        feedback: { type: string, description: "tool_approval: the reason of a denial; question: the answer" }
+    CardChanges:
+      type: object
+      description: "job: what the job changed so far, from its last checkpoint (a line under the card, and the diff action: GET /jobs/{id}/diff)"
+      required: [files, added, removed, line]
+      properties:
+        files: { type: integer }
+        added: { type: integer }
+        removed: { type: integer }
+        line: { type: string, description: "e.g. \"3 files, +42 −7\"" }
     BrainCardProposal:
       type: object
       required: [id, kind, scope, title, status]

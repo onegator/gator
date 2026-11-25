@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -26,16 +27,28 @@ type jobSteerer interface {
 	SteerJob(ctx context.Context, jobID pgtype.UUID, message string) error
 }
 
+// waitAnswerer refuses, with a person's message as the reason, what an agent waits for them on.
+// approvals.Service is one.
+type waitAnswerer interface {
+	DenyByMessage(ctx context.Context, job pgtype.UUID, author pgtype.UUID, body string) (int, error)
+}
+
 // Steerer takes a person's message in a conversation where an agent is still answering as a
 // correction of that answer (the job's steer, resumed in the same session) rather than as a new
 // question: a message that asks no agent steers every agent answering there, one that names the
 // answering agent steers it, and the agents it names that are not answering are asked as ever.
 // A job not yet running needs no steer: its agent reads the conversation as it is when it starts.
 type Steerer struct {
-	store steerStore
-	jobs  jobSteerer
-	voice announcer
-	log   *slog.Logger
+	store  steerStore
+	jobs   jobSteerer
+	voice  announcer
+	rights steerRights
+	roles  roleResolver
+	log    *slog.Logger
+	// waits, when set, has the message refuse what the steered agent waits for a person on (a tool
+	// approval, a question), with the message as the reason: what a person writes while the agent
+	// waits is their answer, and it steers too.
+	waits waitAnswerer
 }
 
 // announcer says something as Gator in a conversation. conversations.Voice is one.
@@ -44,11 +57,36 @@ type announcer interface {
 }
 
 // NewSteerer builds it.
-func NewSteerer(store steerStore, jobs jobSteerer, voice announcer, log *slog.Logger) *Steerer {
+func NewSteerer(store steerStore, jobs jobSteerer, voice announcer, rights steerRights, roles roleResolver, log *slog.Logger) *Steerer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Steerer{store: store, jobs: jobs, voice: voice, log: log}
+	return &Steerer{store: store, jobs: jobs, voice: voice, rights: rights, roles: roles, log: log}
+}
+
+// steerRights answers whether a person may write in a conversation. conversations.Access is one.
+type steerRights interface {
+	UserCanWrite(ctx context.Context, conv db.Conversation, user pgtype.UUID) (bool, error)
+}
+
+// mayCorrect says whether a person may correct a turn: write where it answers, and, for a turn
+// that works (writes code on the task), be a member of the project — what starting such work asks
+// of people. Somebody else's message is no correction: it asks the agents it names, under the
+// guards, as any message does.
+func (s *Steerer) mayCorrect(ctx context.Context, u db.User, conv db.Conversation, t db.AgentTurn) (bool, error) {
+	ok, err := s.rights.UserCanWrite(ctx, conv, u.ID)
+	if err != nil || !ok || t.Tier != TierWork {
+		return ok, err
+	}
+	role, err := s.roles.ProjectRole(ctx, auth.Principal{Kind: auth.KindUser, UserID: u.ID, WorkspaceRole: u.WorkspaceRole}, t.ProjectID)
+	return role >= auth.RoleMember, err
+}
+
+// answersWait says whether a message is meant for a turn that waits for a person's decision, and
+// so refuses what it waits on: the person it acts for wrote it, it is a DM or the turn's own thread,
+// or it names the agent. Anything else said nearby is not an answer.
+func answersWait(msg db.Message, conv db.Conversation, t db.AgentTurn, named bool) bool {
+	return named || msg.AuthorID == t.OnBehalfOf || conv.Kind == conversations.KindDM || conv.ParentMessageID.Valid
 }
 
 // Intercept implements Interceptor.
@@ -60,8 +98,12 @@ func (s *Steerer) Intercept(ctx context.Context, msg db.Message, conv db.Convers
 	if err != nil || len(active) == 0 {
 		return asked, err
 	}
+	u, err := s.store.GetUser(ctx, msg.AuthorID)
+	if err != nil {
+		return asked, ignoreGone(err)
+	}
 	who := "A person"
-	if u, err := s.store.GetUser(ctx, msg.AuthorID); err == nil && u.Name != "" {
+	if u.Name != "" {
 		who = u.Name
 	}
 	steered := map[[16]byte]bool{}
@@ -73,8 +115,20 @@ func (s *Steerer) Intercept(ctx context.Context, msg db.Message, conv db.Convers
 		if len(asked) > 0 && !named {
 			continue
 		}
+		ok, err := s.mayCorrect(ctx, u, conv, t)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue // not a correction this person may make: the message goes on as a message
+		}
 		steered[t.AgentID.Bytes] = true
-		err := s.jobs.SteerJob(ctx, t.JobID, fmt.Sprintf("%s says in the conversation:\n\n%s", who, msg.Body))
+		if s.waits != nil && answersWait(msg, conv, t, named) {
+			if _, err := s.waits.DenyByMessage(ctx, t.JobID, msg.AuthorID, msg.Body); err != nil {
+				return nil, err
+			}
+		}
+		err = s.jobs.SteerJob(ctx, t.JobID, fmt.Sprintf("%s says in the conversation:\n\n%s", who, msg.Body))
 		switch {
 		case err == nil, errors.Is(err, runners.ErrJobNotActive), errors.Is(err, pgx.ErrNoRows):
 			// steered, or not started yet (it will read this), or gone

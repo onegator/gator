@@ -1,0 +1,18 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.332","mcp_servers":[],"model":"claude-opus-5","session_id":"00000000-0000-4000-8000-0000000000f1"}},
+    {"type":"tool_call","payload":{"id":"toolu_s1","input":{"command":"ls"},"name":"Bash"}},
+    {"type":"tool_result","payload":{"content":"api\nweb","is_error":false,"tool_use_id":"toolu_s1"}},
+    {"type":"text","payload":{"text":"Only the API layer, then."}},
+    {"type":"result","payload":{"cost_usd":0.05,"is_error":false,"num_turns":2,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "cost_usd": 0.05,
+    "interrupted": false,
+    "reason": "",
+    "session_id": "00000000-0000-4000-8000-0000000000f1",
+    "status": "done",
+    "summary": "Changed the API layer only.",
+    "tool_calls": 1
+  }
+}

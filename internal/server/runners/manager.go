@@ -105,6 +105,38 @@ type Config struct {
 	ProvisionDelay time.Duration
 	// Brain records which Brain entries a job was handed and cited (brain.Citations); nil: none.
 	Brain BrainUse
+	// Checkpoints keeps what runners say each turn changed (review.Checkpoints); nil: a
+	// checkpoint is acknowledged and dropped.
+	Checkpoints CheckpointRecorder
+	// Runtime takes the requests agents wait for a person on (approvals.Service); nil: a request
+	// is refused, and the agent told no.
+	Runtime RuntimeRequests
+}
+
+// RuntimeRequests keeps what a job's agent waits for a person on. approvals.Service is one. A
+// request it already decided answers the decision, for the runner to hear again.
+type RuntimeRequests interface {
+	Request(ctx context.Context, job db.Job, r proto.RuntimeRequest) (*proto.RuntimeDecision, error)
+	// Cancel ends a request the runner no longer waits on.
+	Cancel(ctx context.Context, job db.Job, id string) error
+}
+
+// CheckpointRecorder keeps a checkpoint of a job's worktree. review.Checkpoints is one.
+type CheckpointRecorder interface {
+	Record(ctx context.Context, job db.Job, cp proto.Checkpoint) error
+}
+
+// Refusal is an error that says the runner sent what it had no business sending: the message is
+// acknowledged with the error rather than resent, since a resend would be refused again.
+type Refusal interface {
+	error
+	Refusal()
+}
+
+// refused says whether err is a Refusal.
+func refused(err error) bool {
+	var r Refusal
+	return errors.As(err, &r)
 }
 
 // AuthorRoles names, for the work of an automation, the role whose agent does a job of a given
@@ -136,6 +168,9 @@ type TurnBrief struct {
 	// Private says the conversation is not the whole project's: what the job was handed of it
 	// reaches the runner but is not kept in the job's record, which the project reads.
 	Private bool
+	// Files are the files people sent in the conversation that the agent is handed (v4): the
+	// runner fetches each with the job's own identity.
+	Files []proto.Attachment
 }
 
 // TurnBriefer briefs the agent of a reply. The agents package provides one.
@@ -216,6 +251,10 @@ func New(pool *pgxpool.Pool, proc *process.Service, hub *events.Hub, log *slog.L
 	return &Manager{pool: pool, process: proc, hub: hub, log: log, cfg: cfg, now: time.Now, sessions: map[[16]byte]*session{},
 		machines: map[[16]byte]*machine{}, provisions: map[[16]byte]int{}}
 }
+
+// UseRuntime has r take the requests agents wait for a person on. It is wiring, for a service that
+// needs the manager itself to send its decisions: call it before the manager serves runners.
+func (m *Manager) UseRuntime(r RuntimeRequests) { m.cfg.Runtime = r }
 
 // UseBriefer has b tell replies' agents their conversations. It is wiring, for a briefer that
 // needs the manager itself to queue its summaries: call it before the manager serves runners.
@@ -611,7 +650,7 @@ func (m *Manager) SteerJob(ctx context.Context, jobID pgtype.UUID, message strin
 	if err != nil {
 		return err
 	}
-	if job.Status != "leased" && job.Status != "running" && job.Status != "stalled" {
+	if job.Status != "leased" && job.Status != "running" && job.Status != "stalled" && job.Status != "settling" {
 		return ErrJobNotActive
 	}
 	s := m.session(job.RunnerID)
@@ -619,6 +658,16 @@ func (m *Manager) SteerJob(ctx context.Context, jobID pgtype.UUID, message strin
 		return ErrRunnerOffline
 	}
 	return s.send(proto.TypeSteer, proto.Steer{JobID: uuidString(jobID), Message: message})
+}
+
+// SendDecision tells the runner working on a job how a person decided its agent's request. A runner
+// that is away hears it when it sends the request again after reconnecting.
+func (m *Manager) SendDecision(ctx context.Context, job db.Job, d proto.RuntimeDecision) error {
+	s := m.session(job.RunnerID)
+	if s == nil {
+		return ErrRunnerOffline
+	}
+	return s.send(proto.TypeRuntimeDecision, d)
 }
 
 // RequestLogin asks a runner to start an interactive backend login.

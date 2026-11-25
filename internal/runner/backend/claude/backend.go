@@ -3,23 +3,21 @@
 package claude
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"github.com/onegator/gator/internal/proto"
-	"github.com/onegator/gator/internal/runner/agentenv"
 	"github.com/onegator/gator/internal/runner/backend"
 )
 
@@ -39,6 +37,11 @@ type Backend struct {
 	// AllowEnv names variables the agent gets beyond agentenv's allow-list; a trailing *
 	// matches a prefix. The runner's own GATOR_* never pass.
 	AllowEnv []string
+	// Mode is ModePrint (the zero value) or ModeSession.
+	Mode string
+	// Fallback, when set, is shared by every copy of the backend: a CLI that refuses the session
+	// protocol sets it, and from then on runs are print-mode and the capabilities say so.
+	Fallback *atomic.Bool
 }
 
 // noMCP is the default: a job session gets no MCP servers.
@@ -50,8 +53,12 @@ var _ backend.Backend = Backend{}
 // limit of the runner connection.
 const maxSummary = 200_000
 
-// errToolLimit ends a run that exceeded its tool-call budget.
-var errToolLimit = errors.New("tool call limit reached")
+// errToolLimit ends a run that exceeded its tool-call budget; errOutput one whose output cannot be
+// read on (a line over the limit).
+var (
+	errToolLimit = errors.New("tool call limit reached")
+	errOutput    = errors.New("claude's output could not be read")
+)
 
 // Name implements backend.Backend.
 func (b Backend) Name() string { return "claude" }
@@ -61,6 +68,16 @@ func (b Backend) bin() string {
 		return "claude"
 	}
 	return b.Bin
+}
+
+// Capabilities implements backend.Backend. In print mode every turn is its own process: a steer
+// restarts it with --resume, a stop kills it, and nothing is asked before a tool. The runner still
+// checkpoints its worktree.
+func (b Backend) Capabilities() proto.BackendCapabilities {
+	if b.live() {
+		return sessionCapabilities
+	}
+	return proto.BackendCapabilities{Checkpoints: true, Enforcement: proto.EnforcementNative}
 }
 
 // keychainService is where Claude Code keeps a macOS login.
@@ -124,25 +141,86 @@ func keychainState(lookup func() (int, error)) string {
 	}
 }
 
-// Run implements backend.Backend.
+// Run implements backend.Backend: a print-mode run (one prompt, one process), or a session in
+// ModeSession.
 func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) backend.Outcome {
+	if b.live() {
+		return b.runSession(ctx, spec, emit)
+	}
+	return b.runPrint(ctx, spec, emit)
+}
+
+// runPrint is `claude -p <prompt>`: the process ends with the turn, a steer restarts it with
+// --resume, and a stop kills it.
+func (b Backend) runPrint(ctx context.Context, spec backend.Spec, emit backend.Emit) backend.Outcome {
 	prompt := spec.Prompt
 	if strings.HasPrefix(prompt, "-") { // would be parsed as a flag
 		prompt = "Task: " + prompt
 	}
-	mcp, cleanup, err := mcpConfig(b.MCPConfig, b.MCPDir, spec.MCP)
+	common, cleanup, err := b.commonArgs(spec)
 	if err != nil {
-		return failed("mcp config: " + err.Error())
+		return failed(err.Error())
 	}
 	defer cleanup()
+	args := append([]string{"-p", prompt, "--output-format", "stream-json", "--verbose"}, common...)
+	args = append(args, permissionArgs(spec.Access, mcpNames(spec.MCP), hasSkills(common))...)
+
+	p, err := b.spawn(spec, args, false)
+	if err != nil {
+		return failed(err.Error())
+	}
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
+	parser := &Parser{}
+	parsed := make(chan struct{})
+	go func() {
+		defer close(parsed)
+		err := p.lines(func(line []byte) {
+			_ = parser.Line(line, func(typ string, payload any) { emit(typ, payload) })
+			if spec.MaxToolCalls > 0 && parser.ToolCalls > spec.MaxToolCalls && runCtx.Err() == nil {
+				cancel(errToolLimit)
+			}
+		})
+		if err != nil {
+			cancel(fmt.Errorf("%w: %v", errOutput, err)) // the rest of the stream cannot be read: stop now
+		}
+	}()
+
+	exited := make(chan struct{})
+	go func() {
+		select {
+		case <-runCtx.Done():
+			p.terminate(exited, b.grace())
+		case <-exited:
+		}
+	}()
+
+	waitErr := p.cmd.Wait()
+	close(exited)
+	p.release(parsed)
+	out := b.outcome(runCtx, spec, parser, p, waitErr)
+	if spec.Live != nil && spec.Live.TurnEnded != nil && parser.Result != nil {
+		spec.Live.TurnEnded() // a session that fell back to print mode still checkpoints its turn
+	}
+	return out
+}
+
+// commonArgs are the flags every run has whatever its mode: Gator's and the runner's MCP servers
+// (strictly those), the agent's skills, the session to resume, the model and the cost cap. The
+// cleanup removes what they wrote (the job's MCP configuration, its skills).
+func (b Backend) commonArgs(spec backend.Spec) ([]string, func(), error) {
+	mcp, cleanMCP, err := mcpConfig(b.MCPConfig, b.MCPDir, spec.MCP)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mcp config: %w", err)
+	}
 	skills, cleanSkills, err := skillsDir(b.MCPDir, spec.Skills)
 	if err != nil {
-		return failed("skills: " + err.Error())
+		cleanMCP()
+		return nil, nil, fmt.Errorf("skills: %w", err)
 	}
-	defer cleanSkills()
-	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
-	args = append(args, permissionArgs(spec.Access, mcpNames(spec.MCP), skills != "")...)
-	args = append(args, "--strict-mcp-config", "--mcp-config", mcp)
+	cleanup := func() { cleanSkills(); cleanMCP() }
+	args := []string{"--strict-mcp-config", "--mcp-config", mcp}
 	if skills != "" {
 		args = append(args, "--plugin-dir", skills)
 	}
@@ -155,105 +233,27 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	if spec.MaxCostUSD > 0 {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", spec.MaxCostUSD))
 	}
+	return args, cleanup, nil
+}
 
-	bin, args := agentenv.Command(b.bin(), args, spec.DenyRead)
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = spec.Dir
-	// An allow-list, not a deny-list: the runner's environment holds its token and whatever its
-	// operator exported, and an agent that can run any command can print all of it.
-	cmd.Env = append(agentenv.Filter(os.Environ(), b.AllowEnv), spec.Env...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// Stdout goes through our own pipe: a background process that inherits it must not be
-	// able to keep this run alive after claude itself exits.
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return failed("pipe: " + err.Error())
+// hasSkills says whether the common flags load the agent's skills.
+func hasSkills(args []string) bool { return slices.Contains(args, "--plugin-dir") }
+
+func (b Backend) grace() time.Duration {
+	if b.GracePeriod == 0 {
+		return 5 * time.Second
 	}
-	defer pr.Close()
-	cmd.Stdout = pw
-	// Stderr gets its own pipe too. If it were an io.Writer, Go would copy it through a pipe
-	// of its own and Wait would block until every inheritor (a background tool) closed it.
-	er, ew, err := os.Pipe()
-	if err != nil {
-		pw.Close()
-		return failed("pipe: " + err.Error())
-	}
-	defer er.Close()
-	cmd.Stderr = ew
-	stderr := &tail{max: 8 << 10}
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stderrDone)
-		_, _ = io.Copy(stderr, er)
-	}()
+	return b.GracePeriod
+}
 
-	started := time.Now()
-	if err := cmd.Start(); err != nil {
-		pw.Close()
-		ew.Close()
-		return failed(fmt.Sprintf("start %s: %v", b.bin(), err))
-	}
-	pw.Close()
-	ew.Close()
-	pgid := cmd.Process.Pid
-
-	runCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-
-	p := &Parser{}
-	parsed := make(chan struct{})
-	go func() {
-		defer close(parsed)
-		sc := bufio.NewScanner(pr)
-		sc.Buffer(make([]byte, 1<<20), 32<<20)
-		for sc.Scan() {
-			_ = p.Line(sc.Bytes(), func(typ string, payload any) { emit(typ, payload) })
-			if spec.MaxToolCalls > 0 && p.ToolCalls > spec.MaxToolCalls && runCtx.Err() == nil {
-				cancel(errToolLimit)
-			}
-		}
-	}()
-
-	exited := make(chan struct{})
-	go func() {
-		select {
-		case <-runCtx.Done():
-			_ = syscall.Kill(-pgid, syscall.SIGTERM)
-			grace := b.GracePeriod
-			if grace == 0 {
-				grace = 5 * time.Second
-			}
-			select {
-			case <-exited:
-			case <-time.After(grace):
-				_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			}
-		case <-exited:
-		}
-	}()
-
-	waitErr := cmd.Wait()
-	close(exited)
-	// Anything left in the group (background tools) goes now, which also releases the pipe.
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	select {
-	case <-parsed:
-	case <-time.After(3 * time.Second):
-		pr.Close()
-		<-parsed
-	}
-	select {
-	case <-stderrDone:
-	case <-time.After(time.Second):
-		er.Close()
-		<-stderrDone
-	}
+// outcome is what a run came to, from what the parser read and how the process and the run's
+// context ended.
+func (b Backend) outcome(runCtx context.Context, spec backend.Spec, parser *Parser, p *proc, waitErr error) backend.Outcome {
 	finished := time.Now()
-
-	out := backend.Outcome{SessionID: p.SessionID, Model: p.Model, ToolCalls: p.ToolCalls}
-	out.Usage = proto.Usage{Backend: "claude", Model: p.Model, DurationMS: finished.Sub(started).Milliseconds(),
-		StartedAt: started, FinishedAt: finished, CostEstimated: true}
-	if r := p.Result; r != nil {
+	out := backend.Outcome{SessionID: parser.SessionID, Model: parser.Model, ToolCalls: parser.ToolCalls}
+	out.Usage = proto.Usage{Backend: "claude", Model: parser.Model, DurationMS: finished.Sub(p.started).Milliseconds(),
+		StartedAt: p.started, FinishedAt: finished, CostEstimated: true}
+	if r := parser.Result; r != nil {
 		out.Usage.InputTokens, out.Usage.OutputTokens = r.Tokens.Input, r.Tokens.Output
 		out.Usage.CacheReadTokens, out.Usage.CacheWriteTokens = r.Tokens.CacheRead, r.Tokens.CacheWrite
 		out.Usage.CostUSD, out.Usage.CostEstimated = r.CostUSD, r.CostEstimated
@@ -269,26 +269,28 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	switch {
 	case errors.Is(cause, errToolLimit):
 		out.Status, out.Reason = proto.StatusFailed, fmt.Sprintf("tool call limit (%d) reached", spec.MaxToolCalls)
+	case errors.Is(cause, errOutput):
+		out.Status, out.Reason = proto.StatusFailed, cause.Error()
 	case runCtx.Err() != nil:
 		out.Interrupted, out.Cause = true, cause
 		out.Reason = cause.Error()
-	case p.Result == nil:
+	case parser.Result == nil:
 		out.Status = proto.StatusFailed
 		out.Reason = fmt.Sprintf("claude ended without a result (%s)", exitText(waitErr))
-		if t := strings.TrimSpace(stderr.String()); t != "" {
+		if t := strings.TrimSpace(p.stderr.String()); t != "" {
 			out.Reason += ": " + clip(t, 500)
 		}
-		if p.BadLines > 0 {
-			out.Reason += fmt.Sprintf("; %d unparseable lines", p.BadLines)
+		if parser.BadLines > 0 {
+			out.Reason += fmt.Sprintf("; %d unparseable lines", parser.BadLines)
 		}
-	case p.Result.IsError:
+	case parser.Result.IsError:
 		out.Status = proto.StatusFailed
-		out.Reason = "claude " + p.Result.Subtype
-		if p.Result.TerminalReason != "" {
-			out.Reason += " (" + p.Result.TerminalReason + ")"
+		out.Reason = "claude " + parser.Result.Subtype
+		if parser.Result.TerminalReason != "" {
+			out.Reason += " (" + parser.Result.TerminalReason + ")"
 		}
-		if len(p.Result.Errors) > 0 {
-			out.Reason += ": " + clip(strings.Join(p.Result.Errors, "; "), 500)
+		if len(parser.Result.Errors) > 0 {
+			out.Reason += ": " + clip(strings.Join(parser.Result.Errors, "; "), 500)
 		}
 	default:
 		out.Status = proto.StatusDone

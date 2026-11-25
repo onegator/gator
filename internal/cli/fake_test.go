@@ -285,6 +285,21 @@ func (f *fakeGator) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		writeJSONT(w, 200, out)
+	case len(parts) == 3 && parts[0] == "jobs" && parts[2] == "checkpoints":
+		writeJSONT(w, 200, []Checkpoint{{ID: "c1c1c1c1-0000-4000-8000-000000000001", JobID: parts[1], Seq: 1, Repo: "app", TookMS: 12, CreatedAt: t0,
+			Files: []FileChange{{Path: "pay.go", Added: 40, Removed: 7, Status: "modified"}, {Path: "pay_test.go", Added: 2, Status: "added"}}}})
+	case len(parts) == 3 && parts[0] == "jobs" && parts[2] == "diff":
+		w.Header().Set("Content-Type", "text/x-diff")
+		_, _ = fmt.Fprintf(w, "diff --git a/pay.go b/pay.go\n+from=%s ws=%s\n", r.URL.Query().Get("from"), r.URL.Query().Get("ignoreWhitespace"))
+	case path == "/api/v1/runtime-requests":
+		writeJSONT(w, 200, []RuntimeRequest{{ID: "d1d1d1d1-0000-4000-8000-000000000001", JobID: jobID, Kind: "tool_approval", Tool: "Bash",
+			Input: map[string]any{"command": "curl https://example.com"}, Rule: "Bash(curl:*)", Status: "pending", ExpiresAt: t0, CreatedAt: t0}})
+	case len(parts) == 3 && parts[0] == "runtime-requests" && parts[2] == "decide":
+		var in map[string]string
+		_ = json.Unmarshal(body, &in)
+		status := map[string]string{"allow": "allowed", "allow_for_session": "allowed_for_session", "deny": "denied", "stop": "denied"}[in["decision"]]
+		writeJSONT(w, 200, RuntimeRequest{ID: parts[1], JobID: jobID, Kind: "tool_approval", Input: map[string]any{}, Status: status,
+			Feedback: in["feedback"], ExpiresAt: t0, CreatedAt: t0})
 	default:
 		problem(w, 404, "the fake does not know "+r.Method+" "+path)
 	}

@@ -54,6 +54,41 @@ if [ -n "$FAKE_CLAUDE_ARGS" ]; then
 	for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_CLAUDE_ARGS"; done
 	echo "---" >> "$FAKE_CLAUDE_ARGS"
 fi
+#   FAKE_CLAUDE_SESSION  with --input-format stream-json: a session script to play instead of a fixture, one
+#                        directive a line: "> json" prints the line; "< text" reads stdin until a line holds
+#                        text; "! replay" prints the last line read (as --replay-user-messages does); "! interrupted"
+#                        reads until an interrupt request and answers it; "! sleep N"; "! exit N". At its end
+#                        the fake reads its input to the end, as the CLI does before it exits.
+#   FAKE_CLAUDE_STDIN    append every line read on stdin here
+if [ -n "$FAKE_CLAUDE_SESSION" ]; then
+	for a in "$@"; do
+		if [ "$a" = "--input-format" ]; then
+			last=""
+			readline() {
+				IFS= read -r last || return 1
+				if [ -n "$FAKE_CLAUDE_STDIN" ]; then printf '%s\n' "$last" >> "$FAKE_CLAUDE_STDIN"; fi
+				return 0
+			}
+			while IFS= read -r step <&3; do
+				case "$step" in
+				"> "*) printf '%s\n' "${step#> }" ;;
+				"< "*)
+					want="${step#< }"
+					while readline; do case "$last" in *"$want"*) break ;; esac; done ;;
+				"! replay") printf '%s\n' "$last" ;;
+				"! interrupted")
+					while readline; do case "$last" in *'"interrupt"'*) break ;; esac; done
+					id=$(printf '%s' "$last" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+					printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s"}}\n' "$id" ;;
+				"! sleep "*) sleep "${step#! sleep }" ;;
+				"! exit "*) exit "${step#! exit }" ;;
+				esac
+			done 3< "$FAKE_CLAUDE_SESSION"
+			while readline; do :; done
+			exit 0
+		fi
+	done
+fi
 #   FAKE_CLAUDE_RESUME_FIXTURE  printed instead (and nothing committed) when --resume is passed
 for a in "$@"; do
 	if [ "$a" = "--resume" ] && [ -n "$FAKE_CLAUDE_RESUME_FIXTURE" ]; then

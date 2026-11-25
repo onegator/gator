@@ -175,6 +175,9 @@ func toAgent(a db.Agent) gen.Agent {
 	if pol.DailyBudgetUSD > 0 {
 		out.Policy.DailyBudgetUsd = &pol.DailyBudgetUSD
 	}
+	if ap := pol.Approvals; ap != nil {
+		out.Policy.Approvals = &gen.ApprovalsPolicy{Ask: optList(ap.Ask), Deny: optList(ap.Deny), Timeout: optString(ap.Timeout)}
+	}
 	_ = json.Unmarshal(a.Tools, &out.Tools)
 	_ = json.Unmarshal(a.Skills, &out.Skills)
 	_ = json.Unmarshal(a.Source, &out.Source)
@@ -208,5 +211,18 @@ func fromAgentPolicy(p *gen.AgentPolicy) *agents.Policy {
 	if p.DailyBudgetUsd != nil {
 		out.DailyBudgetUSD = *p.DailyBudgetUsd
 	}
+	if a := p.Approvals; a != nil {
+		out.Approvals = &process.Approvals{Ask: derefList(a.Ask), Deny: derefList(a.Deny), Timeout: deref(a.Timeout)}
+		if a.OnTimeout != nil {
+			out.Approvals.OnTimeout = string(*a.OnTimeout)
+		}
+	}
 	return out
+}
+
+func derefList(p *[]string) []string {
+	if p == nil {
+		return nil
+	}
+	return *p
 }

@@ -1,0 +1,31 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.331","mcp_servers":["gator:connected"],"model":"claude-haiku-4-5","session_id":"00000000-0000-4000-8000-000000000042"}},
+    {"type":"tool_call","payload":{"id":"toolu_mcp_1","input":{"query":"session tokens"},"name":"mcp__gator__brain_search"}},
+    {"type":"tool_result","payload":{"content":"{\"hits\":[{\"id\":\"00000000-0000-0000-0000-0000000000b1\",\"title\":\"PASETO\",\"excerpt\":\"Auth uses PASETO v4, not JWT.\",\"scope\":\"component\",\"kind\":\"decision\",\"status\":\"approved\",\"version\":1,\"source\":{\"kind\":\"manual\"},\"rank\":0.1}]}","is_error":false,"tool_use_id":"toolu_mcp_1"}},
+    {"type":"text","payload":{"text":"Sessions are PASETO v4 tokens [brain:00000000-0000-0000-0000-0000000000b1]."}},
+    {"type":"result","payload":{"cost_usd":0.002,"is_error":false,"num_turns":2,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-haiku-4-5",
+    "result": {
+      "cost_estimated": true,
+      "cost_usd": 0.002,
+      "is_error": false,
+      "subtype": "success",
+      "terminal_reason": "completed",
+      "text_bytes": 75,
+      "tokens": {
+        "Input": 42,
+        "Output": 29,
+        "CacheRead": 0,
+        "CacheWrite": 0
+      }
+    },
+    "session_id": "00000000-0000-4000-8000-000000000042",
+    "tool_calls": 1,
+    "unknown": 0,
+    "version": "2.1.331"
+  }
+}

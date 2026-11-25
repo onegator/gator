@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"","mcp_servers":[],"model":"m","session_id":"s"}}
+  ],
+  "outcome": {
+    "bad_lines": 1,
+    "model": "m",
+    "session_id": "s",
+    "tool_calls": 0,
+    "unknown": 0,
+    "version": ""
+  }
+}

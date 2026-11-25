@@ -43,6 +43,26 @@ type ProjectConfig struct {
 	// Conversations says where the project's conversations put work, e.g. which channel a new
 	// task's card goes to ({"task_channel": "work"}). Read by the conversations package.
 	Conversations json.RawMessage `json:"conversations,omitempty"`
+	// Checkpoints says whether runners checkpoint the worktree after every turn
+	// ({"enabled": false} turns it off for a repository where that costs too much). On by default.
+	Checkpoints *CheckpointsConfig `json:"checkpoints,omitempty"`
+}
+
+// CheckpointsConfig is process_config.checkpoints.
+type CheckpointsConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// CheckpointsOn says whether the project's jobs are checkpointed after every turn.
+func (c ProjectConfig) CheckpointsOn() bool {
+	return c.Checkpoints == nil || c.Checkpoints.Enabled == nil || *c.Checkpoints.Enabled
+}
+
+// CheckpointsOn is ProjectConfig.CheckpointsOn for a project; one whose configuration cannot be
+// read is checkpointed, as every project is by default.
+func (s *Service) CheckpointsOn(ctx context.Context, projectID pgtype.UUID) bool {
+	c, err := s.projectConfig(ctx, projectID)
+	return err != nil || c.CheckpointsOn()
 }
 
 // ParseProjectConfig reads process_config; empty input is an empty config.

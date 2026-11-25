@@ -1,0 +1,14 @@
+{
+  "events": [],
+  "outcome": {
+    "cost_estimated": true,
+    "cost_usd": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "reason": "acp:gemini: new session: acp -32000: Authentication required",
+    "session_id": "",
+    "status": "failed",
+    "summary": "",
+    "tool_calls": 0
+  }
+}

@@ -101,3 +101,11 @@ func TestNoToolsReachesTheCLI(t *testing.T) {
 		t.Fatalf("no --tools \"\": %q", args)
 	}
 }
+
+// What the approvals policy denies is denied by the CLI itself, in every mode.
+func TestDeniedToolsAreDisallowed(t *testing.T) {
+	got := strings.Join(permissionArgs(backend.Access{Deny: []string{"Bash(curl:*)", "WebFetch", "mcp:sentry/*", "mcp:linear/create_issue"}}, nil, false), "\n")
+	if got != "--permission-mode\nbypassPermissions\n--disallowedTools\nBash(curl:*),WebFetch,mcp__sentry,mcp__linear__create_issue" {
+		t.Fatalf("args:\n%s", got)
+	}
+}

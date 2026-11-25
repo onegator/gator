@@ -1,0 +1,32 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.331","mcp_servers":[],"model":"claude-haiku-4-5","session_id":"00000000-0000-4000-8000-000000000003"}},
+    {"type":"tool_call","payload":{"id":"toolu_013KfPVmkBZD5QfMfu1HVmPs","input":{"command":"gator-cli thread show --limit 5"},"name":"Bash"}},
+    {"type":"rate_limit","payload":{"resets_at":1789428000,"status":"allowed","type":"five_hour","utilization":{}}},
+    {"type":"tool_result","payload":{"content":"{\"ok\":true,\"args\":\"thread show --limit 5\"}","is_error":false,"tool_use_id":"toolu_013KfPVmkBZD5QfMfu1HVmPs"}},
+    {"type":"text","payload":{"text":"`{\"ok\":true,\"args\":\"thread show --limit 5\"}`"}},
+    {"type":"result","payload":{"cost_usd":0.006515,"is_error":false,"num_turns":2,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-haiku-4-5",
+    "result": {
+      "cost_estimated": true,
+      "cost_usd": 0.006515,
+      "is_error": false,
+      "subtype": "success",
+      "terminal_reason": "completed",
+      "text_bytes": 44,
+      "tokens": {
+        "Input": 18,
+        "Output": 185,
+        "CacheRead": 26140,
+        "CacheWrite": 1479
+      }
+    },
+    "session_id": "00000000-0000-4000-8000-000000000003",
+    "tool_calls": 1,
+    "unknown": 0,
+    "version": "2.1.331"
+  }
+}

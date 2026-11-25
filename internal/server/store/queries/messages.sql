@@ -1,8 +1,26 @@
 -- name: InsertMessage :one
-INSERT INTO messages (conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, client_id, origin, status)
+INSERT INTO messages (conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, client_id, origin, status,
+                      input_intent, queued_for)
 VALUES (sqlc.arg(conversation_id), sqlc.arg(seq), sqlc.arg(author_kind), sqlc.narg(author_id), sqlc.arg(kind), sqlc.arg(body),
-        sqlc.narg(card_type), sqlc.narg(card), sqlc.narg(card_key), sqlc.narg(client_id), sqlc.arg(origin), sqlc.arg(status))
+        sqlc.narg(card_type), sqlc.narg(card), sqlc.narg(card_key), sqlc.narg(client_id), sqlc.arg(origin), sqlc.arg(status),
+        sqlc.narg(input_intent), COALESCE(sqlc.narg(queued_for)::uuid[], '{}'))
 RETURNING *;
+
+-- name: ListQueuedMessages :many
+-- A conversation's queue: what people asked to be done once the agent's turn ends, oldest first.
+SELECT * FROM messages WHERE conversation_id = $1 AND input_intent = 'queued' AND deleted_at IS NULL ORDER BY seq;
+
+-- name: NextQueuedMessage :one
+SELECT * FROM messages WHERE conversation_id = $1 AND input_intent = 'queued' AND deleted_at IS NULL
+ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED;
+
+-- name: SetMessageIntent :one
+-- A queued message leaves the queue once: whoever takes it second finds it gone.
+UPDATE messages SET input_intent = sqlc.arg(intent) WHERE id = sqlc.arg(id) AND input_intent = 'queued' AND deleted_at IS NULL
+RETURNING *;
+
+-- name: CountActiveTurnsIn :one
+SELECT count(*) FROM agent_turns WHERE conversation_id = $1 AND status IN ('queued', 'running');
 
 -- name: GetMessage :one
 SELECT * FROM messages WHERE id = $1;
@@ -149,7 +167,7 @@ WHERE conversation_summaries.upto_seq < EXCLUDED.pending_upto_seq
        OR (conversation_summaries.pending_job_id IS NULL AND conversation_summaries.updated_at < now() - interval '2 minutes')
        OR (conversation_summaries.pending_job_id IS NOT NULL AND NOT EXISTS (
                SELECT 1 FROM jobs j WHERE j.id = conversation_summaries.pending_job_id
-                 AND j.status IN ('queued', 'leased', 'running', 'stalled'))))
+                 AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling'))))
 RETURNING *;
 
 -- name: SetSummaryJob :exec

@@ -99,15 +99,11 @@ func TestOnlyV3RunnersTakeReplies(t *testing.T) {
 		t.Fatalf("turn: %+v", turn)
 	}
 
-	old, reg := h.dialRaw(h.runner, backend, proto.Version-1, 1)
-	var r proto.Registered
-	if err := reg.Into(&r); err != nil || r.Version != proto.Version-1 {
-		t.Fatalf("the server speaks N-1: %+v %v", r, err)
+	// A v2 runner would run a reply as a phase; the server no longer speaks it at all.
+	_, reg := h.dialRaw(h.runner, backend, proto.MinSupportedVersion-1, 1)
+	if reg.Type != proto.TypeError {
+		t.Fatalf("a v2 runner was registered: %+v", reg)
 	}
-	if jobs := old.lease(1); len(jobs) != 0 {
-		t.Fatalf("a v2 runner was handed %+v", jobs)
-	}
-	old.c.CloseNow()
 
 	other, err := runnerToken(h)
 	if err != nil {

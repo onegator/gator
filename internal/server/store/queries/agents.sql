@@ -73,7 +73,7 @@ SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.i
       + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
                   LEFT JOIN agent_turns t ON t.id = j.turn_id
                   WHERE (t.chain_id = sqlc.arg(chain_id) OR j.id = sqlc.arg(chain_id))
-                    AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8;
+                    AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling')), 0))::float8;
 
 -- name: ChainTurns :one
 -- How many turns a chain has had, and how many the asking turn (or the phase job the chain
@@ -89,7 +89,7 @@ WHERE chain_id = sqlc.arg(chain_id) AND status <> 'refused';
 SELECT (COALESCE((SELECT sum(u.cost_usd) FROM usage_records u JOIN jobs j ON j.id = u.job_id
                   WHERE j.agent_id = sqlc.arg(agent_id) AND u.created_at >= sqlc.arg(since)), 0)
       + COALESCE((SELECT sum(COALESCE((j.bounds->>'max_cost_usd')::float8, 0)) FROM jobs j
-                  WHERE j.agent_id = sqlc.arg(agent_id) AND j.status IN ('queued', 'leased', 'running', 'stalled')), 0))::float8;
+                  WHERE j.agent_id = sqlc.arg(agent_id) AND j.status IN ('queued', 'leased', 'running', 'stalled', 'settling')), 0))::float8;
 
 -- name: ListActiveTurnsIn :many
 -- The turns still answering in a conversation, oldest first.

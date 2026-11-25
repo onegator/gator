@@ -224,7 +224,7 @@ func decisionReason(t db.Task, g db.Gate, p Phase, jobStatus string, unassignabl
 		// The agent is still on it in name only. Whether to wait longer or stop it is a
 		// person's call, and nobody makes it if nobody is told.
 		return ReasonJobStalled, true
-	case jobStatus == "queued" || jobStatus == "leased" || jobStatus == "running" || jobStatus == "stalled":
+	case jobStatus == "queued" || jobStatus == "leased" || jobStatus == "running" || jobStatus == "stalled" || jobStatus == "settling":
 		return "", false // an agent is on it; asking a person now would be premature
 	case jobStatus == "failed" || jobStatus == "stopped":
 		return ReasonJobFailed, true

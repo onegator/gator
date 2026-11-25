@@ -21,6 +21,7 @@ import (
 	"github.com/onegator/gator/internal/server/admin"
 	"github.com/onegator/gator/internal/server/agents"
 	"github.com/onegator/gator/internal/server/api"
+	"github.com/onegator/gator/internal/server/approvals"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/backup"
@@ -42,6 +43,7 @@ import (
 	"github.com/onegator/gator/internal/server/product"
 	"github.com/onegator/gator/internal/server/provision"
 	"github.com/onegator/gator/internal/server/quality"
+	"github.com/onegator/gator/internal/server/review"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -165,8 +167,9 @@ func serve(ctx context.Context) error {
 		log.Warn("attachments not configured (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*)")
 	}
 	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs,
-		// What the Brain was proposed from a task, one card a day in its thread.
-		CardSources: []conversations.CardSource{curator.NewCards(dbq.New(db.Pool))}})
+		// What the Brain was proposed from a task, one card a day in its thread, and what agents wait
+		// for a person on, a card each.
+		CardSources: []conversations.CardSource{curator.NewCards(dbq.New(db.Pool)), approvals.NewCards(dbq.New(db.Pool))}})
 	// What the team and its agents know: one store, read under the same rules everywhere.
 	knows := brain.New(db.Pool, brain.Deps{Conversations: chat.Access})
 	// Jobs are handed their part of it, and the knowledge shelves are read from it.
@@ -230,7 +233,11 @@ func serve(ctx context.Context) error {
 	if cloud.Provisioner != nil {
 		log.Info("cloud runners start on demand", "provisioner", cloud.Provisioner.Name(), "server_url", cloud.ServerURL)
 	}
+	// What each turn of a job changed, as runners checkpoint it, and what people say about it.
+	reviews := review.New(db.Pool, review.Deps{Blobs: blobs, Messages: chat.Messages, Threads: chat.Threads})
 	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
+		// Every turn's checkpoint of the worktree, its diffs redacted and kept with attachments.
+		Checkpoints:    reviews.Checkpoints,
 		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
 		Preparer:       pluginHost,
@@ -246,10 +253,22 @@ func serve(ctx context.Context) error {
 		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
 
+	// Tools of a work turn the project wants asked about wait for a person, from a card; the runner
+	// hears the decision, a request nobody answers is refused, and a turn that ends cancels it.
+	waits := approvals.New(db.Pool, approvals.Deps{Rights: chat.Access, Roles: auth.Authorizer{Pool: db.Pool}, Threads: chat.Threads,
+		Policies: svc, Log: log})
+	waits.UseRuntime(runnerMgr)
+	runnerMgr.UseRuntime(waits)
+	cancelWaits := conversations.NewCursorConsumer("approvals", db.Pool, hub, log, 0)
+	cancelWaits.On(waits.Handler(), "job.finished", "job.requeued")
+	go cancelWaits.Run(ctx)
+	go waits.Run(ctx, 15*time.Second)
+
 	go chat.Consumer(hub, log, 0).Run(ctx)
 	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
 	// within the limits of a chain of delegations and the project's budget.
-	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Roles: auth.Authorizer{Pool: db.Pool}, Log: log})
+	team := agents.New(db.Pool, agents.Deps{Conversations: chat, Process: svc, Jobs: runnerMgr, Roles: auth.Authorizer{Pool: db.Pool}, Log: log,
+		Waits: waits})
 	runnerMgr.UseBriefer(team.Briefer)
 	// Agents outside Gator, through A2A: a remote agent's turn is a task sent to its card's
 	// endpoint (through netguard), and the project's clients call the agents it exposes at /a2a.
@@ -271,7 +290,8 @@ func serve(ctx context.Context) error {
 		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
 	}
 	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
-	go notifier.WithChat(chat.Access).Run(ctx)
+	// And an agent waiting for a person's approval, or the answer they asked an agent for.
+	go notifier.WithChat(chat.Access).WithAgents().Run(ctx)
 
 	// What a thread settled is proposed to the Brain once it goes quiet or its task closes.
 	curate := curator.New(dbq.New(db.Pool), curator.PoolTx(db.Pool), team.Curations, chat.Packer, chat.Access, knows.Service, log)
@@ -314,6 +334,10 @@ func serve(ctx context.Context) error {
 		Bridges: bridge,
 		// Agents outside Gator, both ways.
 		A2A: &a2a.Module{Remote: farAgents, Inbound: a2aIn},
+		// What each turn changed, and the comments on its lines.
+		Review: reviews,
+		// What agents wait for a person on, and the decisions.
+		Approvals: waits,
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),
