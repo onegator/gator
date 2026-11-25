@@ -13,6 +13,7 @@ import (
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/store/db"
+	"github.com/onegator/gator/internal/server/words"
 	"github.com/onegator/gator/plugin"
 )
 
@@ -63,7 +64,7 @@ func (s *Service) Capability() string { return plugin.CapabilityMessaging }
 
 // Project is the project a message event happened in.
 func (s *Service) Project(ctx context.Context, e events.Event) (pgtype.UUID, bool, error) {
-	id, ok := parseUUID(e.AggregateID)
+	id, ok := words.UUID(e.AggregateID)
 	if !ok {
 		return pgtype.UUID{}, false, nil
 	}
@@ -86,7 +87,7 @@ func (s *Service) Deliver(ctx context.Context, e events.Event, project pgtype.UU
 	}
 	id, ok := pgtype.UUID{}, false
 	if json.Unmarshal(e.Payload, &p) == nil {
-		id, ok = parseUUID(p.MessageID)
+		id, ok = words.UUID(p.MessageID)
 	}
 	if !ok {
 		return nil
@@ -238,7 +239,7 @@ func (s *Service) messageOut(ctx context.Context, b Bridge, msg db.Message) (plu
 	}
 	// An agent's answer says what it answers, when that came in through this bridge.
 	if msg.AuthorKind == conversations.AuthorAgent {
-		if turn, ok := parseUUID(conversations.OriginOf(msg).Turn); ok {
+		if turn, ok := words.UUID(conversations.OriginOf(msg).Turn); ok {
 			t, err := s.q.GetTurn(ctx, turn)
 			if err == nil && t.ReplyMessageID == msg.ID {
 				if ref, err := s.q.GetMessageRefOf(ctx, db.GetMessageRefOfParams{Provider: b.Provider, MessageID: t.TriggerMessageID}); err == nil {

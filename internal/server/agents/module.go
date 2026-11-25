@@ -92,6 +92,13 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	}
 }
 
+// AnswerElsewhere has the turns of agents of kind answered by e instead of a runner's job: started
+// by the Starter, stopped by Control.
+func (m *Module) AnswerElsewhere(kind string, e Elsewhere) {
+	m.Starter.AnswerElsewhere(kind, e)
+	m.Control.answerElsewhere(kind, e)
+}
+
 // Consumer is the outbox consumer that has agents answer. Run it with go consumer.Run(ctx).
 func (m *Module) Consumer(hub *events.Hub, log *slog.Logger, poll time.Duration) *conversations.Consumer {
 	c := conversations.NewCursorConsumer(cursorName, m.pool, hub, log, poll)

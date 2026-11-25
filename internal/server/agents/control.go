@@ -43,6 +43,7 @@ type controlStore interface {
 	ClaimTurn(ctx context.Context, arg db.ClaimTurnParams) (db.AgentTurn, error)
 	EndClaimedTurn(ctx context.Context, arg db.EndClaimedTurnParams) (db.AgentTurn, error)
 	GetJobOfTurn(ctx context.Context, turnID pgtype.UUID) (db.Job, error)
+	SetTurnStatus(ctx context.Context, arg db.SetTurnStatusParams) (db.AgentTurn, error)
 }
 
 // Control is what people do to turns from a conversation. Stop is the button under an answer
@@ -52,6 +53,15 @@ type Control struct {
 	rights conversationRights
 	jobs   jobStopper
 	voice  rewriter
+	// elsewhere are who answer the turns of other kinds of agents, by kind (Elsewhere).
+	elsewhere map[string]Elsewhere
+}
+
+func (c *Control) answerElsewhere(kind string, e Elsewhere) {
+	if c.elsewhere == nil {
+		c.elsewhere = map[string]Elsewhere{}
+	}
+	c.elsewhere[kind] = e
 }
 
 // NewControl builds it.
@@ -98,6 +108,9 @@ func (c *Control) Stop(ctx context.Context, p auth.Principal, id pgtype.UUID, re
 	if turn.JobID.Valid {
 		return turn, c.stopJob(ctx, turn.JobID, reason)
 	}
+	if turn.Status == TurnRunning {
+		return c.stopElsewhere(ctx, turn, reason)
+	}
 	// No job yet: the stop takes the turn the way a start would, so the two never both win.
 	claimed, err := c.store.ClaimTurn(ctx, db.ClaimTurnParams{ID: turn.ID, ClaimTtl: interval(ClaimTTL)})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -136,4 +149,33 @@ func (c *Control) stopJob(ctx context.Context, job pgtype.UUID, reason string) e
 		return fmt.Errorf("%w: this turn has just ended", ErrConflict)
 	}
 	return err
+}
+
+// stopElsewhere ends a turn answered outside a runner (a remote agent's), which runs with no job:
+// the turn ends stopped at once, and whoever answers it stops asking.
+func (c *Control) stopElsewhere(ctx context.Context, turn db.AgentTurn, reason string) (db.AgentTurn, error) {
+	agent, err := c.store.GetAgent(ctx, turn.AgentID)
+	if err != nil {
+		return db.AgentTurn{}, err
+	}
+	e, ok := c.elsewhere[agent.Kind]
+	if !ok {
+		return turn, fmt.Errorf("%w: the agent is just starting; stop it again in a moment", ErrConflict)
+	}
+	ended, err := c.store.SetTurnStatus(ctx, db.SetTurnStatusParams{ID: turn.ID, Status: TurnStopped})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return turn, fmt.Errorf("%w: this turn has just ended", ErrConflict)
+	}
+	if err != nil {
+		return db.AgentTurn{}, err
+	}
+	if err := e.Stopped(ctx, ended); err != nil {
+		return ended, err
+	}
+	if turn.ReplyMessageID.Valid {
+		if _, _, err := c.voice.Rewrite(ctx, turn.ReplyMessageID, stoppedNote(agent, reason), conversations.StatusFinal); err != nil {
+			return ended, err
+		}
+	}
+	return ended, nil
 }

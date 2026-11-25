@@ -62,9 +62,9 @@ type roles interface {
 	ProjectRole(ctx context.Context, p auth.Principal, project pgtype.UUID) (auth.Role, error)
 }
 
-// approver approves what a task's gate waits for, as a person. process.Service is one.
+// approver approves one wait of a task's gate, as a person. process.Service is one.
 type approver interface {
-	Approve(ctx context.Context, taskID pgtype.UUID, userID pgtype.UUID) error
+	ApproveWaiting(ctx context.Context, taskID, userID pgtype.UUID, phase string, entered time.Time) error
 }
 
 // Deps are what the package needs from the rest of the server.
@@ -85,6 +85,9 @@ type Service struct {
 	deps Deps
 	// links bounds how often one outside account may try a code: a code is short enough to type.
 	links *limits.Limiter
+	// asks bounds how often one outside identity may ask agents: anyone who can write in a
+	// connected channel or comment on a public repository can, and each ask is a turn.
+	asks *limits.Limiter
 
 	mu   sync.Mutex
 	sent map[editKey]time.Time // when an edit of a message last went out to a bridge
@@ -96,6 +99,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Service {
 		deps.Now = time.Now
 	}
 	return &Service{pool: pool, q: db.New(pool), deps: deps, links: limits.NewLimiter(5.0/60, 5),
+		asks: limits.NewLimiter(float64(AsksPerMinute)/60, AsksPerMinute),
 		sent: map[editKey]time.Time{}}
 }
 
@@ -111,10 +115,12 @@ func forbidden(format string, a ...any) error {
 	return plugin.Errorf(plugin.CodeForbidden, format, a...)
 }
 
-func parseUUID(s string) (pgtype.UUID, bool) {
-	var u pgtype.UUID
-	return u, u.Scan(s) == nil && u.Valid
-}
+// AsksPerMinute is how many messages asking agents one outside identity may post a minute.
+// ProviderA2A's clients have rates of their own (a2a_clients.per_minute).
+const AsksPerMinute = 6
+
+// ProviderA2A is the provider of A2A clients' identities and conversations; no plugin takes the name.
+const ProviderA2A = "a2a"
 
 // Limits of what a bridge names.
 const (
@@ -125,19 +131,4 @@ const (
 
 func validRef(s string) bool {
 	return s != "" && len(s) <= maxRef && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
-}
-
-// displayName keeps of an outside name one line of at most 80 characters.
-func displayName(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, s)
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > maxDisplayName {
-		s = string(r[:maxDisplayName])
-	}
-	return s
 }

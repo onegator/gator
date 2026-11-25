@@ -13,15 +13,23 @@ import (
 
 const claimA2ACall = `-- name: ClaimA2ACall :one
 UPDATE a2a_calls SET status = 'calling', claimed_at = now(), attempts = attempts + 1
-WHERE turn_id = (SELECT turn_id FROM a2a_calls
-                 WHERE status = 'pending' OR (status = 'calling' AND claimed_at < now() - $1::interval)
-                 ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+WHERE turn_id = (SELECT c.turn_id FROM a2a_calls c
+                 WHERE (c.status = 'pending' OR (c.status = 'calling' AND c.claimed_at < now() - $1::interval))
+                   AND (SELECT count(*) FROM a2a_calls b WHERE b.agent_id = c.agent_id AND b.status = 'calling'
+                          AND b.claimed_at >= now() - $1::interval) < $2::bigint
+                 ORDER BY c.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING turn_id, agent_id, project_id, status, remote_task_id, attempts, error, claimed_at, created_at, finished_at
 `
 
-// The oldest call nobody is making: pending, or claimed by a worker that died (claim_ttl ago).
-func (q *Queries) ClaimA2ACall(ctx context.Context, claimTtl pgtype.Interval) (A2aCall, error) {
-	row := q.db.QueryRow(ctx, claimA2ACall, claimTtl)
+type ClaimA2ACallParams struct {
+	ClaimTtl pgtype.Interval `json:"claim_ttl"`
+	PerAgent int64           `json:"per_agent"`
+}
+
+// The oldest call nobody is making: pending, or claimed by a worker that died (claim_ttl ago), of an
+// agent with fewer than per_agent calls being made right now.
+func (q *Queries) ClaimA2ACall(ctx context.Context, arg ClaimA2ACallParams) (A2aCall, error) {
+	row := q.db.QueryRow(ctx, claimA2ACall, arg.ClaimTtl, arg.PerAgent)
 	var i A2aCall
 	err := row.Scan(
 		&i.TurnID,
@@ -36,6 +44,38 @@ func (q *Queries) ClaimA2ACall(ctx context.Context, claimTtl pgtype.Interval) (A
 		&i.FinishedAt,
 	)
 	return i, err
+}
+
+const countA2ACallsSince = `-- name: CountA2ACallsSince :one
+SELECT count(*) FROM a2a_calls WHERE agent_id = $1 AND created_at >= $2
+`
+
+type CountA2ACallsSinceParams struct {
+	AgentID pgtype.UUID        `json:"agent_id"`
+	Since   pgtype.Timestamptz `json:"since"`
+}
+
+func (q *Queries) CountA2ACallsSince(ctx context.Context, arg CountA2ACallsSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countA2ACallsSince, arg.AgentID, arg.Since)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countOpenA2ATasks = `-- name: CountOpenA2ATasks :one
+SELECT count(*) FROM a2a_tasks k
+LEFT JOIN agent_turns t ON t.agent_id = k.agent_id AND t.trigger_message_id = k.message_id
+WHERE k.client_id = $1 AND k.created_at > now() - interval '1 hour'
+  AND (t.id IS NULL OR t.status IN ('queued', 'running'))
+`
+
+// A client's asks still being answered (or not read by the agents yet), of the last hour: what it
+// may spend that its budget does not count yet.
+func (q *Queries) CountOpenA2ATasks(ctx context.Context, clientID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenA2ATasks, clientID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createA2AClient = `-- name: CreateA2AClient :one
@@ -186,6 +226,25 @@ type EndA2ACallParams struct {
 func (q *Queries) EndA2ACall(ctx context.Context, arg EndA2ACallParams) error {
 	_, err := q.db.Exec(ctx, endA2ACall, arg.Status, arg.Error, arg.TurnID)
 	return err
+}
+
+const endOpenA2ACall = `-- name: EndOpenA2ACall :execrows
+UPDATE a2a_calls SET status = 'failed', error = $1, finished_at = now(), claimed_at = NULL
+WHERE turn_id = $2 AND status IN ('pending', 'calling')
+`
+
+type EndOpenA2ACallParams struct {
+	Error  string      `json:"error"`
+	TurnID pgtype.UUID `json:"turn_id"`
+}
+
+// Ends a call nobody has ended yet (a person stopped its turn).
+func (q *Queries) EndOpenA2ACall(ctx context.Context, arg EndOpenA2ACallParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endOpenA2ACall, arg.Error, arg.TurnID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const externalCostSince = `-- name: ExternalCostSince :one

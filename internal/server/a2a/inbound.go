@@ -26,6 +26,7 @@ import (
 	"github.com/onegator/gator/internal/server/limits"
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
+	"github.com/onegator/gator/internal/server/words"
 	"github.com/onegator/gator/plugin"
 )
 
@@ -45,8 +46,8 @@ type tokens interface {
 // Inbound is the side where others call Gator's agents: the clients a project's admin let in, the
 // Agent Cards of the agents it exposes, and the JSON-RPC endpoint.
 type Inbound struct {
-	pool   *pgxpool.Pool
-	q      *db.Queries
+	pool   *pgxpool.Pool // for the transaction that makes a client and its token together
+	q      inboundStore
 	bridge bridge
 	tokens tokens
 	roles  roles
@@ -57,8 +58,9 @@ type Inbound struct {
 	Wait time.Duration
 	Now  func() time.Time
 
-	mu   sync.Mutex
-	lims map[int32]*limits.Limiter // by a client's rate a minute
+	mu    sync.Mutex
+	lims  map[int32]*limits.Limiter // by a client's rate a minute
+	sends map[[16]byte]*sync.Mutex  // one message/send of a client at a time: its budget holds in a burst
 }
 
 // InboundDeps are what the inbound side needs.
@@ -73,7 +75,8 @@ type InboundDeps struct {
 // NewInbound builds it.
 func NewInbound(d InboundDeps) *Inbound {
 	return &Inbound{pool: d.Pool, q: db.New(d.Pool), bridge: d.Bridge, tokens: d.Tokens, roles: d.Roles,
-		PublicURL: strings.TrimRight(d.PublicURL, "/"), Wait: 25 * time.Second, Now: time.Now, lims: map[int32]*limits.Limiter{}}
+		PublicURL: strings.TrimRight(d.PublicURL, "/"), Wait: 25 * time.Second, Now: time.Now, lims: map[int32]*limits.Limiter{},
+		sends: map[[16]byte]*sync.Mutex{}}
 }
 
 var clientName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
@@ -334,22 +337,44 @@ func (in *Inbound) authorize(ctx context.Context, p auth.Principal, slug, handle
 	return rpcCall{client: client, agent: agent, slug: slug}, nil
 }
 
-// allow is the client's rate: per_minute requests a minute, in bursts of as many.
-func (in *Inbound) allow(c db.A2aClient) bool {
+// MaxOpenAsks is how many asks of one client may be answered at once.
+const MaxOpenAsks = 5
+
+// readsPerSend is how many tasks/get a client may make for each message/send it may: it asks
+// again while an agent works.
+const readsPerSend = 10
+
+// allow is the client's rate for a method: per_minute asks a minute (reads ten times as many), in
+// bursts of as many.
+func (in *Inbound) allow(c db.A2aClient, method string, factor int32) bool {
+	rate := c.PerMinute * factor
 	in.mu.Lock()
-	l, ok := in.lims[c.PerMinute]
+	l, ok := in.lims[rate]
 	if !ok {
-		l = limits.NewLimiter(float64(c.PerMinute)/60, int(c.PerMinute))
-		in.lims[c.PerMinute] = l
+		l = limits.NewLimiter(float64(rate)/60, int(rate))
+		in.lims[rate] = l
 	}
 	in.mu.Unlock()
-	return l.Allow(conversations.UUIDString(c.ID))
+	return l.Allow(method + ":" + conversations.UUIDString(c.ID))
+}
+
+// serial is the lock one client's message/send holds from its budget check to its post, so that a
+// burst cannot pass the same check together (on this server).
+func (in *Inbound) serial(c db.A2aClient) *sync.Mutex {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	m, ok := in.sends[c.ID.Bytes]
+	if !ok {
+		m = &sync.Mutex{}
+		in.sends[c.ID.Bytes] = m
+	}
+	return m
 }
 
 // send is message/send: the ask becomes a message of the client's in #a2a-<client>, asking the
 // agent, and the client gets the task that answers it.
 func (in *Inbound) send(ctx context.Context, c rpcCall, raw json.RawMessage) (any, *RPCError) {
-	if !in.allow(c.client) {
+	if !in.allow(c.client, methodSend, 1) {
 		return nil, &RPCError{Code: codeRateLimited, Message: fmt.Sprintf("at most %d requests a minute", c.client.PerMinute)}
 	}
 	var p SendParams
@@ -370,30 +395,9 @@ func (in *Inbound) send(ctx context.Context, c rpcCall, raw json.RawMessage) (an
 	case utf8.RuneCountInString(text) > maxTextRunes:
 		return nil, &RPCError{Code: codeInvalidParams, Message: fmt.Sprintf("a message is at most %d characters", maxTextRunes)}
 	}
-	spent, err := in.spent(ctx, c.client)
-	if err != nil {
-		return nil, internal(err)
-	}
-	if spent >= c.client.DailyBudgetUsd {
-		return nil, &RPCError{Code: codeBudget, Message: fmt.Sprintf("this client spent $%.2f of its $%.2f today", spent, c.client.DailyBudgetUsd)}
-	}
-	b := bridges.Bridge{Project: c.client.ProjectID, Provider: providerA2A}
-	conv, err := in.bridge.FindOrCreate(ctx, b, plugin.ConversationFindOrCreateParams{ExternalRef: "client/" + c.client.Name,
-		Kind: plugin.BridgeChannel, Name: channelPrefix + c.client.Name, Topic: "What the A2A client " + c.client.Name + " asked"})
-	if err != nil {
-		return nil, internal(err)
-	}
-	posted, err := in.bridge.Post(ctx, b, plugin.MessagePostParams{ConversationID: conv.ConversationID, Body: text,
-		Author:      plugin.ExternalAuthor{ExternalID: "client/" + c.client.Name, DisplayName: c.client.Name},
-		ExternalRef: "client/" + c.client.Name + "/" + c.agent.Handle + "/" + p.Message.MessageID, Mentions: []string{c.agent.Handle}})
-	if err != nil {
-		return nil, internal(err)
-	}
-	msg, _ := parseUUID(posted.MessageID)
-	task, err := in.q.CreateA2ATask(ctx, db.CreateA2ATaskParams{ClientID: c.client.ID, ProjectID: c.client.ProjectID, AgentID: c.agent.ID,
-		MessageID: msg, ContextID: oneLine(p.Message.ContextID, 200)})
-	if err != nil {
-		return nil, internal(err)
+	task, e := in.ask(ctx, c, p, text)
+	if e != nil {
+		return nil, e
 	}
 	view, err := in.view(ctx, task)
 	if err != nil {
@@ -415,12 +419,56 @@ func (in *Inbound) send(ctx context.Context, c rpcCall, raw json.RawMessage) (an
 	return view, nil
 }
 
+// ask is the part of message/send that spends: the budget is checked and the message posted under
+// the client's lock, so a burst cannot pass the same check together.
+func (in *Inbound) ask(ctx context.Context, c rpcCall, p SendParams, text string) (db.A2aTask, *RPCError) {
+	lock := in.serial(c.client)
+	lock.Lock()
+	defer lock.Unlock()
+	spent, err := in.spent(ctx, c.client)
+	if err != nil {
+		return db.A2aTask{}, internal(err)
+	}
+	if spent >= c.client.DailyBudgetUsd {
+		return db.A2aTask{}, &RPCError{Code: codeBudget, Message: fmt.Sprintf("this client spent $%.2f of its $%.2f today", spent, c.client.DailyBudgetUsd)}
+	}
+	// What is still being answered is not spent yet: a burst of asks is bounded by how many may be
+	// open at once, as the budget can only count what finished or started.
+	if open, err := in.q.CountOpenA2ATasks(ctx, c.client.ID); err != nil {
+		return db.A2aTask{}, internal(err)
+	} else if open >= MaxOpenAsks {
+		return db.A2aTask{}, &RPCError{Code: codeRateLimited, Message: fmt.Sprintf("at most %d asks may be open at once", MaxOpenAsks)}
+	}
+	b := bridges.Bridge{Project: c.client.ProjectID, Provider: providerA2A}
+	conv, err := in.bridge.FindOrCreate(ctx, b, plugin.ConversationFindOrCreateParams{ExternalRef: "client/" + c.client.Name,
+		Kind: plugin.BridgeChannel, Name: channelPrefix + c.client.Name, Topic: "What the A2A client " + c.client.Name + " asked"})
+	if err != nil {
+		return db.A2aTask{}, internal(err)
+	}
+	posted, err := in.bridge.Post(ctx, b, plugin.MessagePostParams{ConversationID: conv.ConversationID, Body: text,
+		Author:      plugin.ExternalAuthor{ExternalID: "client/" + c.client.Name, DisplayName: c.client.Name},
+		ExternalRef: "client/" + c.client.Name + "/" + c.agent.Handle + "/" + p.Message.MessageID, Mentions: []string{c.agent.Handle}})
+	if err != nil {
+		return db.A2aTask{}, internal(err)
+	}
+	msg, _ := words.UUID(posted.MessageID)
+	task, err := in.q.CreateA2ATask(ctx, db.CreateA2ATaskParams{ClientID: c.client.ID, ProjectID: c.client.ProjectID, AgentID: c.agent.ID,
+		MessageID: msg, ContextID: words.OneLine(p.Message.ContextID, 200)})
+	if err != nil {
+		return db.A2aTask{}, internal(err)
+	}
+	return task, nil
+}
+
 // get is tasks/get, for a task the client was given.
 func (in *Inbound) get(ctx context.Context, c rpcCall, raw json.RawMessage) (any, *RPCError) {
 	var p TaskQuery
 	id, ok := pgtype.UUID{}, false
 	if json.Unmarshal(raw, &p) == nil {
-		id, ok = parseUUID(p.ID)
+		id, ok = words.UUID(p.ID)
+	}
+	if !in.allow(c.client, methodGetTask, readsPerSend) {
+		return nil, &RPCError{Code: codeRateLimited, Message: fmt.Sprintf("at most %d reads a minute", c.client.PerMinute*readsPerSend)}
 	}
 	missing := &RPCError{Code: codeTaskNotFound, Message: "task not found"}
 	if !ok {
@@ -492,9 +540,4 @@ func internal(err error) *RPCError {
 		return &RPCError{Code: codeInvalidParams, Message: pe.Message}
 	}
 	return &RPCError{Code: codeInternal, Message: "internal error"}
-}
-
-func parseUUID(s string) (pgtype.UUID, bool) {
-	var u pgtype.UUID
-	return u, u.Scan(s) == nil && u.Valid
 }

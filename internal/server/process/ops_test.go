@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -211,5 +212,31 @@ func TestChoreWithDeployHasRelease(t *testing.T) {
 	}
 	if task, err = svc.Advance(ctx, task.ID, user, ""); err != nil || task.Phase != "release" {
 		t.Fatalf("with deploy, approved should lead to release: %q %v", task.Phase, err)
+	}
+}
+
+// An approval of one wait holds only while the task waits there: checked under the task's lock,
+// so a task that moved on (or came back to the phase later) is not approved by a stale decision.
+func TestApproveWaitingHoldsOnlyForThatWait(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	project, user := newProject(t, pool)
+	svc := service(t, pool)
+	task, err := svc.Create(ctx, CreateParams{ProjectID: project, Kind: "feature", Title: "wait"}, Actor{Kind: ActorUser, ID: user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ApproveWaiting(ctx, task.ID, user, task.Phase, task.PhaseEnteredAt.Time.Add(time.Second)); !errors.Is(err, ErrGateMoved) {
+		t.Fatalf("another moment of the same phase: %v", err)
+	}
+	if err := svc.ApproveWaiting(ctx, task.ID, user, "planning", task.PhaseEnteredAt.Time); !errors.Is(err, ErrGateMoved) {
+		t.Fatalf("another phase: %v", err)
+	}
+	if err := svc.ApproveWaiting(ctx, task.ID, user, task.Phase, task.PhaseEnteredAt.Time); err != nil {
+		t.Fatalf("the wait itself: %v", err)
+	}
+	g, err := db.New(pool).GetGate(ctx, db.GetGateParams{TaskID: task.ID, Phase: task.Phase})
+	if err != nil || g.HumanApprovedBy != user {
+		t.Fatalf("gate %+v %v", g, err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/store/db"
+	"github.com/onegator/gator/internal/server/words"
 	"github.com/onegator/gator/plugin"
 )
 
@@ -89,7 +90,7 @@ func (s *Service) threadUnder(ctx context.Context, b Bridge, parentRef string) (
 
 // taskThread is the thread of a task of the bridge's project.
 func (s *Service) taskThread(ctx context.Context, b Bridge, id string) (db.Conversation, error) {
-	tid, ok := parseUUID(id)
+	tid, ok := words.UUID(id)
 	if !ok {
 		return db.Conversation{}, invalid("task_id %q is not a uuid", id)
 	}
@@ -132,7 +133,7 @@ func (s *Service) bridged(ctx context.Context, b Bridge, id pgtype.UUID) (db.Con
 // Post is message.post: what somebody said outside, as the person their account is linked to when
 // that person may write here, else as the outside identity.
 func (s *Service) Post(ctx context.Context, b Bridge, p plugin.MessagePostParams) (plugin.MessagePostResult, error) {
-	id, ok := parseUUID(p.ConversationID)
+	id, ok := words.UUID(p.ConversationID)
 	if !ok {
 		return plugin.MessagePostResult{}, invalid("conversation_id %q is not a uuid", p.ConversationID)
 	}
@@ -169,6 +170,12 @@ func (s *Service) Post(ctx context.Context, b Bridge, p plugin.MessagePostParams
 	if err != nil {
 		return plugin.MessagePostResult{}, err
 	}
+	if len(mentions) > 0 && author.Kind == conversations.AuthorExternal && b.Provider != ProviderA2A {
+		if _, err := s.q.GetExternalMessage(ctx, db.GetExternalMessageParams{ProjectID: b.Project, Provider: b.Provider, ExternalRef: p.ExternalRef}); errors.Is(err, pgx.ErrNoRows) &&
+			!s.asks.Allow(words.UUIDString(who.ID)) {
+			return plugin.MessagePostResult{}, forbidden("too many asks from this account; wait a minute")
+		}
+	}
 	msg, replayed, err := s.deps.Writer.Post(ctx, conversations.BridgedPost{Conversation: conv, Author: author, Body: p.Body,
 		Mentions: mentions, Provider: b.Provider, ExternalRef: p.ExternalRef})
 	if errors.Is(err, conversations.ErrInvalid) {
@@ -188,7 +195,7 @@ func (s *Service) identity(ctx context.Context, b Bridge, a plugin.ExternalAutho
 		return db.ExternalIdentity{}, invalid("an author's external_id is 1–%d characters of one line", maxExternalID)
 	}
 	return s.q.UpsertExternalIdentity(ctx, db.UpsertExternalIdentityParams{ProjectID: b.Project, Provider: b.Provider,
-		ExternalID: ext, DisplayName: displayName(a.DisplayName)})
+		ExternalID: ext, DisplayName: words.OneLine(a.DisplayName, maxDisplayName)})
 }
 
 // agents are the agents of the bridge's project that a message names by handle.

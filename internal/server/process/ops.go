@@ -639,10 +639,37 @@ func (s *Service) SetCheck(ctx context.Context, taskID pgtype.UUID, c Check) err
 
 // Approve records a human approval on the current gate. It does not advance; Advance does.
 func (s *Service) Approve(ctx context.Context, taskID pgtype.UUID, userID pgtype.UUID) error {
+	return s.approve(ctx, taskID, userID, nil)
+}
+
+// ErrGateMoved answers an approval of a gate the task no longer waits at.
+var ErrGateMoved = errors.New("the task no longer waits at that gate")
+
+// ApproveWaiting is Approve of one wait: the gate of phase, entered at entered. A task that has moved
+// on (or came back to the phase later) is not approved by a decision made about the old wait — a
+// button pressed outside on a card drawn before the move.
+func (s *Service) ApproveWaiting(ctx context.Context, taskID, userID pgtype.UUID, phase string, entered time.Time) error {
+	return s.approve(ctx, taskID, userID, func(t db.Task) error {
+		if t.ClosedAt.Valid {
+			return ErrTaskClosed
+		}
+		if t.Phase != phase || t.PhaseEnteredAt.Time.UnixMicro() != entered.UnixMicro() {
+			return ErrGateMoved
+		}
+		return nil
+	})
+}
+
+func (s *Service) approve(ctx context.Context, taskID, userID pgtype.UUID, check func(db.Task) error) error {
 	return s.tx(ctx, func(q *db.Queries) error {
 		task, err := q.GetTaskForUpdate(ctx, taskID)
 		if err != nil {
 			return err
+		}
+		if check != nil {
+			if err := check(task); err != nil {
+				return err
+			}
 		}
 		if err := q.SetGateHumanApproval(ctx, db.SetGateHumanApprovalParams{TaskID: taskID, Phase: task.Phase, HumanApprovedBy: userID}); err != nil {
 			return err

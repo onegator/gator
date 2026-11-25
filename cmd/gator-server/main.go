@@ -254,7 +254,7 @@ func serve(ctx context.Context) error {
 	// endpoint (through netguard), and the project's clients call the agents it exposes at /a2a.
 	farAgents := a2a.NewRemote(a2a.RemoteDeps{Queries: dbq.New(db.Pool), Keys: keyring, Client: a2a.Client{HTTP: outbound.Client(2 * time.Minute)},
 		Roles: auth.Authorizer{Pool: db.Pool}, Voice: team.Voice, Open: chat.Access, Packer: chat.Packer, Log: log})
-	team.Starter.AnswerElsewhere(agents.KindRemote, farAgents)
+	team.AnswerElsewhere(agents.KindRemote, farAgents)
 	go farAgents.Run(ctx, 2*time.Second)
 	a2aIn := a2a.NewInbound(a2a.InboundDeps{Pool: db.Pool, Bridge: bridge, Tokens: auth.Tokens{Pool: db.Pool},
 		Roles: auth.Authorizer{Pool: db.Pool}, PublicURL: cfg.PublicURL})

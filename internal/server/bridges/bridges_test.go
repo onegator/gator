@@ -21,6 +21,7 @@ import (
 	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/store/storetest"
+	"github.com/onegator/gator/internal/server/words"
 	"github.com/onegator/gator/plugin"
 )
 
@@ -49,9 +50,21 @@ func testPool(t *testing.T) *pgxpool.Pool {
 }
 
 // approvals records what was approved, for the person.
-type approvals struct{ calls []string }
+type approvals struct {
+	pool  *pgxpool.Pool
+	calls []string
+}
 
-func (a *approvals) Approve(_ context.Context, task, user pgtype.UUID) error {
+// ApproveWaiting checks the wait as the process does, against the task as it is.
+func (a *approvals) ApproveWaiting(ctx context.Context, task, user pgtype.UUID, phase string, entered time.Time) error {
+	var now string
+	var at time.Time
+	if err := a.pool.QueryRow(ctx, "SELECT phase, phase_entered_at FROM tasks WHERE id = $1", task).Scan(&now, &at); err != nil {
+		return err
+	}
+	if now != phase || at.UnixMicro() != entered.UnixMicro() {
+		return process.ErrGateMoved
+	}
 	a.calls = append(a.calls, conversations.UUIDString(task)+" by "+conversations.UUIDString(user))
 	return nil
 }
@@ -77,7 +90,7 @@ func newWorld(t *testing.T) *world {
 	proc := process.NewService(pool, process.StaticCatalog(cat), process.StaticCapabilities(nil))
 	roles := auth.Authorizer{Pool: pool}
 	chat := conversations.New(pool, conversations.Deps{Roles: roles, Decisions: proc, Tasks: proc})
-	w := &world{t: t, ctx: context.Background(), pool: pool, q: db.New(pool), chat: chat, approve: &approvals{}, clock: time.Now()}
+	w := &world{t: t, ctx: context.Background(), pool: pool, q: db.New(pool), chat: chat, approve: &approvals{pool: pool}, clock: time.Now()}
 	w.svc = New(pool, Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access, Roles: roles, Approver: w.approve,
 		Now: func() time.Time { return w.clock }})
 	return w
@@ -113,7 +126,7 @@ func (w *world) channel(b Bridge, ref, name string) pgtype.UUID {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	id, _ := parseUUID(r.ConversationID)
+	id, _ := words.UUID(r.ConversationID)
 	return id
 }
 
@@ -152,7 +165,7 @@ func TestPostIsAnOutsideIdentityAndIdempotent(t *testing.T) {
 	if second.MessageID != first.MessageID || !second.Replayed {
 		t.Fatalf("a redelivered event wrote %+v", second)
 	}
-	id, _ := parseUUID(first.MessageID)
+	id, _ := words.UUID(first.MessageID)
 	msg, _ := w.q.GetMessage(w.ctx, id)
 	if msg.Body != "hello <@gator> reviewer" || conversations.OriginOf(msg).Provider != "slack" {
 		t.Errorf("message %q origin %s", msg.Body, msg.Origin)
@@ -311,7 +324,7 @@ func TestOutgoingSkipsEchoAndWhatIsNotBridged(t *testing.T) {
 	admin := w.person(p, "admin")
 	conv := w.channel(slack, "T1/C1", "eng")
 	in := w.post(slack, conv, "T1/U1", "T1/C1/1", "from slack")
-	inID, _ := parseUUID(in.MessageID)
+	inID, _ := words.UUID(in.MessageID)
 	if _, ok, err := w.svc.Outgoing(w.ctx, slack, inID); err != nil || ok {
 		t.Errorf("echo: %v %v", ok, err)
 	}
@@ -505,7 +518,7 @@ func TestOutsideWordsArePackedAsUntrusted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _ := parseUUID(r.MessageID)
+	id, _ := words.UUID(r.MessageID)
 	msg, _ := w.q.GetMessage(w.ctx, id)
 	c, _ := w.q.GetConversation(w.ctx, conv)
 	pack, err := w.chat.Packer.Pack(w.ctx, c, msg)
@@ -536,9 +549,9 @@ func TestAnAnswerSaysWhatItAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conv, _ := parseUUID(r.ConversationID)
+	conv, _ := words.UUID(r.ConversationID)
 	asked := w.post(github, conv, "4242", "acme/app#12/comment/77", "@gator reviewer is this safe?", "reviewer")
-	askedID, _ := parseUUID(asked.MessageID)
+	askedID, _ := words.UUID(asked.MessageID)
 	reviewer, err := w.q.GetAgentByHandle(w.ctx, db.GetAgentByHandleParams{Handle: "reviewer", ProjectID: p})
 	if err != nil {
 		t.Fatal(err)
@@ -565,5 +578,38 @@ func TestAnAnswerSaysWhatItAnswers(t *testing.T) {
 	// The question itself came from GitHub: it does not go back there.
 	if _, ok, _ := w.svc.Outgoing(w.ctx, github, askedID); ok {
 		t.Error("echo")
+	}
+}
+
+// One outside account asks agents at most AsksPerMinute times a minute; a redelivery is no new ask.
+func TestOutsideAsksAreRateLimited(t *testing.T) {
+	w := newWorld(t)
+	p := w.project()
+	slack := Bridge{Project: p, Provider: "slack"}
+	conv := w.channel(slack, "T1/C1", "eng")
+	ask := func(ref string) error {
+		_, err := w.svc.Post(w.ctx, slack, plugin.MessagePostParams{ConversationID: conversations.UUIDString(conv), Body: "@reviewer hi",
+			Author: plugin.ExternalAuthor{ExternalID: "T1/U1"}, ExternalRef: ref, Mentions: []string{"reviewer"}})
+		return err
+	}
+	for i := range AsksPerMinute {
+		if err := ask(fmt.Sprintf("T1/C1/%d", i)); err != nil {
+			t.Fatalf("ask %d: %v", i, err)
+		}
+	}
+	if err := ask("T1/C1/0"); err != nil {
+		t.Errorf("a redelivery was counted: %v", err)
+	}
+	if err := ask("T1/C1/next"); code(err) != plugin.CodeForbidden {
+		t.Errorf("past the rate: %v", err)
+	}
+	// Words that ask nobody are not limited, and another account has its own rate.
+	if _, err := w.svc.Post(w.ctx, slack, plugin.MessagePostParams{ConversationID: conversations.UUIDString(conv), Body: "just talking",
+		Author: plugin.ExternalAuthor{ExternalID: "T1/U1"}, ExternalRef: "T1/C1/talk"}); err != nil {
+		t.Errorf("plain words: %v", err)
+	}
+	if _, err := w.svc.Post(w.ctx, slack, plugin.MessagePostParams{ConversationID: conversations.UUIDString(conv), Body: "@reviewer hi",
+		Author: plugin.ExternalAuthor{ExternalID: "T1/U2"}, ExternalRef: "T1/C1/u2", Mentions: []string{"reviewer"}}); err != nil {
+		t.Errorf("another account: %v", err)
 	}
 }

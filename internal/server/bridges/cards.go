@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
+	"github.com/onegator/gator/internal/server/words"
 	"github.com/onegator/gator/plugin"
 )
 
@@ -56,7 +59,7 @@ func offered(m db.Message) []string {
 // person the outside account is linked to, with their role in the project. An account linked to
 // nobody, or to somebody who could not press it in Gator, presses nothing.
 func (s *Service) CardAction(ctx context.Context, b Bridge, p plugin.CardActionParams) (plugin.CardActionResult, error) {
-	id, ok := parseUUID(p.MessageID)
+	id, ok := words.UUID(p.MessageID)
 	if !ok {
 		return plugin.CardActionResult{}, invalid("message_id %q is not a uuid", p.MessageID)
 	}
@@ -99,7 +102,7 @@ func (s *Service) CardAction(ctx context.Context, b Bridge, p plugin.CardActionP
 	}
 	var d decisionData
 	_ = json.Unmarshal(msg.Card, &d)
-	task, ok := parseUUID(d.Ref.TaskID)
+	task, ok := words.UUID(d.Ref.TaskID)
 	if !ok {
 		return plugin.CardActionResult{}, invalid("the card names no task")
 	}
@@ -107,16 +110,38 @@ func (s *Service) CardAction(ctx context.Context, b Bridge, p plugin.CardActionP
 	if err != nil || t.ProjectID != b.Project {
 		return plugin.CardActionResult{}, notFound("task not found in this project")
 	}
-	// The card is one wait: a phase entered at one moment. A task that moved on since waits on a
-	// gate nobody outside was shown, whatever an old button says.
-	if msg.CardKey == nil || *msg.CardKey != fmt.Sprintf("decision:%s:%d", t.Phase, t.PhaseEnteredAt.Time.UnixMicro()) {
-		return plugin.CardActionResult{Message: "The task has moved on since this card; decide in Gator."}, nil
+	// The card is one wait: a phase entered at one moment (its key). Approval holds only while the
+	// task still waits there, checked under the task's lock: a task that moved on waits on a gate
+	// nobody outside was shown, whatever an old button says.
+	phase, entered, ok := waitOf(msg)
+	if !ok {
+		return plugin.CardActionResult{}, invalid("the card names no wait")
 	}
-	if err := s.deps.Approver.Approve(ctx, task, u.ID); err != nil {
-		if errors.Is(err, process.ErrTaskClosed) {
-			return plugin.CardActionResult{Message: "The task is closed."}, nil
-		}
+	err = s.deps.Approver.ApproveWaiting(ctx, task, u.ID, phase, entered)
+	switch {
+	case errors.Is(err, process.ErrTaskClosed):
+		return plugin.CardActionResult{Message: "The task is closed."}, nil
+	case errors.Is(err, process.ErrGateMoved):
+		return plugin.CardActionResult{Message: "The task has moved on since this card; decide in Gator."}, nil
+	case err != nil:
 		return plugin.CardActionResult{}, err
 	}
 	return plugin.CardActionResult{Done: true, Message: "Approved by " + u.Name + "."}, nil
+}
+
+// waitOf reads a decision card's key, decision:<phase>:<unix micro of entering it>.
+func waitOf(m db.Message) (string, time.Time, bool) {
+	if m.CardKey == nil {
+		return "", time.Time{}, false
+	}
+	rest, ok := strings.CutPrefix(*m.CardKey, "decision:")
+	i := strings.LastIndex(rest, ":")
+	if !ok || i <= 0 {
+		return "", time.Time{}, false
+	}
+	micro, err := strconv.ParseInt(rest[i+1:], 10, 64)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return rest[:i], time.UnixMicro(micro), true
 }

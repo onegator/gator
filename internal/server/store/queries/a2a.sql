@@ -60,12 +60,23 @@ INSERT INTO a2a_calls (turn_id, agent_id, project_id) VALUES (sqlc.arg(turn_id),
 ON CONFLICT (turn_id) DO NOTHING;
 
 -- name: ClaimA2ACall :one
--- The oldest call nobody is making: pending, or claimed by a worker that died (claim_ttl ago).
+-- The oldest call nobody is making: pending, or claimed by a worker that died (claim_ttl ago), of an
+-- agent with fewer than per_agent calls being made right now.
 UPDATE a2a_calls SET status = 'calling', claimed_at = now(), attempts = attempts + 1
-WHERE turn_id = (SELECT turn_id FROM a2a_calls
-                 WHERE status = 'pending' OR (status = 'calling' AND claimed_at < now() - sqlc.arg(claim_ttl)::interval)
-                 ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+WHERE turn_id = (SELECT c.turn_id FROM a2a_calls c
+                 WHERE (c.status = 'pending' OR (c.status = 'calling' AND c.claimed_at < now() - sqlc.arg(claim_ttl)::interval))
+                   AND (SELECT count(*) FROM a2a_calls b WHERE b.agent_id = c.agent_id AND b.status = 'calling'
+                          AND b.claimed_at >= now() - sqlc.arg(claim_ttl)::interval) < sqlc.arg(per_agent)::bigint
+                 ORDER BY c.created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING *;
+
+-- name: CountA2ACallsSince :one
+SELECT count(*) FROM a2a_calls WHERE agent_id = sqlc.arg(agent_id) AND created_at >= sqlc.arg(since);
+
+-- name: EndOpenA2ACall :execrows
+-- Ends a call nobody has ended yet (a person stopped its turn).
+UPDATE a2a_calls SET status = 'failed', error = sqlc.arg(error), finished_at = now(), claimed_at = NULL
+WHERE turn_id = sqlc.arg(turn_id) AND status IN ('pending', 'calling');
 
 -- name: SetA2ARemoteTask :exec
 UPDATE a2a_calls SET remote_task_id = sqlc.arg(remote_task_id), claimed_at = now() WHERE turn_id = sqlc.arg(turn_id);
@@ -79,3 +90,11 @@ SELECT * FROM a2a_calls WHERE turn_id = $1;
 
 -- name: GetA2AClientByIdentity :one
 SELECT * FROM a2a_clients WHERE identity_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1;
+
+-- name: CountOpenA2ATasks :one
+-- A client's asks still being answered (or not read by the agents yet), of the last hour: what it
+-- may spend that its budget does not count yet.
+SELECT count(*) FROM a2a_tasks k
+LEFT JOIN agent_turns t ON t.agent_id = k.agent_id AND t.trigger_message_id = k.message_id
+WHERE k.client_id = sqlc.arg(client_id) AND k.created_at > now() - interval '1 hour'
+  AND (t.id IS NULL OR t.status IN ('queued', 'running'));

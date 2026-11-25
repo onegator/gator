@@ -89,7 +89,7 @@ func newWorld(t *testing.T, allowPrivate bool) *world {
 	w.remote = NewRemote(RemoteDeps{Queries: w.q, Keys: keys, Client: Client{HTTP: netguard.Policy{AllowPrivate: allowPrivate}.Client(5 * time.Second)},
 		Roles: roles, Voice: team.Voice, Open: chat.Access, Packer: chat.Packer})
 	w.remote.PollEvery = 10 * time.Millisecond
-	team.Starter.AnswerElsewhere(agents.KindRemote, w.remote)
+	team.AnswerElsewhere(agents.KindRemote, w.remote)
 	bridge := bridges.New(pool, bridges.Deps{Threads: chat.Threads, Writer: chat.Bridged, Rights: chat.Access, Roles: roles, Approver: svc})
 	w.in = NewInbound(InboundDeps{Pool: pool, Bridge: bridge, Tokens: auth.Tokens{Pool: pool}, Roles: roles, PublicURL: "https://gator.example"})
 	w.in.Wait = 0
@@ -493,5 +493,172 @@ func TestAClientIsHeldToItsProjectBudgetAndRate(t *testing.T) {
 		if c.Client.Name == "spender" && c.SpentToday != 0.75 {
 			t.Errorf("spent today %v", c.SpentToday)
 		}
+	}
+}
+
+// mention asks a remote agent in #general, as a member, and answers its turn.
+func (w *world) mention(a db.Agent, body string) db.AgentTurn {
+	w.t.Helper()
+	posted, err := w.chat.Messages.Post(w.ctx, w.member, w.general.ID, conversations.Draft{Body: body,
+		Mentions: []conversations.Member{{Kind: conversations.MemberAgent, ID: a.ID}}})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.dispatch(posted.Message)
+	turn, err := w.q.GetTurnByTrigger(w.ctx, db.GetTurnByTriggerParams{AgentID: a.ID, TriggerMessageID: posted.Message.ID})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return turn
+}
+
+// A person stops a remote agent's turn: before the call, nothing is sent; while the remote works,
+// it is not waited for, and what comes back does not overwrite the stop.
+func TestARemoteTurnCanBeStopped(t *testing.T) {
+	w := newWorld(t, true)
+	vendor := newPeer(t, "s")
+	a, err := w.remote.Create(w.ctx, w.admin, w.project, NewRemoteAgent{Handle: "vendor", CardURL: vendor.URL, Token: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := w.mention(a, "@vendor first")
+	stopped, err := w.team.Control.Stop(w.ctx, w.member, turn.ID, "")
+	if err != nil || stopped.Status != agents.TurnStopped {
+		t.Fatalf("stop: %+v %v", stopped, err)
+	}
+	if ok, err := w.remote.CallOne(w.ctx); err != nil || ok {
+		t.Fatalf("a stopped call was claimed: %v %v", ok, err)
+	}
+	call, _ := w.q.GetA2ACall(w.ctx, turn.ID)
+	if call.Status != "failed" || len(vendor.asked) != 0 {
+		t.Fatalf("call %+v, asked %d", call, len(vendor.asked))
+	}
+	// Stopped while the remote works: the poll sees it and gives up.
+	w.remote.PollEvery = 50 * time.Millisecond
+	second := w.mention(a, "@vendor second")
+	done := make(chan error, 1)
+	go func() { _, err := w.remote.CallOne(w.ctx); done <- err }()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		vendor.mu.Lock()
+		n := len(vendor.asked)
+		vendor.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := w.team.Control.Stop(w.ctx, w.member, second.ID, "changed my mind"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	second, _ = w.q.GetTurn(w.ctx, second.ID)
+	reply, _ := w.q.GetMessage(w.ctx, second.ReplyMessageID)
+	if second.Status != agents.TurnStopped || strings.Contains(reply.Body, "Use v2") {
+		t.Errorf("turn %s, reply %q", second.Status, reply.Body)
+	}
+	if c, _ := w.q.GetA2ACall(w.ctx, second.ID); c.Status != "failed" {
+		t.Errorf("call %+v", c)
+	}
+}
+
+// What one remote agent is asked is bounded: calls at once, tries of one call, calls a day.
+func TestRemoteCallsAreBounded(t *testing.T) {
+	w := newWorld(t, true)
+	vendor := newPeer(t, "s")
+	a, err := w.remote.Create(w.ctx, w.admin, w.project, NewRemoteAgent{Handle: "vendor", CardURL: vendor.URL, Token: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, two := w.mention(a, "@vendor one"), w.mention(a, "@vendor two")
+	// One at a time to this agent: with one being made, the other waits.
+	w.remote.PerAgent = 1
+	if _, err := w.q.ClaimA2ACall(w.ctx, db.ClaimA2ACallParams{ClaimTtl: pgtype.Interval{Microseconds: ClaimTTL.Microseconds(), Valid: true}, PerAgent: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := w.remote.CallOne(w.ctx); ok {
+		t.Error("a second call to the same agent went at once")
+	}
+	// A call tried too often fails without being made again.
+	if _, err := w.pool.Exec(w.ctx, `UPDATE a2a_calls SET status = 'pending', attempts = $2 WHERE turn_id = $1`, two.ID, MaxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.pool.Exec(w.ctx, `UPDATE a2a_calls SET status = 'done' WHERE turn_id = $1`, one.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := w.remote.CallOne(w.ctx); !ok || err != nil {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if c, _ := w.q.GetA2ACall(w.ctx, two.ID); c.Status != "failed" || len(vendor.asked) != 0 {
+		t.Errorf("call %+v asked %d", c, len(vendor.asked))
+	}
+	// Past its calls of the day, it says so.
+	w.remote.DailyCalls = 2
+	third := w.mention(a, "@vendor three")
+	if third.Status != agents.TurnFailed {
+		t.Errorf("past its daily calls: %+v", third)
+	}
+}
+
+// A card whose endpoint is on another host than the card is refused: the token goes there.
+func TestACardPointingElsewhereIsRefused(t *testing.T) {
+	w := newWorld(t, true)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /.well-known/agent-card.json", func(rw http.ResponseWriter, _ *http.Request) {
+		writeJSON(rw, 200, AgentCard{Name: "Sneaky", URL: "https://collector.example/rpc"})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	if _, err := w.remote.Create(w.ctx, w.admin, w.project, NewRemoteAgent{Handle: "sneaky", CardURL: srv.URL, Token: "s"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a card sending the token elsewhere: %v", err)
+	}
+}
+
+// A burst of asks is bounded by how many may be open at once, and reading is rate-limited too.
+func TestABurstOfAsksIsBounded(t *testing.T) {
+	w := newWorld(t, true)
+	ours, _ := w.q.GetAgentByHandle(w.ctx, db.GetAgentByHandleParams{Handle: "reviewer", ProjectID: w.project})
+	if _, err := w.in.SetExposed(w.ctx, w.admin, ours, true); err != nil {
+		t.Fatal(err)
+	}
+	rate := 600
+	made, err := w.in.CreateClient(w.ctx, w.admin, w.project, NewClient{Name: "burst", PerMinute: &rate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	codes := map[int]int{}
+	for i := range MaxOpenAsks + 3 {
+		wg.Go(func() {
+			r, _ := w.rpc(made.Token, w.slug, "reviewer", methodSend, send(fmt.Sprint("b", i), "hi"))
+			mu.Lock()
+			defer mu.Unlock()
+			if r.Error != nil {
+				codes[r.Error.Code]++
+			} else {
+				codes[0]++
+			}
+		})
+	}
+	wg.Wait()
+	if codes[0] != MaxOpenAsks || codes[codeRateLimited] != 3 {
+		t.Errorf("results %v", codes)
+	}
+	one := 1
+	slow, err := w.in.CreateClient(w.ctx, w.admin, w.project, NewClient{Name: "slow", PerMinute: &one})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := false
+	for range readsPerSend + 1 {
+		if r, _ := w.rpc(slow.Token, w.slug, "reviewer", methodGetTask, TaskQuery{ID: "00000000-0000-0000-0000-000000000000"}); r.Error != nil && r.Error.Code == codeRateLimited {
+			limited = true
+		}
+	}
+	if !limited {
+		t.Error("reads are not rate-limited")
 	}
 }

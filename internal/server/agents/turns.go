@@ -94,6 +94,8 @@ type Starter struct {
 // start is repeated, and must not begin twice.
 type Elsewhere interface {
 	Begin(ctx context.Context, turn db.AgentTurn, r Request, home db.Conversation) (*Refusal, error)
+	// Stopped says a person stopped a turn it began: nothing more is asked or waited for.
+	Stopped(ctx context.Context, turn db.AgentTurn) error
 }
 
 // AnswerElsewhere has the turns of agents of kind answered by e instead of a runner's job.

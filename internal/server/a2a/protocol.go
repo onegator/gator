@@ -16,6 +16,8 @@ package a2a
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/onegator/gator/internal/server/bridges"
 )
 
 // ProtocolVersion is the A2A version the cards say.
@@ -213,7 +215,7 @@ const (
 	maxTextRunes         = 40000
 	defaultDailyBudget   = 5
 	defaultPerMinute     = 30
-	providerA2A          = "a2a"
+	providerA2A          = bridges.ProviderA2A
 	channelPrefix        = "a2a-"
 	bearerSchemeName     = "bearer"
 	jsonRPCTransportName = "JSONRPC"
