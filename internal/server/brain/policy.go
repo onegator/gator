@@ -24,8 +24,9 @@ type Reader struct {
 	// Project is set when an agent reads, from inside a job of that project (or a preview of
 	// one): it reads only what is approved and still true. Unset for a person.
 	Project pgtype.UUID
-	// Job is the job the agent reads from, when there is one.
-	Job pgtype.UUID
+	// Job is the job the agent reads from, when there is one, and Agent the job's agent.
+	Job   pgtype.UUID
+	Agent pgtype.UUID
 }
 
 // ReadsProject says whether r may read what is open to project's members.
@@ -115,8 +116,9 @@ func (p Policy) Rights(ctx context.Context, r Reader, e db.BrainEntry) (Rights, 
 	out := Rights{Read: true}
 	if r.IsJob() {
 		// An agent proposes about its own project, never as a person and never for the workspace.
+		// An agent's own lessons are its own: not another agent's.
 		out.Propose = e.ProjectID.Valid && e.ProjectID.Bytes == r.Project.Bytes &&
-			(e.Scope == ScopeProject || e.Scope == ScopeComponent || e.Scope == ScopeAgent)
+			(e.Scope == ScopeProject || e.Scope == ScopeComponent || (e.Scope == ScopeAgent && r.Agent.Valid && e.AgentID == r.Agent))
 		return out, nil
 	}
 	switch e.Scope {
@@ -153,6 +155,15 @@ func inReach(r Reader, e db.BrainEntry) bool {
 		}
 	}
 	return false
+}
+
+// readsConversationID is readsConversation for a conversation named by its id as text.
+func (p Policy) readsConversationID(ctx context.Context, r Reader, id string) (bool, error) {
+	conv, ok := ParseUUID(id)
+	if !ok {
+		return false, nil
+	}
+	return p.readsConversation(ctx, r, conv)
 }
 
 func (p Policy) readsConversation(ctx context.Context, r Reader, conv pgtype.UUID) (bool, error) {

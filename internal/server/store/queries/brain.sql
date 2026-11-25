@@ -134,7 +134,7 @@ ON CONFLICT DO NOTHING;
 
 -- name: ListBrainCitations :many
 -- Where an entry was used: the jobs that were handed it, looked it up or cited it.
-SELECT c.job_id, c.entry_id, c.how, c.created_at, j.task_id, j.role FROM brain_citations c JOIN jobs j ON j.id = c.job_id
+SELECT c.job_id, c.entry_id, c.how, c.created_at, j.task_id, j.role, j.project_id FROM brain_citations c JOIN jobs j ON j.id = c.job_id
 WHERE c.entry_id = ANY(sqlc.arg(ids)::uuid[]) ORDER BY c.created_at DESC LIMIT 200;
 
 -- name: ListJobCitations :many

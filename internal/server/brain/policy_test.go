@@ -100,7 +100,9 @@ func TestPolicyDecidesWhoWritesAndApproves(t *testing.T) {
 	member := Reader{User: ada, Roles: map[[16]byte]auth.Role{alpha.Bytes: auth.RoleMember}}
 	viewer := Reader{User: bob, Roles: map[[16]byte]auth.Role{alpha.Bytes: auth.RoleViewer}}
 	admin := Reader{User: bob, Admin: true}
-	agent := Reader{Job: job, Project: alpha, User: ada, Roles: map[[16]byte]auth.Role{alpha.Bytes: auth.RoleMember}}
+	agent := Reader{Job: job, Project: alpha, User: ada, Agent: id(40), Roles: map[[16]byte]auth.Role{alpha.Bytes: auth.RoleMember}}
+	ownLesson := db.BrainEntry{Scope: ScopeAgent, ProjectID: alpha, AgentID: id(40), Status: StatusApproved}
+	othersLesson := db.BrainEntry{Scope: ScopeAgent, ProjectID: alpha, AgentID: id(41), Status: StatusApproved}
 	project := db.BrainEntry{Scope: ScopeProject, ProjectID: alpha, Status: StatusApproved}
 	other := db.BrainEntry{Scope: ScopeProject, ProjectID: beta, Status: StatusApproved}
 	workspace := db.BrainEntry{Scope: ScopeWorkspace, Status: StatusApproved}
@@ -121,6 +123,8 @@ func TestPolicyDecidesWhoWritesAndApproves(t *testing.T) {
 		{"never for another project", agent, other, false, false},
 		{"never for the workspace", agent, workspace, false, false},
 		{"never as the person it acts for", agent, adas, false, false},
+		{"an agent writes down its own lessons", agent, ownLesson, true, false},
+		{"not another agent's", agent, othersLesson, false, false},
 	}
 	for _, c := range cases {
 		r, err := policy.Rights(context.Background(), c.reader, c.entry)

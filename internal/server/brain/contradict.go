@@ -94,11 +94,16 @@ func SupersedeContradicted(ctx context.Context, st Store, e db.BrainEntry) error
 		if l.Relation != "contradicts" || l.TargetKind != "entry" {
 			continue
 		}
-		id, ok := ParseUUID(l.TargetID)
-		if !ok {
+		// The link says so, and the target is still a true decision of the same project: only then
+		// does approving this stop it being true. A link that says otherwise supersedes nothing.
+		target, ok, err := lookup(ctx, l.TargetID, st.GetBrainEntry)
+		if err != nil {
+			return err
+		}
+		if !ok || target.Kind != KindDecision || !Live(target) || target.ProjectID != e.ProjectID || target.Lineage == e.Lineage {
 			continue
 		}
-		old, err := st.SupersedeBrainEntry(ctx, id)
+		old, err := st.SupersedeBrainEntry(ctx, target.ID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue // no longer approved: nothing to supersede
 		}

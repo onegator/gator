@@ -683,7 +683,7 @@ func (q *Queries) LatestBrainVersionByTitle(ctx context.Context, arg LatestBrain
 }
 
 const listBrainCitations = `-- name: ListBrainCitations :many
-SELECT c.job_id, c.entry_id, c.how, c.created_at, j.task_id, j.role FROM brain_citations c JOIN jobs j ON j.id = c.job_id
+SELECT c.job_id, c.entry_id, c.how, c.created_at, j.task_id, j.role, j.project_id FROM brain_citations c JOIN jobs j ON j.id = c.job_id
 WHERE c.entry_id = ANY($1::uuid[]) ORDER BY c.created_at DESC LIMIT 200
 `
 
@@ -694,6 +694,7 @@ type ListBrainCitationsRow struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	TaskID    pgtype.UUID        `json:"task_id"`
 	Role      string             `json:"role"`
+	ProjectID pgtype.UUID        `json:"project_id"`
 }
 
 // Where an entry was used: the jobs that were handed it, looked it up or cited it.
@@ -713,6 +714,7 @@ func (q *Queries) ListBrainCitations(ctx context.Context, ids []pgtype.UUID) ([]
 			&i.CreatedAt,
 			&i.TaskID,
 			&i.Role,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}

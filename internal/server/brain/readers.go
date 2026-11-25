@@ -67,6 +67,7 @@ func (rs Readers) person(ctx context.Context, user pgtype.UUID, admin bool) (Rea
 // context of the person its turn acts for and of nobody else.
 func (rs Readers) ForJob(ctx context.Context, job db.Job) (Reader, error) {
 	r := AgentReader(job.ProjectID, pgtype.UUID{}, job.ID)
+	r.Agent = job.AgentID
 	if !job.TurnID.Valid {
 		return r, nil
 	}

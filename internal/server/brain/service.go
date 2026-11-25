@@ -35,6 +35,7 @@ type Store interface {
 	ListUserBrain(ctx context.Context, userID pgtype.UUID) ([]db.BrainEntry, error)
 	DeleteUserBrain(ctx context.Context, userID pgtype.UUID) (int64, error)
 	StaleBrainEntries(ctx context.Context, arg db.StaleBrainEntriesParams) ([]db.BrainEntry, error)
+	targetStore
 }
 
 // Tx runs fn against one transaction of the store.
@@ -121,6 +122,7 @@ type Service struct {
 	store   Store
 	policy  Policy
 	sources Sources
+	targets Targets
 	hooks   Hooks
 }
 
@@ -131,7 +133,7 @@ func NewService(tx Tx, st Store, policy Policy, sources Sources, hooks Hooks) *S
 		sources = DefaultSources()
 	}
 	hooks.Approved = append([]Effect{supersedeEarlier, archiveCondensed}, hooks.Approved...)
-	return &Service{tx: tx, store: st, policy: policy, sources: sources, hooks: hooks}
+	return &Service{tx: tx, store: st, policy: policy, sources: sources, targets: DefaultTargets(), hooks: hooks}
 }
 
 // Policy is the rules the service writes by.
@@ -150,6 +152,9 @@ func (s *Service) Write(ctx context.Context, r Reader, d Draft) (db.BrainEntry, 
 	}
 	if !rights.Propose && !rights.Approve {
 		return db.BrainEntry{}, ErrForbidden
+	}
+	if err := s.targets.check(ctx, s.store, s.policy, &r, d.probe(), d.Links); err != nil {
+		return db.BrainEntry{}, err
 	}
 	by := Author{Kind: ByUser, ID: r.User}
 	if r.IsJob() {
@@ -299,11 +304,21 @@ func (s *Service) Get(ctx context.Context, r Reader, id pgtype.UUID) (Detail, er
 	if err != nil {
 		return Detail{}, err
 	}
+	if links, err = s.targets.visibleLinks(ctx, s.store, s.policy, r, e, links); err != nil {
+		return Detail{}, err
+	}
 	cites, err := s.store.ListBrainCitations(ctx, ids)
 	if err != nil {
 		return Detail{}, err
 	}
-	return Detail{Entry: e, Versions: versions, Links: links, Citations: cites}, nil
+	// A workspace entry is used in every project; the reader is told of the uses in theirs.
+	used := cites[:0]
+	for _, c := range cites {
+		if r.ReadsProject(c.ProjectID) {
+			used = append(used, c)
+		}
+	}
+	return Detail{Entry: e, Versions: versions, Links: links, Citations: used}, nil
 }
 
 // Proposals are what waits for r's verdict or attention, in project (or everywhere r reads).
@@ -400,6 +415,10 @@ func (s *Service) put(ctx context.Context, tx Tx, d Draft, by Author, status str
 	}
 	var out db.BrainEntry
 	err := tx(ctx, func(st Store) error {
+		// Whoever writes, a link stays inside the entry's own project.
+		if err := s.targets.check(ctx, st, s.policy, nil, d.probe(), d.Links); err != nil {
+			return err
+		}
 		prev, found, err := s.previous(ctx, st, d, lineage)
 		if err != nil {
 			return err
