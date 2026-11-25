@@ -295,3 +295,27 @@ GET    /projects/{id}/brain/preview?task=             co dostałby job tego task
   (Voyage albo lokalny model), a testy nie wołają płatnych ani zewnętrznych API; plan i tak każe
   najpierw zmierzyć FTS. Miejsca na niego są gotowe: `brain.Searcher` (wyszukiwanie hybrydowe może
   zastąpić FTS bez zmian wyżej, `brain.Deps.Searcher`) i `brain.Embedder`.
+- **Po review** (szczegóły w commitach): stare drzwi product context czytają i decydują przez
+  `brain.Policy` (propozycja z DM-a jest tylko jego ludzi także w `/product`, w inboxie i w
+  `/product/{id}`); linki są sprawdzane przed zapisem (`brain.Targets`: tylko cele z projektu
+  wpisu, które piszący może czytać; `contradicts` ustala wyłącznie Brain, a zatwierdzenie
+  supersede'uje tylko żywą decyzję tego samego projektu) i pokazywane tylko w zasięgu czytelnika;
+  kontekst osoby udostępnia się tylko projektowi, w którym jest, a workspace'owi dopiero po
+  zatwierdzeniu admina workspace'u; pakiet niesie kontekst tylko ludzi projektu joba i osoby turnu,
+  podpisany imieniem, najwyżej 3 wpisy na osobę (10 pytającego); zawężenie widoczności zawęża też
+  starsze wersje. Wersje: jedna prawdziwa naraz (zatwierdzenie supersede'uje tylko niższe wersje i
+  starsze propozycje, odmawia starszej niż zatwierdzona), `UNIQUE (lineage, version)`, blokada linii
+  przy zapisie i decyzji, 409 przy konflikcie; ponowne zatwierdzenie czyści `valid_until` i
+  zachowuje pierwsze `approved_at`; backfill zostawia jedną prawdziwą wersję na linię. Curator: koniec
+  kuracji w jednej transakcji (redelivery nic nie powtarza), odrzucony kandydat pomijany, limit na
+  rozmowę sprawdzany i przy końcu, nieudana kuracja z backoffem (10 min × 2ⁿ, do doby), nic nowego
+  powiedziane = brak kuracji; „w ciągu godziny” to `curator.Promise` z testem na ustawieniach
+  serwera. `DELETE /me/brain` wyłącza też liczenie focusu (`brain_focus_off`), aż osoba włączy je
+  `PUT /me/brain/focus`. Pluginy: najwyżej 50 propozycji na plugin, projekt i dzień, unikalny
+  indeks na źródło, a zatwierdzony wpis pluginu idzie do promptu w znacznikach untrusted (pakiet
+  `untrusted`, wspólny z rozmowami). Brain jest wstrzykiwany wszędzie (`svc.UseBrain`,
+  `runners.Config.Brain`, `product.NewCuratorFor`). Migracje 00042–00044 zostały poprawione w
+  miejscu (gałąź nie była wypchnięta). **Nie zrobione**: scalenie `product.Curator` i kondensatora z
+  `brain/curator` — testy fazy wcześniejszej tworzą je przez `product.NewCurator`/`NewCondenser` i
+  mają przechodzić bez zmian, a oba robią co innego (zdarzenia procesu, rozmowy); dzielą teraz tę
+  samą usługę Brainu.
