@@ -23,10 +23,23 @@ WHERE project_id = sqlc.arg(project_id) OR project_id IS NULL
 ORDER BY name, project_id IS NULL;
 
 -- name: UpdateMCPServer :one
+-- A new address drops, in the same statement, every credential the old one had (and what OAuth
+-- discovery found for it): no moment in which the old token could go to the new host.
 UPDATE mcp_servers
-SET url = sqlc.arg(url), allowed_tools = sqlc.arg(allowed_tools), enabled = sqlc.arg(enabled), updated_at = now()
+SET url = sqlc.arg(url), allowed_tools = sqlc.arg(allowed_tools), enabled = sqlc.arg(enabled),
+    secrets = CASE WHEN url = sqlc.arg(url) THEN secrets ELSE '' END,
+    token_expires_at = CASE WHEN url = sqlc.arg(url) THEN token_expires_at END,
+    oauth = CASE WHEN url = sqlc.arg(url) THEN oauth ELSE oauth - 'discovered' - 'client' END,
+    updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
+
+-- name: GetMCPServerForUpdate :one
+SELECT * FROM mcp_servers WHERE project_id IS NOT DISTINCT FROM sqlc.narg(project_id)::uuid AND name = sqlc.arg(name) FOR UPDATE;
+
+-- name: DeleteMCPConnectStates :exec
+-- Connections of a server under way, when what they were started for changed.
+DELETE FROM plugin_connect_states WHERE target = 'mcp' AND project_id = sqlc.arg(project_id) AND plugin_name = sqlc.arg(name);
 
 -- name: SetMCPServerSecrets :one
 UPDATE mcp_servers SET secrets = sqlc.arg(secrets), token_expires_at = sqlc.narg(token_expires_at), updated_at = now()

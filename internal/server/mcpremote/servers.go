@@ -17,13 +17,11 @@ import (
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
-// serverStore is what keeping servers reads and writes. *db.Queries is one.
+// serverStore is what keeping servers reads; what it writes, it writes in a transaction (Tx).
+// *db.Queries is one.
 type serverStore interface {
 	ListMCPServersVisibleIn(ctx context.Context, projectID pgtype.UUID) ([]db.McpServer, error)
 	GetMCPServerIn(ctx context.Context, arg db.GetMCPServerInParams) (db.McpServer, error)
-	CreateMCPServer(ctx context.Context, arg db.CreateMCPServerParams) (db.McpServer, error)
-	UpdateMCPServer(ctx context.Context, arg db.UpdateMCPServerParams) (db.McpServer, error)
-	SetMCPServerSecrets(ctx context.Context, arg db.SetMCPServerSecretsParams) (db.McpServer, error)
 	ListMCPCalls(ctx context.Context, arg db.ListMCPCallsParams) ([]db.McpCall, error)
 	ListWorkspaceMCPServers(ctx context.Context) ([]db.McpServer, error)
 }
@@ -44,11 +42,15 @@ type Servers struct {
 	cache    *ToolCache
 	breakers *Breakers
 	net      netguard.Policy
+	tx       Tx
 }
 
+// Tx runs fn in one transaction. store.InTx over a pool is one.
+type Tx func(ctx context.Context, fn func(q *db.Queries) error) error
+
 // NewServers builds it; net is what addresses a server may have.
-func NewServers(store serverStore, rs roles, keys Keyring, dial Dialer, cache *ToolCache, breakers *Breakers, net netguard.Policy) *Servers {
-	return &Servers{store: store, roles: rs, keys: keys, dial: dial, cache: cache, breakers: breakers, net: net}
+func NewServers(store serverStore, rs roles, keys Keyring, dial Dialer, cache *ToolCache, breakers *Breakers, net netguard.Policy, tx Tx) *Servers {
+	return &Servers{store: store, roles: rs, keys: keys, dial: dial, cache: cache, breakers: breakers, net: net, tx: tx}
 }
 
 // View is a server as people see it: never its secrets, only which are set.
@@ -113,60 +115,82 @@ func (s *Servers) Put(ctx context.Context, p auth.Principal, project pgtype.UUID
 	if err := s.can(ctx, p, project, auth.RoleAdmin); err != nil {
 		return View{}, err
 	}
-	srv, err := s.own(ctx, project, name)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		if srv, err = s.create(ctx, project, name, in); err != nil {
-			return View{}, err
-		}
-	case err != nil:
+	tools, err := allowedTools(in.AllowedTools)
+	if err != nil {
 		return View{}, err
 	}
-	next := db.UpdateMCPServerParams{ID: srv.ID, Url: srv.Url, AllowedTools: srv.AllowedTools, Enabled: srv.Enabled}
-	moved := false
-	if in.URL != nil && *in.URL != srv.Url {
+	if in.URL != nil {
 		if err := CheckURL(*in.URL, s.net); err != nil {
 			return View{}, err
 		}
-		next.Url, moved = *in.URL, true
 	}
-	if in.AllowedTools != nil {
-		tools := []string{}
-		for _, t := range *in.AllowedTools {
-			if !ValidToolName(t) {
-				return View{}, fmt.Errorf("%w: %q is not a tool's name", ErrInvalid, t)
+	var srv db.McpServer
+	err = s.tx(ctx, func(q *db.Queries) error {
+		cur, err := q.GetMCPServerForUpdate(ctx, db.GetMCPServerForUpdateParams{ProjectID: project, Name: name})
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			if cur, err = s.create(ctx, q, project, name, in); err != nil {
+				return err
 			}
-			if !slices.Contains(tools, t) {
-				tools = append(tools, t)
+		case err != nil:
+			return err
+		}
+		next := db.UpdateMCPServerParams{ID: cur.ID, Url: cur.Url, AllowedTools: cur.AllowedTools, Enabled: cur.Enabled}
+		moved := in.URL != nil && *in.URL != cur.Url
+		if moved {
+			next.Url = *in.URL
+		}
+		if tools != nil {
+			next.AllowedTools = tools
+		}
+		if in.Enabled != nil {
+			next.Enabled = *in.Enabled
+		}
+		if srv, err = q.UpdateMCPServer(ctx, next); err != nil {
+			return err
+		}
+		if moved && project.Valid {
+			// A sign-in started for the old address must not finish for the new one.
+			if err := q.DeleteMCPConnectStates(ctx, db.DeleteMCPConnectStatesParams{ProjectID: project, Name: name}); err != nil {
+				return err
 			}
 		}
-		next.AllowedTools = tools
-	}
-	if in.Enabled != nil {
-		next.Enabled = *in.Enabled
-	}
-	if srv, err = s.store.UpdateMCPServer(ctx, next); err != nil {
+		if in.Secrets != nil {
+			srv, err = s.setSecrets(ctx, q, srv, in.Secrets)
+		}
+		return err
+	})
+	if err != nil {
 		return View{}, err
-	}
-	if moved || in.Secrets != nil {
-		if srv, err = s.setSecrets(ctx, srv, in.Secrets, moved); err != nil {
-			return View{}, err
-		}
 	}
 	s.cache.Forget(srv.ID)
 	s.breakers.Reset(srv.ID)
 	return s.view(srv), nil
 }
 
-func (s *Servers) create(ctx context.Context, project pgtype.UUID, name string, in Settings) (db.McpServer, error) {
+// allowedTools checks a new allowlist; nil leaves it as it is.
+func allowedTools(in *[]string) ([]string, error) {
+	if in == nil {
+		return nil, nil
+	}
+	tools := []string{}
+	for _, t := range *in {
+		if !ValidToolName(t) {
+			return nil, fmt.Errorf("%w: %q is not a tool's name", ErrInvalid, t)
+		}
+		if !slices.Contains(tools, t) {
+			tools = append(tools, t)
+		}
+	}
+	return tools, nil
+}
+
+func (s *Servers) create(ctx context.Context, q *db.Queries, project pgtype.UUID, name string, in Settings) (db.McpServer, error) {
 	if !ValidName(name) {
 		return db.McpServer{}, fmt.Errorf("%w: a server's name is lowercase letters, digits and dashes, and not gator", ErrInvalid)
 	}
 	if in.URL == nil || in.Auth == nil {
 		return db.McpServer{}, ErrNotFound
-	}
-	if err := CheckURL(*in.URL, s.net); err != nil {
-		return db.McpServer{}, err
 	}
 	switch *in.Auth {
 	case AuthBearer, AuthNone:
@@ -177,7 +201,7 @@ func (s *Servers) create(ctx context.Context, project pgtype.UUID, name string, 
 	if in.DisplayName != nil {
 		display = strings.TrimSpace(*in.DisplayName)
 	}
-	srv, err := s.store.CreateMCPServer(ctx, db.CreateMCPServerParams{ProjectID: project, Name: name, DisplayName: display, Url: *in.URL,
+	srv, err := q.CreateMCPServer(ctx, db.CreateMCPServerParams{ProjectID: project, Name: name, DisplayName: display, Url: *in.URL,
 		Auth: *in.Auth, AllowedTools: []string{}, Oauth: []byte("{}"), Source: []byte(`{"kind":"custom"}`)})
 	if pe, ok := errors.AsType[*pgconn.PgError](err); ok && pe.Code == "23505" {
 		return srv, fmt.Errorf("%w: there is a server named %s", ErrInvalid, name)
@@ -185,14 +209,11 @@ func (s *Servers) create(ctx context.Context, project pgtype.UUID, name string, 
 	return srv, err
 }
 
-// setSecrets merges secrets into a server's; moved drops what the old address had.
-func (s *Servers) setSecrets(ctx context.Context, srv db.McpServer, in map[string]string, moved bool) (db.McpServer, error) {
-	sec := map[string]string{}
-	if !moved {
-		var err error
-		if sec, err = s.keys.Secrets(srv); err != nil {
-			return srv, err
-		}
+// setSecrets merges secrets into a server's, as the row now is.
+func (s *Servers) setSecrets(ctx context.Context, q *db.Queries, srv db.McpServer, in map[string]string) (db.McpServer, error) {
+	sec, err := s.keys.Secrets(srv)
+	if err != nil {
+		return srv, err
 	}
 	for k, v := range in {
 		if k == SecretRefreshToken || k == SecretAccessToken || k == SecretClientID || k == SecretClientSecret {
@@ -208,11 +229,7 @@ func (s *Servers) setSecrets(ctx context.Context, srv db.McpServer, in map[strin
 	if err != nil {
 		return srv, err
 	}
-	var exp pgtype.Timestamptz
-	if !moved {
-		exp = srv.TokenExpiresAt
-	}
-	return s.store.SetMCPServerSecrets(ctx, db.SetMCPServerSecretsParams{ID: srv.ID, Secrets: enc, TokenExpiresAt: exp})
+	return q.SetMCPServerSecrets(ctx, db.SetMCPServerSecretsParams{ID: srv.ID, Secrets: enc, TokenExpiresAt: srv.TokenExpiresAt})
 }
 
 // ToolView is one of a server's tools as its admin sees it: whether agents may call it, and

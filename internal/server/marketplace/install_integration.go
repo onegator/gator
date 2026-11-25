@@ -186,6 +186,11 @@ func (MCPTrack) Update(ctx context.Context, tx *db.Queries, inst db.Installation
 		}
 	}
 	source, _ := json.Marshal(map[string]string{"kind": "marketplace", "registry": uuidString(in.Registry), "package": im.Name, "version": im.Version})
+	if (srv.Url != im.URL || !same) && srv.ProjectID.Valid {
+		if err := tx.DeleteMCPConnectStates(ctx, db.DeleteMCPConnectStatesParams{ProjectID: srv.ProjectID, Name: srv.Name}); err != nil {
+			return Installed{}, err
+		}
+	}
 	if _, err := tx.UpdateInstalledMCPServer(ctx, db.UpdateInstalledMCPServerParams{ID: srv.ID, DisplayName: im.DisplayName, Url: im.URL,
 		Auth: im.Auth, Oauth: oauth, AllowedTools: orNone(allowed), Source: source, KeepCredentials: same}); err != nil {
 		return Installed{}, err

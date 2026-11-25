@@ -60,6 +60,21 @@ func (q *Queries) CreateMCPServer(ctx context.Context, arg CreateMCPServerParams
 	return i, err
 }
 
+const deleteMCPConnectStates = `-- name: DeleteMCPConnectStates :exec
+DELETE FROM plugin_connect_states WHERE target = 'mcp' AND project_id = $1 AND plugin_name = $2
+`
+
+type DeleteMCPConnectStatesParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Name      string      `json:"name"`
+}
+
+// Connections of a server under way, when what they were started for changed.
+func (q *Queries) DeleteMCPConnectStates(ctx context.Context, arg DeleteMCPConnectStatesParams) error {
+	_, err := q.db.Exec(ctx, deleteMCPConnectStates, arg.ProjectID, arg.Name)
+	return err
+}
+
 const deleteMCPServer = `-- name: DeleteMCPServer :execrows
 DELETE FROM mcp_servers WHERE id = $1
 `
@@ -78,6 +93,37 @@ SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, en
 
 func (q *Queries) GetMCPServer(ctx context.Context, id pgtype.UUID) (McpServer, error) {
 	row := q.db.QueryRow(ctx, getMCPServer, id)
+	var i McpServer
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Url,
+		&i.Auth,
+		&i.Secrets,
+		&i.AllowedTools,
+		&i.Enabled,
+		&i.Oauth,
+		&i.TokenExpiresAt,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMCPServerForUpdate = `-- name: GetMCPServerForUpdate :one
+SELECT id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at FROM mcp_servers WHERE project_id IS NOT DISTINCT FROM $1::uuid AND name = $2 FOR UPDATE
+`
+
+type GetMCPServerForUpdateParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Name      string      `json:"name"`
+}
+
+func (q *Queries) GetMCPServerForUpdate(ctx context.Context, arg GetMCPServerForUpdateParams) (McpServer, error) {
+	row := q.db.QueryRow(ctx, getMCPServerForUpdate, arg.ProjectID, arg.Name)
 	var i McpServer
 	err := row.Scan(
 		&i.ID,
@@ -418,7 +464,11 @@ func (q *Queries) SetMCPServerSecrets(ctx context.Context, arg SetMCPServerSecre
 
 const updateMCPServer = `-- name: UpdateMCPServer :one
 UPDATE mcp_servers
-SET url = $1, allowed_tools = $2, enabled = $3, updated_at = now()
+SET url = $1, allowed_tools = $2, enabled = $3,
+    secrets = CASE WHEN url = $1 THEN secrets ELSE '' END,
+    token_expires_at = CASE WHEN url = $1 THEN token_expires_at END,
+    oauth = CASE WHEN url = $1 THEN oauth ELSE oauth - 'discovered' - 'client' END,
+    updated_at = now()
 WHERE id = $4
 RETURNING id, project_id, name, display_name, url, auth, secrets, allowed_tools, enabled, oauth, token_expires_at, source, created_at, updated_at
 `
@@ -430,6 +480,8 @@ type UpdateMCPServerParams struct {
 	ID           pgtype.UUID `json:"id"`
 }
 
+// A new address drops, in the same statement, every credential the old one had (and what OAuth
+// discovery found for it): no moment in which the old token could go to the new host.
 func (q *Queries) UpdateMCPServer(ctx context.Context, arg UpdateMCPServerParams) (McpServer, error) {
 	row := q.db.QueryRow(ctx, updateMCPServer,
 		arg.Url,

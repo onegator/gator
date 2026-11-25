@@ -1,6 +1,7 @@
 package mcpremote
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/secrets"
+	"github.com/onegator/gator/internal/server/store"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -59,5 +61,6 @@ func New(pool *pgxpool.Pool, d Deps) *Module {
 	dial := HTTPDialer{Credentials: oauth, HTTP: d.HTTP, Net: d.Net}
 	proxy := NewProxy(ProxyDeps{Gate: JobGate{Store: q}, Dialer: dial, Recorder: DBRecorder{Store: q, Log: d.Log},
 		Breakers: breakers, Cache: cache, MaxResult: d.MaxResult, Log: d.Log})
-	return &Module{Servers: NewServers(q, roles, keys, dial, cache, breakers, d.Net), Proxy: proxy, OAuth: oauth, Keys: keys}
+	return &Module{Servers: NewServers(q, roles, keys, dial, cache, breakers, d.Net,
+		func(ctx context.Context, fn func(*db.Queries) error) error { return store.InTx(ctx, pool, fn) }), Proxy: proxy, OAuth: oauth, Keys: keys}
 }

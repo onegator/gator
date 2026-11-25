@@ -258,3 +258,54 @@ func TestAnAllowedProviderAppSignsInAtItsHost(t *testing.T) {
 		t.Fatalf("connecting a bearer server: %d", code)
 	}
 }
+
+// A server's address and its credentials change together: whoever reads the row while an admin
+// points the server elsewhere never sees the new address with the old token, and a sign-in started
+// for the old address does not finish for the new one.
+func TestANewAddressTakesTheOldCredentialsAtOnce(t *testing.T) {
+	h := newHarness(t)
+	as := newOwnAuthServer(t)
+	project, _ := h.oauthPackage("issues-move", as.URL+"/mcp", "")
+	var s gen.PluginConnectStart
+	h.do("POST", "/projects/"+project+"/mcp-servers/issues-move/connect", nil, &s)
+	u, cookie := h.browse(s.Url)
+	elsewhere := newOwnAuthServer(t)
+	if code := h.do("PUT", "/projects/"+project+"/mcp-servers/issues-move", gen.McpServerSettings{Url: ptr(elsewhere.URL + "/mcp")}, nil); code != 200 {
+		t.Fatalf("move: %d", code)
+	}
+	as.authorize("the-code", u.Query().Get("code_challenge"))
+	if res := h.callback("code=the-code&state="+url.QueryEscape(u.Query().Get("state")), cookie); res.StatusCode != 400 {
+		t.Fatalf("a sign-in for the old address finished: %d", res.StatusCode)
+	}
+
+	// A bearer server, its token set, moved back and forth while somebody reads it.
+	a, b := "https://a.example/mcp", "https://b.example/mcp"
+	h.do("PUT", "/projects/"+project+"/mcp-servers/moving", gen.McpServerSettings{Url: &a, Auth: ptr(gen.McpServerSettingsAuthBearer),
+		Secrets: &map[string]string{"token": "for-a"}}, nil)
+	done := make(chan struct{})
+	var bad int
+	go func() {
+		defer close(done)
+		for range 200 {
+			var addr, sec string
+			_ = h.pool.QueryRow(context.Background(), `SELECT url, secrets FROM mcp_servers WHERE name = 'moving' AND project_id = $1`, project).Scan(&addr, &sec)
+			if addr == b && sec != "" {
+				bad++
+			}
+		}
+	}()
+	for i := range 10 {
+		target := b
+		if i%2 == 1 {
+			target = a
+		}
+		h.do("PUT", "/projects/"+project+"/mcp-servers/moving", gen.McpServerSettings{Url: &target}, nil)
+		if target == a {
+			h.do("PUT", "/projects/"+project+"/mcp-servers/moving", gen.McpServerSettings{Secrets: &map[string]string{"token": "for-a"}}, nil)
+		}
+	}
+	<-done
+	if bad != 0 {
+		t.Fatalf("the new address was seen with the old token %d times", bad)
+	}
+}
