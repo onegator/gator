@@ -16,6 +16,7 @@ import (
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/agentenv"
+	"github.com/onegator/gator/internal/runner/backend"
 	"github.com/onegator/gator/internal/runner/client"
 	"github.com/onegator/gator/internal/runner/config"
 	"github.com/onegator/gator/internal/runner/executor"
@@ -126,6 +127,7 @@ func run(args []string) error {
 		c := client.New(client.Config{
 			ServerURL: cfg.ServerURL, Token: cfg.Token, Name: cfg.Name, Location: cfg.Location, Placement: cfg.Placement, Once: cfg.Once,
 			BinaryVersion: version.Version, Backends: advertised, Projects: cfg.Projects, MaxParallel: cfg.MaxParallel,
+			ReadOnly: keeping(backends, backend.Access{ReadOnly: true}), NoTools: keeping(backends, backend.Access{NoTools: true}),
 			JournalPath: filepath.Join(cfg.WorkDir, "outbox.json"),
 		}, ex, log)
 		log.Info("runner starting", "name", cfg.Name, "location", cfg.Location, "placement", cfg.Placement, "once", cfg.Once,

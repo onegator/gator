@@ -154,6 +154,12 @@ type Capabilities struct {
 	// LoginPrompt. A runner that cannot must say so, rather than leaving a person clicking a
 	// button that writes one line into a log file nobody reads.
 	CanLogin bool `json:"can_login,omitempty"`
+	// ReadOnly are the backends that can hold an agent to read-only tools (chat), and NoTools those
+	// that can run one with none at all (summaries). A job is leased only to a runner whose backend
+	// can keep it, rather than to one that would refuse it. Nil, from a runner before these fields:
+	// every backend keeps both, as Claude Code, the only one there was, does.
+	ReadOnly []string `json:"read_only,omitempty"`
+	NoTools  []string `json:"no_tools,omitempty"`
 }
 
 // Registered acknowledges a registration.

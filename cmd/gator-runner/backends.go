@@ -59,3 +59,16 @@ func backends(cfg config.Config, log *slog.Logger) (map[string]backend.Backend, 
 	slices.Sort(advertised)
 	return out, advertised, nil
 }
+
+// keeping are the backends that can hold an agent to access a, by name, for the server to lease
+// each job only where it can run.
+func keeping(all map[string]backend.Backend, a backend.Access) []string {
+	out := []string{}
+	for name, b := range all {
+		if backend.Supports(b, a) {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}

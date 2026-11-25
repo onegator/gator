@@ -58,8 +58,10 @@ type Config struct {
 	Placement     string // "local" | "cloud"; empty lets the server derive it from Location
 	BinaryVersion string
 	Backends      []string
-	Projects      []string
-	MaxParallel   int
+	// ReadOnly and NoTools are the backends that can keep those limits (proto.Capabilities).
+	ReadOnly, NoTools []string
+	Projects          []string
+	MaxParallel       int
 
 	// JournalPath keeps unacked events and finishes on disk so a restarted runner still
 	// delivers them. Empty keeps them in memory only.
@@ -327,7 +329,7 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 
 	reg := proto.Register{Name: c.cfg.Name, Location: c.cfg.Location, Placement: c.cfg.Placement, BinaryVersion: c.cfg.BinaryVersion,
 		Capabilities: proto.Capabilities{Backends: c.cfg.Backends, MaxParallel: c.cfg.MaxParallel, Projects: c.cfg.Projects,
-			CanLogin: c.canLogin()}}
+			CanLogin: c.canLogin(), ReadOnly: nonNil(c.cfg.ReadOnly), NoTools: nonNil(c.cfg.NoTools)}}
 	if err := write(sctx, conn, proto.TypeRegister, 1, reg); err != nil {
 		return false, err
 	}
@@ -679,4 +681,12 @@ func (c *Client) askTurnEnding(ctx context.Context, rj *runningJob, te proto.Tur
 	case <-ctx.Done():
 		return nil
 	}
+}
+
+// nonNil sends an empty list as one: a runner that keeps no limit says so, not "as before".
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }

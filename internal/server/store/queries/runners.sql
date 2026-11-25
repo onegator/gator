@@ -86,6 +86,10 @@ WHERE id IN (
            OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
       -- A runner older than protocol v3 runs every job as a phase; it gets only those.
       AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
+      -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
+      -- with no tools: a runner would refuse it anywhere else.
+      AND (j.tier <> 'chat' OR j.backend = ANY(sqlc.arg(read_only)::text[]))
+      AND (j.kind <> 'summary' OR j.backend = ANY(sqlc.arg(no_tools)::text[]))
     ORDER BY j.created_at
     LIMIT sqlc.arg(slots)
     FOR UPDATE SKIP LOCKED

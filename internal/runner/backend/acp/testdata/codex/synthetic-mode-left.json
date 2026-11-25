@@ -1,0 +1,10 @@
+{
+  "initialize": {"protocolVersion": 1, "agentCapabilities": {"loadSession": true}},
+  "new_session": {"sessionId": "sess-mode", "modes": {"currentModeId": "auto", "availableModes": [{"id": "read-only", "name": "Read Only"}, {"id": "auto", "name": "Auto"}]}},
+  "turns": [{"steps": [
+    {"update": {"sessionId": "sess-mode", "update": {"sessionUpdate": "current_mode_update", "currentModeId": "read-only"}}},
+    {"update": {"sessionId": "sess-mode", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Switching to auto.\n\n"}}}},
+    {"update": {"sessionId": "sess-mode", "update": {"sessionUpdate": "current_mode_update", "currentModeId": "auto"}}},
+    {"wait_cancel": true}
+  ]}]
+}

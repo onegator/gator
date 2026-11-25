@@ -19,6 +19,15 @@ import (
 var (
 	errToolLimit = errors.New("tool call limit reached")
 	errCostLimit = errors.New("cost limit reached")
+	// errModeLeft ends a read-only run whose agent switched itself out of its read-only mode.
+	errModeLeft = errors.New("the agent left its read-only mode")
+)
+
+// Bounds of what a run keeps of the agent's words: an unfinished paragraph is let out once it is
+// this long, and of everything said only the last maxKept bytes are kept for the summary.
+const (
+	maxPending = 64 << 10
+	maxKept    = 1 << 20
 )
 
 // maxPayload bounds long strings in event payloads, as the Claude backend does.
@@ -53,6 +62,8 @@ type driver struct {
 	sinceTool int             // segments said after the last tool call: the final answer
 	costUSD   float64
 	costKnown bool
+	kept      int  // bytes in segments
+	readOnly  bool // the read-only mode is set: from now on the agent must stay in it
 }
 
 func newDriver(agent string, profile Profile, spec backend.Spec, emit backend.Emit, stop func(error)) *driver {
@@ -100,7 +111,7 @@ func (d *driver) update(p updateParams) {
 	switch u.SessionUpdate {
 	case updateMessageChunk:
 		d.pending.WriteString(text(u.Content))
-		d.flushParagraphs(false)
+		d.flushParagraphs(d.pending.Len() > maxPending)
 	case updateToolCall:
 		d.flushParagraphs(true)
 		d.sinceTool = len(d.segments)
@@ -115,6 +126,11 @@ func (d *driver) update(p updateParams) {
 		d.result(u)
 	case updateToolCallState:
 		d.result(u)
+	case updateMode:
+		if d.readOnly && u.CurrentModeID != d.profile.ReadOnlyMode {
+			d.emit("warning", map[string]any{"message": "the agent switched to mode " + u.CurrentModeID + "; a read-only job ends"})
+			d.stop(errModeLeft)
+		}
 	case updatePlan:
 		var plan struct {
 			Entries []struct {
@@ -172,6 +188,12 @@ func (d *driver) flushParagraphs(all bool) {
 		return
 	}
 	d.segments = append(d.segments, strings.TrimSpace(done))
+	d.kept += len(done)
+	for d.kept > maxKept && len(d.segments) > 1 { // a runaway answer: keep its end
+		d.kept -= len(d.segments[0])
+		d.segments = d.segments[1:]
+		d.sinceTool = max(d.sinceTool-1, 0)
+	}
 	d.emit("text", map[string]any{"text": cut(done)})
 }
 
@@ -260,6 +282,9 @@ func (d *driver) start(ctx context.Context, c *conn) (setup, error) {
 		if err := c.call(step, methodSetMode, setModeParams{SessionID: out.sessionID, ModeID: d.profile.ReadOnlyMode}, nil); err != nil {
 			return out, fmt.Errorf("set the read-only mode: %w", err)
 		}
+		d.mu.Lock()
+		d.readOnly = true
+		d.mu.Unlock()
 	}
 	if models != nil {
 		out.model = models.CurrentModelID
@@ -356,6 +381,8 @@ func (d *driver) outcome(runCtx context.Context, s setup, r promptResult, err er
 	switch {
 	case errors.Is(cause, errToolLimit):
 		out.Status, out.Reason = proto.StatusFailed, fmt.Sprintf("tool call limit (%d) reached", d.spec.MaxToolCalls)
+	case errors.Is(cause, errModeLeft):
+		out.Status, out.Reason = proto.StatusFailed, d.agent+" left its read-only mode; a read-only job does not go on outside it"
 	case errors.Is(cause, errCostLimit):
 		out.Status, out.Reason = proto.StatusFailed, fmt.Sprintf("cost limit ($%.2f) reached: $%.2f", d.spec.MaxCostUSD, cost)
 	case runCtx.Err() != nil:

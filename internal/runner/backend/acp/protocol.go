@@ -213,6 +213,8 @@ type update struct {
 	Status        string          `json:"status,omitempty"`
 	RawInput      json.RawMessage `json:"rawInput,omitempty"`
 	RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
+	// current_mode_update
+	CurrentModeID string `json:"currentModeId,omitempty"`
 	// usage_update
 	Used int64     `json:"used,omitempty"`
 	Size int64     `json:"size,omitempty"`
@@ -233,6 +235,7 @@ const (
 	updateToolCallState = "tool_call_update"
 	updatePlan          = "plan"
 	updateUsage         = "usage_update"
+	updateMode          = "current_mode_update"
 )
 
 // Tool call statuses.

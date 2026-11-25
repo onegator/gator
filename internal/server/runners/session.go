@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -375,6 +376,7 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 			Backends: backends, Projects: projects, Slots: int32(free),
 			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
 			PhaseOnly: s.version < turnsVersion,
+			ReadOnly:  keeping(backends, s.caps.ReadOnly), NoTools: keeping(backends, s.caps.NoTools),
 		})
 		if err != nil {
 			return err
@@ -868,6 +870,21 @@ func (s *session) leasable() []string {
 			continue
 		}
 		out = append(out, b)
+	}
+	return out
+}
+
+// keeping are the backends of a runner that keep a limit, as it says; a runner that says nothing
+// (one from before it could) keeps it with all of them.
+func keeping(backends, says []string) []string {
+	if says == nil {
+		return backends
+	}
+	out := []string{}
+	for _, b := range backends {
+		if slices.Contains(says, b) {
+			out = append(out, b)
+		}
 	}
 	return out
 }

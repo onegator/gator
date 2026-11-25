@@ -355,6 +355,12 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if err != nil {
 		return db.Job{}, err
 	}
+	// A summary reads a transcript with no tools at all, which not every backend can promise (an
+	// agent speaking ACP runs tools of its own): it runs on the server's default backend, whatever
+	// the project's policy picked for its role.
+	if in.Kind == KindSummary && strings.TrimSpace(in.Backend) == "" {
+		in.Backend = m.cfg.DefaultBackend
+	}
 	if strings.TrimSpace(in.Backend) == "" {
 		in.Backend = pol.Backend
 	}

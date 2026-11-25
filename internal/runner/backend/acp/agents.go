@@ -17,11 +17,14 @@ import (
 type Profile struct {
 	// Name is the agent's name in acp:<name>.
 	Name string
-	// Env are the variables the agent's login lives in, passed to its process (a cloud runner
-	// has no keychain and logs in with one of these). A trailing * matches a prefix.
+	// Env are the variables the agent needs passed to its process: its login (a cloud runner has
+	// no keychain and logs in with one of these) and its configuration. A trailing * matches a prefix.
 	Env []string
-	// Credentials are files under the home directory whose presence means a stored login.
-	Credentials []string
+	// CredentialEnv are the variables of Env that are a login by themselves; AuthState looks at these
+	// and at the credential files, never at configuration such as a base URL.
+	CredentialEnv []string
+	// CredentialFiles are files under the home directory whose presence means a stored login.
+	CredentialFiles []string
 	// ReadOnlyMode is the session mode that keeps the agent from writing on its own, set for a
 	// read-only job when the agent offers it. The permission answers hold either way.
 	ReadOnlyMode string
@@ -33,16 +36,16 @@ type Profile struct {
 // variables set or one of its credential files there is "ok", none of them "missing", and an
 // agent with nothing to look for "unknown".
 func (p Profile) authState(getenv func(string) string, home string) string {
-	if len(p.Env) == 0 && len(p.Credentials) == 0 {
+	if len(p.CredentialEnv) == 0 && len(p.CredentialFiles) == 0 {
 		return "unknown"
 	}
-	for _, k := range p.Env {
-		if !strings.HasSuffix(k, "*") && getenv(k) != "" {
+	for _, k := range p.CredentialEnv {
+		if getenv(k) != "" {
 			return "ok"
 		}
 	}
 	if home != "" {
-		for _, f := range p.Credentials {
+		for _, f := range p.CredentialFiles {
 			if _, err := os.Stat(filepath.Join(home, f)); err == nil {
 				return "ok"
 			}
@@ -91,11 +94,12 @@ func init() {
 	// Codex through Zed's codex-acp adapter (testdata/codex: `codex` 0.171.0 --help and
 	// login --help; the adapter itself was not installed when this was written).
 	Register(Profile{Name: "codex", Env: []string{"OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "CODEX_HOME"},
-		Credentials: []string{".codex/auth.json"}, ReadOnlyMode: "read-only"})
+		CredentialEnv: []string{"OPENAI_API_KEY", "CODEX_API_KEY"}, CredentialFiles: []string{".codex/auth.json"}, ReadOnlyMode: "read-only"})
 	// Gemini CLI, which speaks ACP itself (`gemini --experimental-acp`).
 	Register(Profile{Name: "gemini", Env: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI",
 		"GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS"},
-		Credentials: []string{".gemini/oauth_creds.json"}})
+		CredentialEnv:   []string{"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"},
+		CredentialFiles: []string{".gemini/oauth_creds.json"}})
 }
 
 // Agent is one ACP agent the runner is configured with: acp:<Name> runs Command.

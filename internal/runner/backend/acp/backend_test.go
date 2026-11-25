@@ -381,6 +381,10 @@ func TestAuthState(t *testing.T) {
 	if s := b.AuthState(); s != "missing" {
 		t.Errorf("no login: %q", s)
 	}
+	env["CODEX_HOME"], env["OPENAI_BASE_URL"] = "/x", "https://proxy"
+	if s := b.AuthState(); s != "missing" {
+		t.Errorf("configuration is not a login: %q", s)
+	}
 	env["OPENAI_API_KEY"] = "sk"
 	if s := b.AuthState(); s != "ok" {
 		t.Errorf("api key: %q", s)
@@ -423,5 +427,33 @@ func TestParseAgents(t *testing.T) {
 	}
 	if got, err := ParseAgents(""); err != nil || len(got) != 0 {
 		t.Errorf("empty: %v %v", got, err)
+	}
+}
+
+// An agent that switches itself out of its read-only mode in a read-only job is stopped, and the
+// job fails.
+func TestLeavingTheReadOnlyModeEndsTheRun(t *testing.T) {
+	b, spec, logPath := fake(t, "codex/synthetic-mode-left.json", backend.Spec{Prompt: "look", Access: backend.Access{ReadOnly: true}})
+	out := b.Run(context.Background(), spec, (&recorder{}).emit)
+	if out.Status != proto.StatusFailed || !strings.Contains(out.Reason, "left its read-only mode") {
+		t.Fatalf("outcome %q %q", out.Status, out.Reason)
+	}
+	if !strings.Contains(strings.Join(methods(readLog(t, logPath)), ","), methodCancel) {
+		t.Error("the turn was not cancelled")
+	}
+}
+
+// What a run keeps of a runaway answer is bounded.
+func TestAgentWordsAreBounded(t *testing.T) {
+	d := newDriver("acp:x", Profile{}, backend.Spec{}, func(string, any) {}, func(error) {})
+	chunk, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": strings.Repeat("x", 32<<10)}})
+	for range 200 {
+		d.update(updateParams{Update: chunk})
+	}
+	if d.pending.Len() > maxPending || d.kept > maxKept+maxPending {
+		t.Errorf("pending %d kept %d", d.pending.Len(), d.kept)
+	}
+	if s := d.summary(); len(s) > maxSummary+10 {
+		t.Errorf("summary %d", len(s))
 	}
 }
