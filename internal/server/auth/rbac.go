@@ -24,7 +24,8 @@ const (
 	RoleAdmin
 )
 
-func parseRole(s string) Role {
+// ParseRole reads a role as memberships store it; anything else is none.
+func ParseRole(s string) Role {
 	switch s {
 	case "admin":
 		return RoleAdmin
@@ -67,7 +68,7 @@ func (a Authorizer) ProjectRole(ctx context.Context, p Principal, project pgtype
 	if err != nil {
 		return RoleNone, err
 	}
-	return parseRole(m.Role), nil
+	return ParseRole(m.Role), nil
 }
 
 // Require returns ErrForbidden unless p holds at least min in project.

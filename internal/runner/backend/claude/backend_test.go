@@ -5,6 +5,7 @@ package claude
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -269,5 +270,78 @@ func TestAgentGetsNeitherTheRunnerTokenNorItsFile(t *testing.T) {
 		if strings.Contains(string(read), "gtr_runner_secret") || !strings.Contains(string(read), "denied") {
 			t.Fatalf("the agent read the token file: %s", read)
 		}
+	}
+}
+
+// Gator's MCP server reaches the session in a file of the job's own (the token never on the
+// command line), beside the runner's own servers, and a read-only session may call its tools.
+// The recording is what such a session streams: the server connected, a brain_search, a citation.
+func TestJobsMCPServerJoinsTheRunnersConfig(t *testing.T) {
+	b, argsFile := fake(t, "synthetic-mcp-brain.ndjson")
+	copied := filepath.Join(t.TempDir(), "mcp.json")
+	t.Setenv("FAKE_CLAUDE_MCP", copied)
+	b.MCPConfig = `{"mcpServers":{"docs":{"type":"http","url":"https://docs.example/mcp"}}}`
+	b.MCPDir = filepath.Join(t.TempDir(), "mcp")
+	gator := backend.MCPServer{Name: "gator", URL: "https://gator.example/mcp", Headers: map[string]string{"Authorization": "Bearer gtr_job_secret"}}
+	var sessions []any
+	out := b.Run(context.Background(), backend.Spec{Dir: t.TempDir(), Prompt: "why do sessions expire?", MCP: []backend.MCPServer{gator},
+		Access: backend.Access{ReadOnly: true, Commands: []string{"gator-cli"}}}, func(typ string, p any) {
+		if typ == "session" {
+			sessions = append(sessions, p)
+		}
+	})
+	if out.Status != proto.StatusDone || !strings.Contains(out.Summary, "[brain:00000000-0000-0000-0000-0000000000b1]") || out.ToolCalls != 1 {
+		t.Fatalf("outcome: %+v", out)
+	}
+	args, _ := os.ReadFile(argsFile)
+	if strings.Contains(string(args), "gtr_job_secret") {
+		t.Fatal("the job's token must not be on the command line")
+	}
+	if !strings.Contains(string(args), "Read,Grep,Glob,WebFetch,mcp__gator,Bash(gator-cli:*)\n") {
+		t.Fatalf("a read-only session may call Gator's tools:\n%s", args)
+	}
+	cfg, _ := os.ReadFile(copied)
+	for _, want := range []string{`"gator":{"headers":{"Authorization":"Bearer gtr_job_secret"},"type":"http","url":"https://gator.example/mcp"}`, `"docs":{"type":"http","url":"https://docs.example/mcp"}`} {
+		if !strings.Contains(string(cfg), want) {
+			t.Fatalf("config %s lacks %s", cfg, want)
+		}
+	}
+	if mode, _ := os.ReadFile(copied + ".mode"); strings.TrimSpace(string(mode)) != "600" {
+		t.Fatalf("only this user reads it: %s", mode)
+	}
+	path, _ := os.ReadFile(copied + ".path")
+	if filepath.Dir(strings.TrimSpace(string(path))) != b.MCPDir {
+		t.Fatalf("in the runner's own directory: %s", path)
+	}
+	if _, err := os.Stat(strings.TrimSpace(string(path))); !os.IsNotExist(err) {
+		t.Fatal("and it is gone when the run ends")
+	}
+	if len(sessions) != 1 || !strings.Contains(fmt.Sprint(sessions[0]), "gator:connected") {
+		t.Fatalf("the session reports Gator's server: %v", sessions)
+	}
+}
+
+// At startup the runner's MCP directory is made its own, 0700, and emptied of what a run that died
+// left there (a job's token).
+func TestTheRunnersMCPDirectoryStartsEmptyAndClosed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "mcp")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "job-old.json"), []byte(`{"token":"gtr_job_old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareMCPDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(dir)
+	left, _ := os.ReadDir(dir)
+	if info.Mode().Perm() != 0o700 || len(left) != 0 {
+		t.Fatalf("mode %v, left %v", info.Mode().Perm(), left)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	_ = os.WriteFile(file, nil, 0o600)
+	if err := PrepareMCPDir(file); err == nil {
+		t.Fatal("a file is not a directory to use")
 	}
 }

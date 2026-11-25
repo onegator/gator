@@ -25,7 +25,10 @@ func (Backend) Supports(backend.Access) bool { return true }
 // dontAsk — anything not allowed up front is denied, never asked about — with only the reading
 // tools, Bash limited to the named commands, and the writing tools denied. No tools is dontAsk
 // with an empty --tools: no built-in tool at all.
-func permissionArgs(a backend.Access) []string {
+//
+// The MCP servers named (Gator's) are allowed whole in a read-only session: their tools are the
+// job's own identity, held to its kind by the server.
+func permissionArgs(a backend.Access, mcp []string) []string {
 	if a.NoTools {
 		return []string{"--permission-mode", "dontAsk", "--tools", "", "--disallowedTools", strings.Join(writingTools, ",")}
 	}
@@ -34,6 +37,9 @@ func permissionArgs(a backend.Access) []string {
 	}
 	tools := append([]string{}, readOnlyTools...)
 	allowed := append([]string{}, readOnlyTools...)
+	for _, name := range mcp {
+		allowed = append(allowed, "mcp__"+name)
+	}
 	if len(a.Commands) > 0 {
 		tools = append(tools, "Bash")
 		for _, c := range a.Commands {

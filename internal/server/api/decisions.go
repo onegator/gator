@@ -13,6 +13,7 @@ import (
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
@@ -81,7 +82,7 @@ func (s *Server) ListInbox(w http.ResponseWriter, r *http.Request, params gen.Li
 		for _, tp := range tripped {
 			out = append(out, pluginDecision(tp, nil))
 		}
-		more, err := s.proposalDecisions(r.Context(), pid, readable)
+		more, err := s.proposalDecisions(r.Context(), p, pid, readable)
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -214,13 +215,13 @@ func pluginDecision(tp db.ListTrippedProjectPluginsRow, alert *gen.Decision) gen
 
 // proposalDecisions are the catalogue components and product entries an agent proposed,
 // waiting for a person to say yes. They reach no prompt until one does.
-func (s *Server) proposalDecisions(ctx context.Context, pid pgtype.UUID, readable func(pgtype.UUID) bool) ([]gen.Decision, error) {
+func (s *Server) proposalDecisions(ctx context.Context, p auth.Principal, pid pgtype.UUID, readable func(pgtype.UUID) bool) ([]gen.Decision, error) {
 	q := db.New(s.Pool)
 	components, err := q.ListProposedComponents(ctx, pid)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := q.ListProposedProductEntries(ctx, pid)
+	entries, err := s.proposedProduct(ctx, p, pid)
 	if err != nil {
 		return nil, err
 	}
@@ -251,12 +252,26 @@ func (s *Server) proposalDecisions(ctx context.Context, pid pgtype.UUID, readabl
 		out = append(out, gen.Decision{
 			Id: "product:" + uuidString(e.ID), Reason: gen.DecisionReasonProductProposed,
 			WaitingSince: e.CreatedAt.Time, Urgency: 4,
-			Summary: "Proposed as a " + e.Kind + " for the product context. Agents read it only once you approve it.",
+			Summary: "Proposed as a " + brain.ProductKind(e.Kind) + " for the product context. Agents read it only once you approve it.",
 			Actions: []gen.DecisionAction{gen.DecisionActionApproveEntry, gen.DecisionActionArchiveEntry, gen.DecisionActionOpen},
 			Subject: gen.DecisionSubject{Kind: gen.DecisionSubjectKindProductEntry, Id: uuidString(e.ID), ProjectId: &project, Name: e.Title},
 		})
 	}
 	return out, nil
+}
+
+// proposedProduct are the product context's proposals the caller may read: a proposal made in a
+// private conversation waits in the inbox of that conversation's people only. A caller who is not
+// a person has none.
+func (s *Server) proposedProduct(ctx context.Context, p auth.Principal, pid pgtype.UUID) ([]db.BrainEntry, error) {
+	if s.Brain == nil || p.Kind != auth.KindUser {
+		return nil, nil
+	}
+	reader, err := s.Brain.Readers.ForPrincipal(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.Brain.Legacy.ProposedProduct(ctx, reader, pid)
 }
 
 // runnerLoginDecisions are the backends that lost their login on a runner that is up. Until a

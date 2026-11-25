@@ -342,3 +342,15 @@ func TestAFailedTurnAndAnUnaskedOneEndAtOnce(t *testing.T) {
 		})
 	}
 }
+
+// An agent with an identity reaches Gator's MCP server with it; one without has no server at all.
+func TestTheAgentReachesGatorsMCPServerWithItsOwnIdentity(t *testing.T) {
+	e := &Executor{ServerURL: "https://gator.example/"}
+	got := e.mcpServers(proto.Job{AgentToken: "gtr_job_x"})
+	if len(got) != 1 || got[0].Name != "gator" || got[0].URL != "https://gator.example/mcp" || got[0].Headers["Authorization"] != "Bearer gtr_job_x" {
+		t.Fatalf("servers: %+v", got)
+	}
+	if e.mcpServers(proto.Job{}) != nil || (&Executor{}).mcpServers(proto.Job{AgentToken: "t"}) != nil {
+		t.Fatal("no identity or no server, no MCP")
+	}
+}

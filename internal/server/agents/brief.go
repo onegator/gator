@@ -144,3 +144,14 @@ func (s summaryQueue) QueueSummary(ctx context.Context, task pgtype.UUID, instru
 		Instruction: instruction, CreatedBy: process.Actor{Kind: process.ActorSystem}})
 	return job.ID, err
 }
+
+// CurationQueue queues the curator's reading of a conversation on the runner manager
+// (curator.Jobs): a transcript read with no tools and no identity, as the project's curator.
+type CurationQueue struct{ jobs jobQueue }
+
+// QueueCuration implements curator.Jobs.
+func (c CurationQueue) QueueCuration(ctx context.Context, task pgtype.UUID, instruction string) (pgtype.UUID, error) {
+	job, err := c.jobs.CreateJob(ctx, task, runners.NewJob{Kind: runners.KindSummary, Tier: runners.TierChat, Role: "curator",
+		Instruction: instruction, CreatedBy: process.Actor{Kind: process.ActorSystem}})
+	return job.ID, err
+}

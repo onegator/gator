@@ -56,6 +56,9 @@ type Incident struct {
 	Closed bool   `json:"closed"`
 }
 
+// BrainKinds are what a plugin may propose to the Brain, as the server takes them.
+var BrainKinds = []string{"decision", "lesson", "runbook", "fact", "glossary", "convention"}
+
 // Core is an in-memory stand-in for the core methods of one project.
 type Core struct {
 	ProjectID string
@@ -69,6 +72,7 @@ type Core struct {
 	incidents map[string]*Incident
 	logs      []plugin.LogParams
 	calls     []Call
+	brain     []plugin.BrainProposeParams
 }
 
 // NewCore creates an empty project.
@@ -190,6 +194,13 @@ func (c *Core) KV() map[string]json.RawMessage {
 
 // Logs returns what the plugin logged through the core.
 // Releases are what the plugin has said reached an environment, in the order it said so.
+// Brain is what the plugin proposed to the Brain, once per source.
+func (c *Core) Brain() []plugin.BrainProposeParams {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.brain)
+}
+
 func (c *Core) Releases() []plugin.ReleaseRecordParams {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -418,6 +429,23 @@ func (c *Core) handle(method string, raw json.RawMessage) (any, error) {
 		// Whether a review task opens depends on the project's automations, which this core
 		// does not have: it answers as a project with none switched on. The call is recorded.
 		return plugin.ReviewRequestResult{Tasks: []plugin.ReviewTask{}}, nil
+	case plugin.CoreBrainPropose:
+		p, err := decode[plugin.BrainProposeParams](raw)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(BrainKinds, p.Kind) || strings.TrimSpace(p.Title) == "" || strings.TrimSpace(p.Content) == "" ||
+			strings.TrimSpace(p.SourceID) == "" {
+			return nil, plugin.Errorf(plugin.CodeInvalidParams, "a proposal needs a kind (%s), a title, content and a source_id",
+				strings.Join(BrainKinds, ", "))
+		}
+		for _, had := range c.brain {
+			if had.SourceID == p.SourceID {
+				return plugin.BrainProposeResult{Created: false}, nil
+			}
+		}
+		c.brain = append(c.brain, p)
+		return plugin.BrainProposeResult{EntryID: newID(), Created: true}, nil
 	case plugin.CoreIncidentClose:
 		p, err := decode[plugin.IncidentCloseParams](raw)
 		if err != nil {

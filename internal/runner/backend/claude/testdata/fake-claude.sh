@@ -8,9 +8,21 @@
 #   FAKE_CLAUDE_EXIT     exit code (default 0)
 #   FAKE_CLAUDE_ENV      write the environment it was given here
 #   FAKE_CLAUDE_READ     try to read this file; write what happened to FAKE_CLAUDE_READ.out
+#   FAKE_CLAUDE_MCP      copy the file --mcp-config names here (or the JSON itself), with its mode
+#   FAKE_CLAUDE_SUBST    a sed script applied to the fixture (an id or a number known only at run time)
 if [ -n "$FAKE_CLAUDE_ENV" ]; then env > "$FAKE_CLAUDE_ENV"; fi
 if [ -n "$FAKE_CLAUDE_READ" ]; then
 	if cat "$FAKE_CLAUDE_READ" > "$FAKE_CLAUDE_READ.out" 2>&1; then echo "read" >> "$FAKE_CLAUDE_READ.out"; else echo "denied" >> "$FAKE_CLAUDE_READ.out"; fi
+fi
+if [ -n "$FAKE_CLAUDE_MCP" ]; then
+	prev=""
+	for a in "$@"; do
+		if [ "$prev" = "--mcp-config" ]; then
+			if [ -f "$a" ]; then cat "$a" > "$FAKE_CLAUDE_MCP"; stat -c '%a' "$a" > "$FAKE_CLAUDE_MCP.mode" 2>/dev/null || stat -f '%Lp' "$a" > "$FAKE_CLAUDE_MCP.mode"; echo "$a" > "$FAKE_CLAUDE_MCP.path"
+			else printf '%s' "$a" > "$FAKE_CLAUDE_MCP"; fi
+		fi
+		prev="$a"
+	done
 fi
 if [ -n "$FAKE_CLAUDE_ARGS" ]; then
 	for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_CLAUDE_ARGS"; done
@@ -31,6 +43,6 @@ if [ -n "$FAKE_CLAUDE_CHILD" ]; then
 	sleep 300 &
 	echo $! > "$FAKE_CLAUDE_CHILD"
 fi
-cat "$FAKE_CLAUDE_FIXTURE"
+if [ -n "$FAKE_CLAUDE_SUBST" ]; then sed -e "$FAKE_CLAUDE_SUBST" "$FAKE_CLAUDE_FIXTURE"; else cat "$FAKE_CLAUDE_FIXTURE"; fi
 if [ -n "$FAKE_CLAUDE_SLEEP" ]; then sleep "$FAKE_CLAUDE_SLEEP"; fi
 exit "${FAKE_CLAUDE_EXIT:-0}"

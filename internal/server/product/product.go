@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -24,23 +25,35 @@ const cursorName = "product"
 // maxProposal bounds what a proposal carries from a document.
 const maxProposal = 1500
 
+// proposer stores proposals in the Brain. brain.Service is one.
+type proposer interface {
+	Propose(ctx context.Context, d brain.Draft, by brain.Author) (db.BrainEntry, error)
+}
+
 // Curator turns finished work into proposals a person can approve.
 type Curator struct {
-	pool *pgxpool.Pool
-	hub  *events.Hub
-	log  *slog.Logger
-	poll time.Duration
+	pool  *pgxpool.Pool
+	hub   *events.Hub
+	log   *slog.Logger
+	poll  time.Duration
+	brain proposer
 	// onCurationClosed turns a finished curation task into a condensed proposal. Set by
 	// NewCondenser; nil when nothing condenses, which is how this package stays usable alone.
 	onCurationClosed func(ctx context.Context, task db.Task) error
 }
 
-// NewCurator builds the consumer; poll defaults to five seconds.
+// NewCurator builds the consumer over a Brain of its own on pool (for a caller that has none at
+// hand); poll defaults to five seconds.
 func NewCurator(pool *pgxpool.Pool, hub *events.Hub, log *slog.Logger, poll time.Duration) *Curator {
+	return NewCuratorFor(pool, brain.New(pool, brain.Deps{}).Service, hub, log, poll)
+}
+
+// NewCuratorFor builds the consumer proposing into knows, the server's own Brain.
+func NewCuratorFor(pool *pgxpool.Pool, knows proposer, hub *events.Hub, log *slog.Logger, poll time.Duration) *Curator {
 	if poll == 0 {
 		poll = 5 * time.Second
 	}
-	return &Curator{pool: pool, hub: hub, log: log, poll: poll}
+	return &Curator{pool: pool, hub: hub, log: log, poll: poll, brain: knows}
 }
 
 // watched are the events that leave something worth remembering.
@@ -116,7 +129,7 @@ func (c *Curator) proposeDecision(ctx context.Context, task db.Task, phase strin
 		return nil // other gates approve work, not direction
 	}
 	q := db.New(c.pool)
-	n, err := q.CountProposalsForTask(ctx, db.CountProposalsForTaskParams{ProjectID: task.ProjectID, Kind: "decision", SourceTaskID: task.ID})
+	n, err := q.CountBrainProposalsForTask(ctx, db.CountBrainProposalsForTaskParams{ProjectID: task.ProjectID, Kind: brain.KindDecision, SourceTaskID: task.ID})
 	if err != nil || n > 0 {
 		return err
 	}
@@ -153,7 +166,7 @@ func (c *Curator) proposeLesson(ctx context.Context, task db.Task) error {
 	if len(reasons) == 0 {
 		return nil // nothing went wrong; nothing to learn
 	}
-	n, err := q.CountProposalsForTask(ctx, db.CountProposalsForTaskParams{ProjectID: task.ProjectID, Kind: "lesson", SourceTaskID: task.ID})
+	n, err := q.CountBrainProposalsForTask(ctx, db.CountBrainProposalsForTaskParams{ProjectID: task.ProjectID, Kind: brain.KindLesson, SourceTaskID: task.ID})
 	if err != nil || n > 0 {
 		return err
 	}
@@ -161,18 +174,16 @@ func (c *Curator) proposeLesson(ctx context.Context, task db.Task) error {
 	return c.propose(ctx, task, "lesson", task.Title, clip(body, maxProposal))
 }
 
+// propose puts what the task taught the product in front of a person, in the Brain.
 func (c *Curator) propose(ctx context.Context, task db.Task, kind, title, content string) error {
-	q := db.New(c.pool)
-	entry, err := q.CreateProductEntry(ctx, db.CreateProductEntryParams{
-		ProjectID: task.ProjectID, Kind: kind, Title: title, Content: content, Status: "proposed",
-		SourceTaskID: task.ID, CreatedByKind: "system",
-	})
-	if err != nil {
-		return err
-	}
-	b, _ := json.Marshal(map[string]any{"kind": kind, "title": title, "entry_id": uuidString(entry.ID)})
-	_, err = q.InsertEvent(ctx, db.InsertEventParams{Type: "product.proposed", Aggregate: "project", AggregateID: task.ProjectID, Payload: b})
+	_, err := c.brain.Propose(ctx, taskDraft(task, kind, title, content), brain.Author{Kind: brain.BySystem})
 	return err
+}
+
+// taskDraft is a project entry that came out of a task's work.
+func taskDraft(task db.Task, kind, title, content string) brain.Draft {
+	return brain.Draft{Scope: brain.ScopeProject, Project: task.ProjectID, Kind: kind, Title: title, Content: content,
+		Task: task.ID, Source: brain.Source{Kind: brain.SourceTask, ID: uuidString(task.ID)}}
 }
 
 func clip(s string, max int) string {

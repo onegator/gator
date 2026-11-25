@@ -50,3 +50,17 @@ ORDER BY checked_at DESC LIMIT $2;
 SELECT DISTINCT p.id FROM projects p
 JOIN components c ON c.project_id = p.id
 WHERE p.archived_at IS NULL;
+
+-- name: PhaseJobContextBytes :many
+-- How much context the phase jobs of a project were handed, in a window.
+SELECT context_bytes FROM jobs
+WHERE project_id = $1 AND kind = 'phase' AND context_bytes > 0
+  AND created_at >= sqlc.arg(since)::timestamptz AND created_at < sqlc.arg(until)::timestamptz
+ORDER BY context_bytes;
+
+-- name: PhaseMoves :one
+-- How a project's tasks moved in a window: phases that went forward and phases sent back.
+SELECT count(*) FILTER (WHERE pt.kind = 'advance')::bigint AS advances,
+       count(*) FILTER (WHERE pt.kind = 'rollback')::bigint AS rollbacks
+FROM phase_transitions pt JOIN tasks t ON t.id = pt.task_id
+WHERE t.project_id = $1 AND pt.created_at >= sqlc.arg(since)::timestamptz AND pt.created_at < sqlc.arg(until)::timestamptz;

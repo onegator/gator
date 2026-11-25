@@ -136,15 +136,15 @@ func (q *Queries) ListApprovedComponents(ctx context.Context, projectID pgtype.U
 }
 
 const listComponentDecisions = `-- name: ListComponentDecisions :many
-SELECT p.id, p.project_id, p.kind, p.title, p.content, p.version, p.status, p.source_task_id, p.created_by_kind, p.created_by, p.approved_by, p.approved_at, p.created_at, p.archived_at, p.condensed_from, l.component_id AS of_id FROM component_decisions l
-JOIN product_context p ON p.id = l.entry_id
-WHERE l.component_id = ANY($1::uuid[]) AND p.status = 'approved'
-ORDER BY p.kind, p.title
+SELECT b.id, b.scope, b.project_id, b.component_key, b.user_id, b.agent_id, b.kind, b.topic, b.title, b.content, b.visibility, b.status, b.lineage, b.version, b.supersedes, b.valid_from, b.valid_until, b.confidence, b.source, b.source_task_id, b.source_conversation_id, b.source_private, b.position, b.condensed_from, b.archived_at, b.created_by_kind, b.created_by, b.approved_by, b.approved_at, b.created_at, b.updated_at, l.component_id AS of_id FROM component_decisions l
+JOIN brain_entries b ON b.id = l.entry_id
+WHERE l.component_id = ANY($1::uuid[]) AND b.status = 'approved'
+ORDER BY b.kind, b.title
 `
 
 type ListComponentDecisionsRow struct {
-	ProductContext ProductContext `json:"product_context"`
-	OfID           pgtype.UUID    `json:"of_id"`
+	BrainEntry BrainEntry  `json:"brain_entry"`
+	OfID       pgtype.UUID `json:"of_id"`
 }
 
 // Only approved entries: a proposal nobody accepted is not yet how this component works.
@@ -158,21 +158,37 @@ func (q *Queries) ListComponentDecisions(ctx context.Context, componentIds []pgt
 	for rows.Next() {
 		var i ListComponentDecisionsRow
 		if err := rows.Scan(
-			&i.ProductContext.ID,
-			&i.ProductContext.ProjectID,
-			&i.ProductContext.Kind,
-			&i.ProductContext.Title,
-			&i.ProductContext.Content,
-			&i.ProductContext.Version,
-			&i.ProductContext.Status,
-			&i.ProductContext.SourceTaskID,
-			&i.ProductContext.CreatedByKind,
-			&i.ProductContext.CreatedBy,
-			&i.ProductContext.ApprovedBy,
-			&i.ProductContext.ApprovedAt,
-			&i.ProductContext.CreatedAt,
-			&i.ProductContext.ArchivedAt,
-			&i.ProductContext.CondensedFrom,
+			&i.BrainEntry.ID,
+			&i.BrainEntry.Scope,
+			&i.BrainEntry.ProjectID,
+			&i.BrainEntry.ComponentKey,
+			&i.BrainEntry.UserID,
+			&i.BrainEntry.AgentID,
+			&i.BrainEntry.Kind,
+			&i.BrainEntry.Topic,
+			&i.BrainEntry.Title,
+			&i.BrainEntry.Content,
+			&i.BrainEntry.Visibility,
+			&i.BrainEntry.Status,
+			&i.BrainEntry.Lineage,
+			&i.BrainEntry.Version,
+			&i.BrainEntry.Supersedes,
+			&i.BrainEntry.ValidFrom,
+			&i.BrainEntry.ValidUntil,
+			&i.BrainEntry.Confidence,
+			&i.BrainEntry.Source,
+			&i.BrainEntry.SourceTaskID,
+			&i.BrainEntry.SourceConversationID,
+			&i.BrainEntry.SourcePrivate,
+			&i.BrainEntry.Position,
+			&i.BrainEntry.CondensedFrom,
+			&i.BrainEntry.ArchivedAt,
+			&i.BrainEntry.CreatedByKind,
+			&i.BrainEntry.CreatedBy,
+			&i.BrainEntry.ApprovedBy,
+			&i.BrainEntry.ApprovedAt,
+			&i.BrainEntry.CreatedAt,
+			&i.BrainEntry.UpdatedAt,
 			&i.OfID,
 		); err != nil {
 			return nil, err

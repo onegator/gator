@@ -111,6 +111,10 @@ func run(args []string) error {
 		for _, name := range cfg.Backends {
 			switch name {
 			case "claude":
+				// What a run that died left of a job's MCP configuration (its token) goes now.
+				if err := claude.PrepareMCPDir(claude.DefaultMCPDir()); err != nil {
+					return err
+				}
 				backends[name] = claude.Backend{Bin: os.Getenv("GATOR_RUNNER_CLAUDE_BIN"), Model: os.Getenv("GATOR_RUNNER_CLAUDE_MODEL"),
 					MCPConfig: os.Getenv("GATOR_RUNNER_CLAUDE_MCP_CONFIG"), Log: log, AllowEnv: cfg.AgentEnv}
 				advertised = append(advertised, name)

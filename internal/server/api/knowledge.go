@@ -11,12 +11,15 @@ import (
 
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/knowledge"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
-func toKnowledgeEntry(e db.KnowledgeEntry) gen.KnowledgeEntry {
-	return gen.KnowledgeEntry{Id: toUUID(e.ID), ProjectId: toUUIDPtr(e.ProjectID), Scope: gen.KnowledgeEntryScope(e.Scope),
+// A knowledge entry is a convention on a shelf (its topic) of the Brain, kept under its old name
+// for one release.
+func toKnowledgeEntry(e db.BrainEntry) gen.KnowledgeEntry {
+	return gen.KnowledgeEntry{Id: toUUID(e.ID), ProjectId: toUUIDPtr(e.ProjectID), Scope: gen.KnowledgeEntryScope(deref(e.Topic)),
 		Title: e.Title, Content: e.Content, Position: int(e.Position), CreatedAt: e.CreatedAt.Time}
 }
 
@@ -52,15 +55,22 @@ func (s *Server) newEntry(w http.ResponseWriter, r *http.Request, project pgtype
 		writeError(w, http.StatusBadRequest, "title and content are required", "invalid")
 		return
 	}
+	reader, ok := s.brainReader(w, r)
+	if !ok {
+		return
+	}
 	position := int32(100)
 	if in.Position != nil {
 		position = int32(*in.Position)
 	}
-	entry, err := db.New(s.Pool).CreateKnowledgeEntry(r.Context(), db.CreateKnowledgeEntryParams{
-		ProjectID: project, Scope: string(in.Scope), Title: in.Title, Content: in.Content, Position: position,
-	})
+	scope := brain.ScopeWorkspace
+	if project.Valid {
+		scope = brain.ScopeProject
+	}
+	entry, err := s.Brain.Service.Write(r.Context(), reader, brain.Draft{Scope: scope, Project: project, Kind: brain.KindConvention,
+		Topic: string(in.Scope), Title: in.Title, Content: in.Content, Position: position})
 	if err != nil {
-		s.fail(w, err)
+		s.failBrain(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, toKnowledgeEntry(entry))
@@ -70,7 +80,7 @@ func (s *Server) ListWorkspaceKnowledge(w http.ResponseWriter, r *http.Request) 
 	if _, ok := s.principal(w, r); !ok {
 		return
 	}
-	rows, err := db.New(s.Pool).ListWorkspaceKnowledge(r.Context())
+	rows, err := s.Brain.Legacy.Shelf(r.Context(), pgtype.UUID{})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -99,10 +109,9 @@ func (s *Server) DeleteKnowledgeEntry(w http.ResponseWriter, r *http.Request, en
 	if !ok {
 		return
 	}
-	q := db.New(s.Pool)
-	entry, err := q.GetKnowledgeEntry(r.Context(), fromUUID(entryId))
+	entry, err := s.Brain.Legacy.ShelfEntry(r.Context(), fromUUID(entryId))
 	if err != nil {
-		s.fail(w, err)
+		s.failBrain(w, err)
 		return
 	}
 	if entry.ProjectID.Valid {
@@ -113,7 +122,7 @@ func (s *Server) DeleteKnowledgeEntry(w http.ResponseWriter, r *http.Request, en
 		writeError(w, http.StatusForbidden, "workspace knowledge is managed by workspace admins", "forbidden")
 		return
 	}
-	if _, err := q.DeleteKnowledgeEntry(r.Context(), entry.ID); err != nil {
+	if err := s.Brain.Legacy.RemoveFromShelf(r.Context(), entry.ID); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -124,7 +133,7 @@ func (s *Server) ListProjectKnowledge(w http.ResponseWriter, r *http.Request, pr
 	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
 		return
 	}
-	rows, err := db.New(s.Pool).ListProjectKnowledge(r.Context(), fromUUID(projectId))
+	rows, err := s.Brain.Legacy.Shelf(r.Context(), fromUUID(projectId))
 	if err != nil {
 		s.fail(w, err)
 		return

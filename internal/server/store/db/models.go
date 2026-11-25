@@ -109,6 +109,71 @@ type AutomationRun struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type BrainCitation struct {
+	JobID     pgtype.UUID        `json:"job_id"`
+	EntryID   pgtype.UUID        `json:"entry_id"`
+	How       string             `json:"how"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type BrainCuration struct {
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	UptoSeq        int64              `json:"upto_seq"`
+	JobID          pgtype.UUID        `json:"job_id"`
+	PendingUpto    *int64             `json:"pending_upto"`
+	ClaimedAt      pgtype.Timestamptz `json:"claimed_at"`
+	CuratedAt      pgtype.Timestamptz `json:"curated_at"`
+	Attempts       int32              `json:"attempts"`
+	NextAt         pgtype.Timestamptz `json:"next_at"`
+}
+
+type BrainEntry struct {
+	ID                   pgtype.UUID        `json:"id"`
+	Scope                string             `json:"scope"`
+	ProjectID            pgtype.UUID        `json:"project_id"`
+	ComponentKey         *string            `json:"component_key"`
+	UserID               pgtype.UUID        `json:"user_id"`
+	AgentID              pgtype.UUID        `json:"agent_id"`
+	Kind                 string             `json:"kind"`
+	Topic                *string            `json:"topic"`
+	Title                string             `json:"title"`
+	Content              string             `json:"content"`
+	Visibility           string             `json:"visibility"`
+	Status               string             `json:"status"`
+	Lineage              pgtype.UUID        `json:"lineage"`
+	Version              int32              `json:"version"`
+	Supersedes           pgtype.UUID        `json:"supersedes"`
+	ValidFrom            pgtype.Timestamptz `json:"valid_from"`
+	ValidUntil           pgtype.Timestamptz `json:"valid_until"`
+	Confidence           string             `json:"confidence"`
+	Source               []byte             `json:"source"`
+	SourceTaskID         pgtype.UUID        `json:"source_task_id"`
+	SourceConversationID pgtype.UUID        `json:"source_conversation_id"`
+	SourcePrivate        bool               `json:"source_private"`
+	Position             int32              `json:"position"`
+	CondensedFrom        []pgtype.UUID      `json:"condensed_from"`
+	ArchivedAt           pgtype.Timestamptz `json:"archived_at"`
+	CreatedByKind        string             `json:"created_by_kind"`
+	CreatedBy            pgtype.UUID        `json:"created_by"`
+	ApprovedBy           pgtype.UUID        `json:"approved_by"`
+	ApprovedAt           pgtype.Timestamptz `json:"approved_at"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BrainFocusOff struct {
+	UserID pgtype.UUID        `json:"user_id"`
+	Since  pgtype.Timestamptz `json:"since"`
+}
+
+type BrainLink struct {
+	EntryID    pgtype.UUID        `json:"entry_id"`
+	TargetKind string             `json:"target_kind"`
+	TargetID   string             `json:"target_id"`
+	Relation   string             `json:"relation"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type CampaignTarget struct {
 	ID         pgtype.UUID        `json:"id"`
 	CampaignID pgtype.UUID        `json:"campaign_id"`
@@ -308,10 +373,21 @@ type JobEvent struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-type KnowledgeEntry struct {
+type KnowledgeEntriesLegacy struct {
 	ID        pgtype.UUID        `json:"id"`
 	ProjectID pgtype.UUID        `json:"project_id"`
 	Scope     string             `json:"scope"`
+	Title     string             `json:"title"`
+	Content   string             `json:"content"`
+	Position  int32              `json:"position"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type KnowledgeEntry struct {
+	ID        pgtype.UUID        `json:"id"`
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Scope     *string            `json:"scope"`
 	Title     string             `json:"title"`
 	Content   string             `json:"content"`
 	Position  int32              `json:"position"`
@@ -447,6 +523,24 @@ type PluginKv struct {
 }
 
 type ProductContext struct {
+	ID            pgtype.UUID        `json:"id"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Kind          string             `json:"kind"`
+	Title         string             `json:"title"`
+	Content       string             `json:"content"`
+	Version       int32              `json:"version"`
+	Status        string             `json:"status"`
+	SourceTaskID  pgtype.UUID        `json:"source_task_id"`
+	CreatedByKind string             `json:"created_by_kind"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	ApprovedBy    pgtype.UUID        `json:"approved_by"`
+	ApprovedAt    pgtype.Timestamptz `json:"approved_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ArchivedAt    pgtype.Timestamptz `json:"archived_at"`
+	CondensedFrom []pgtype.UUID      `json:"condensed_from"`
+}
+
+type ProductContextLegacy struct {
 	ID            pgtype.UUID        `json:"id"`
 	ProjectID     pgtype.UUID        `json:"project_id"`
 	Kind          string             `json:"kind"`

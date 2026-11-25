@@ -157,6 +157,19 @@ func (a *Access) UserCanRead(ctx context.Context, conv db.Conversation, user pgt
 	return a.CanRead(ctx, conv, principalOf(u))
 }
 
+// UserCanReadConversation is UserCanRead for a conversation known by its id: whether what was said
+// there may be shown to the person. A conversation that is gone is read by nobody.
+func (a *Access) UserCanReadConversation(ctx context.Context, id, user pgtype.UUID) (bool, error) {
+	conv, err := a.store.GetConversation(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return a.UserCanRead(ctx, conv, user)
+}
+
 // UserCanWrite answers whether a person, who is not the caller, may write in conv: whether what
 // they asked of an agent there still stands.
 func (a *Access) UserCanWrite(ctx context.Context, conv db.Conversation, user pgtype.UUID) (bool, error) {

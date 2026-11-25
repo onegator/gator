@@ -167,6 +167,7 @@ not exist.
 | `kv.get` / `kv.put` | `{key}` → `{found, value}` / `{key, value}` → null (JSON up to 64 KiB, per project) |
 | `log` | `{level, message, fields}` → null |
 | `review.request` | `{ref, revision, title, url?, description?, author?, base_branch?, head_branch?, ref_key, external_refs?}` → `{tasks: [{automation, task_id}]}`. Reports a change somebody else made, such as a pull request a person opened or pushed to. With the project's PR review or Security review automation on, the core opens one review task per automation and revision (none while one for the same `ref` is still open), carrying `ref` under `external_refs[ref_key]`; otherwise nothing happens. Never report a change Gator made itself |
+| `brain.propose` | `{kind, title, content, scope?, component?, source_id, url?, excerpt?}` → `{entry_id, created}`. Proposes something worth remembering to the project's Brain: an ADR in the repository is a `decision`, an error that keeps coming back a `runbook` (kinds: decision, lesson, runbook, fact, glossary, convention; scope `project` or `component`). Always a proposal a person approves before any prompt carries it; the same `source_id` is proposed once, so name the version (a file's blob sha) when a new version should be proposed again |
 | `incident.upsert`, `release.record` | answer -32001 until M6 |
 
 ## Webhooks

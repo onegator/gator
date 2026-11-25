@@ -13,6 +13,7 @@ import (
 
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -109,13 +110,15 @@ func (s *Server) SaveProjectPreset(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only what a person approved: a proposal nobody accepted is not yet how this product
 	// thinks, and it certainly should not become how the next one starts.
-	entries, err := q.ListApprovedProductContext(ctx, projectID)
-	if err != nil {
-		s.fail(w, err)
-		return
+	var entries []db.BrainEntry
+	if s.Brain != nil {
+		if entries, err = s.Brain.Legacy.ApprovedProduct(ctx, projectID); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	for _, e := range entries {
-		snapshot.Product = append(snapshot.Product, presetEntry{Kind: e.Kind, Title: e.Title, Content: e.Content})
+		snapshot.Product = append(snapshot.Product, presetEntry{Kind: brain.ProductKind(e.Kind), Title: e.Title, Content: e.Content})
 	}
 	if repo, err := q.GetPrimaryRepo(ctx, projectID); err == nil {
 		snapshot.Repo = &presetRepo{URL: repo.Url, DefaultBranch: repo.DefaultBranch}
@@ -185,12 +188,14 @@ func (s *Server) applyPreset(ctx context.Context, name string, project db.Projec
 			return err
 		}
 	}
+	if s.Brain == nil && len(p.Product) > 0 {
+		s.Log.Warn("the preset's product context is not copied: the Brain is not enabled on this server")
+		p.Product = nil
+	}
 	for _, e := range p.Product {
-		if _, err := q.CreateProductEntry(ctx, db.CreateProductEntryParams{
-			ProjectID: project.ID, Kind: e.Kind, Title: e.Title, Content: e.Content,
-			Status: "approved", CreatedByKind: "user", CreatedBy: by, ApprovedBy: by,
-			ApprovedAt: pgtype.Timestamptz{Time: project.CreatedAt.Time, Valid: true},
-		}); err != nil {
+		if _, err := s.Brain.Service.RecordIn(ctx, q, brain.Draft{Scope: brain.ScopeProject, Project: project.ID,
+			Kind: brain.KindOfProduct(e.Kind), Title: e.Title, Content: e.Content},
+			brain.Author{Kind: brain.ByUser, ID: by}, brain.StatusApproved); err != nil {
 			return err
 		}
 	}
