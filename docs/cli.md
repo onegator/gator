@@ -66,6 +66,18 @@ server too old to know the field refuses it, and `gator` says so instead of runn
 falls back to polling the stored events when the socket cannot be opened, and ends when the job
 does — with a non-zero exit when it did not succeed, so a script can wait on it.
 
+## Review and approvals
+
+```
+gator job checkpoints JOB_ID                    what each turn of the job changed: files, +/-
+gator job diff JOB_ID [--from N] [--to N] [--ignore-whitespace]
+gator approvals [--project SLUG]                what agents wait for you to decide
+gator decide ID allow|allow-session|deny|stop|answer [--reason TEXT]
+```
+
+`job diff` prints the whole job's diff, or the turns from..to. `decide … deny --reason` is the
+reason the agent reads; `answer --reason` answers a question an agent asked.
+
 ## Output
 
 Tables for people by default; `--json` on any command prints the API's objects for scripts

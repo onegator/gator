@@ -106,6 +106,10 @@ Faza 5 zamieniła kolejność swoich dwóch numerów: mosty komunikatorów powst
 `requested_by_kind='external'`) i `00049_external_agents.sql` (agenci zdalni, klienci A2A, ich taski i
 wywołania).
 
+Faza 7 zmieściła się w swoich pięciu numerach, 00050–00054 (checkpointy tur, komentarze na liniach,
+prośby agentów o zgodę, intencja wiadomości, stan `settling` joba); kolejne migracje zaczynają się od
+00055.
+
 Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
 
 ## Co celowo NIE wchodzi
