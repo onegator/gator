@@ -273,6 +273,28 @@ func TestAgentGetsNeitherTheRunnerTokenNorItsFile(t *testing.T) {
 	}
 }
 
+// A job on its payer's login runs Claude Code with that login and not the runner's: the runner's
+// token and API key are not in its environment, the payer's token is.
+func TestPayersLoginReplacesTheRunnersOwn(t *testing.T) {
+	b, _ := fake(t, "claude-2.1.270-tool-success.ndjson")
+	envFile := filepath.Join(t.TempDir(), "env")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "runner-own-oauth")
+	t.Setenv("ANTHROPIC_API_KEY", "runner-own-key")
+	t.Setenv("FAKE_CLAUDE_ENV", envFile)
+	out, _ := run(t, b, context.Background(), backend.Spec{Prompt: "x", PayerLogin: true,
+		Env: []string{"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-payer"}})
+	if out.Status != proto.StatusDone {
+		t.Fatalf("outcome: %+v", out)
+	}
+	env, _ := os.ReadFile(envFile)
+	if strings.Contains(string(env), "runner-own") {
+		t.Fatalf("the runner's login reached a job on its payer's:\n%s", env)
+	}
+	if !strings.Contains(string(env), "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-payer") {
+		t.Fatalf("the payer's login did not:\n%s", env)
+	}
+}
+
 // Gator's MCP server reaches the session in a file of the job's own (the token never on the
 // command line), beside the runner's own servers, and a read-only session may call its tools.
 // The recording is what such a session streams: the server connected, a brain_search, a citation.

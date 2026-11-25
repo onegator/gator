@@ -61,3 +61,16 @@ func TestProfileQuotes(t *testing.T) {
 		t.Fatalf("profile: %s", p)
 	}
 }
+
+// A job on its payer's login gets none of the runner's: not its Claude token, its API keys, a
+// base URL pointing at its proxy, nor the CODEX_HOME holding its ChatGPT login.
+func TestWithoutLoginsDropsTheRunnersOwn(t *testing.T) {
+	env := []string{"PATH=/usr/bin", "HOME=/home/a", "CLAUDE_CODE_OAUTH_TOKEN=runner-oauth", "ANTHROPIC_API_KEY=runner-key",
+		"ANTHROPIC_BASE_URL=https://proxy", "OPENAI_API_KEY=runner-openai", "CODEX_HOME=/home/a/.codex", "AWS_PROFILE=ops",
+		"CLAUDE_CONFIG_DIR=/home/a/.claude", "MY_TOOL=1"}
+	got := WithoutLogins(env)
+	want := []string{"PATH=/usr/bin", "HOME=/home/a", "CLAUDE_CONFIG_DIR=/home/a/.claude", "MY_TOOL=1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}

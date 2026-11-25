@@ -132,7 +132,7 @@ func (f *fixture) leasedJob(t *testing.T, s *session) db.Job {
 	t.Helper()
 	ctx := context.Background()
 	job := f.queuedJob(t)
-	leased, err := f.q.LeaseJobs(ctx, db.LeaseJobsParams{RunnerID: s.runnerID, LeaseUntil: ts(time.Now().Add(time.Minute)),
+	leased, err := leaseJobs(ctx, f.q, s.runnerID, ts(time.Now().Add(time.Minute)), db.LeaseCandidatesParams{
 		Backends: []string{f.backend}, Projects: []pgtype.UUID{f.project}, Slots: 1, Placement: job.Placement})
 	if err != nil || len(leased) != 1 || leased[0].ID != job.ID {
 		t.Fatalf("lease: %v %v", leased, err)

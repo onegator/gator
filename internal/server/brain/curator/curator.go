@@ -81,7 +81,9 @@ func PoolTx(pool *pgxpool.Pool) Tx {
 
 // Jobs queues a curation job on a task. The agents package provides one over the runner manager.
 type Jobs interface {
-	QueueCuration(ctx context.Context, task pgtype.UUID, instruction string) (pgtype.UUID, error)
+	// paidBy is whose model login pays for the reading: the conversation's creator when a person
+	// created it; zero leaves it to the job rules (the task's creator).
+	QueueCuration(ctx context.Context, task, paidBy pgtype.UUID, instruction string) (pgtype.UUID, error)
 }
 
 // packer packs a conversation. conversations.Packer is one.
@@ -203,7 +205,11 @@ func (c *Curator) Curate(ctx context.Context, conv db.Conversation) (bool, error
 		_ = c.store.ReleaseCuration(ctx, conv.ID)
 		return false, err
 	}
-	job, err := c.jobs.QueueCuration(ctx, conv.TaskID, c.extract.Instruction(pack, claim.UptoSeq))
+	var paidBy pgtype.UUID
+	if conv.CreatedByKind == "user" {
+		paidBy = conv.CreatedBy
+	}
+	job, err := c.jobs.QueueCuration(ctx, conv.TaskID, paidBy, c.extract.Instruction(pack, claim.UptoSeq))
 	if err != nil {
 		_ = c.store.ReleaseCuration(ctx, conv.ID)
 		return false, err

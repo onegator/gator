@@ -161,7 +161,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	cmd.Dir = spec.Dir
 	// An allow-list, not a deny-list: the runner's environment holds its token and whatever its
 	// operator exported, and an agent that can run any command can print all of it.
-	cmd.Env = append(agentenv.Filter(os.Environ(), b.AllowEnv), spec.Env...)
+	cmd.Env = backend.AgentEnv(spec, b.AllowEnv)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Stdout goes through our own pipe: a background process that inherits it must not be
 	// able to keep this run alive after claude itself exits.

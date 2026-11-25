@@ -557,7 +557,7 @@ func (q *Queries) LastRollbackReason(ctx context.Context, arg LastRollbackReason
 }
 
 const listActiveJobsForTask = `-- name: ListActiveJobsForTask :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_exclusive, waiting_reason FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at
 `
 
 func (q *Queries) ListActiveJobsForTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
@@ -602,6 +602,11 @@ func (q *Queries) ListActiveJobsForTask(ctx context.Context, taskID pgtype.UUID)
 			&i.TurnID,
 			&i.Tier,
 			&i.Kind,
+			&i.PayerID,
+			&i.CredentialID,
+			&i.CredentialKind,
+			&i.CredentialExclusive,
+			&i.WaitingReason,
 		); err != nil {
 			return nil, err
 		}

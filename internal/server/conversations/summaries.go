@@ -16,9 +16,10 @@ import (
 
 // SummaryJobs queues the job that writes a conversation's summary, on the task the conversation
 // belongs to, with the summarizer's role and policy (policy.roles.summarizer: a cheap model).
-// The agents package provides one over the runner manager.
+// The agents package provides one over the runner manager. paidBy is the person whose model login
+// pays for it: the one whose turn found the summary stale.
 type SummaryJobs interface {
-	QueueSummary(ctx context.Context, task pgtype.UUID, instruction string) (pgtype.UUID, error)
+	QueueSummary(ctx context.Context, task, paidBy pgtype.UUID, instruction string) (pgtype.UUID, error)
 }
 
 // Summaries keeps the background of long conversations: when a pack finds older messages the
@@ -38,9 +39,10 @@ func NewSummaries(pool *pgxpool.Pool, jobs SummaryJobs) *Summaries {
 // maxSummaryInput bounds what one summary job reads.
 const maxSummaryInput = 60000
 
-// Refresh queues a newer summary of conv when p says its background is stale. It does nothing
-// while one is being written, or when the summary already covers the older messages.
-func (s *Summaries) Refresh(ctx context.Context, conv db.Conversation, task pgtype.UUID, p Pack) error {
+// Refresh queues a newer summary of conv when p says its background is stale, paid for by paidBy
+// (zero: the job rules decide). It does nothing while one is being written, or when the summary
+// already covers the older messages.
+func (s *Summaries) Refresh(ctx context.Context, conv db.Conversation, task, paidBy pgtype.UUID, p Pack) error {
 	if !p.Stale || len(p.Older) == 0 || s.jobs == nil || p.Private {
 		return nil // a private conversation's words do not go into a job the project can read
 	}
@@ -53,7 +55,7 @@ func (s *Summaries) Refresh(ctx context.Context, conv db.Conversation, task pgty
 	if err != nil {
 		return err
 	}
-	job, err := s.jobs.QueueSummary(ctx, task, summaryInstruction(prev.Summary, p))
+	job, err := s.jobs.QueueSummary(ctx, task, paidBy, summaryInstruction(prev.Summary, p))
 	if err != nil {
 		_ = q.ReleaseSummaryRefresh(ctx, conv.ID)
 		return err

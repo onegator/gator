@@ -15,11 +15,13 @@ const insertUsage = `-- name: InsertUsage :execrows
 INSERT INTO usage_records (
     task_id, project_id, phase, job_id, source, actor_id, backend, model,
     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-    cost_usd, cost_estimated, duration_ms, started_at, finished_at, idempotency_key
+    cost_usd, cost_estimated, duration_ms, started_at, finished_at, idempotency_key,
+    paid_by, credential_kind
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8,
     $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18
+    $13, $14, $15, $16, $17, $18,
+    $19, $20
 )
 ON CONFLICT (task_id, idempotency_key) DO NOTHING
 `
@@ -43,6 +45,8 @@ type InsertUsageParams struct {
 	StartedAt        pgtype.Timestamptz `json:"started_at"`
 	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
 	IdempotencyKey   *string            `json:"idempotency_key"`
+	PaidBy           pgtype.UUID        `json:"paid_by"`
+	CredentialKind   string             `json:"credential_kind"`
 }
 
 func (q *Queries) InsertUsage(ctx context.Context, arg InsertUsageParams) (int64, error) {
@@ -65,6 +69,8 @@ func (q *Queries) InsertUsage(ctx context.Context, arg InsertUsageParams) (int64
 		arg.StartedAt,
 		arg.FinishedAt,
 		arg.IdempotencyKey,
+		arg.PaidBy,
+		arg.CredentialKind,
 	)
 	if err != nil {
 		return 0, err
@@ -73,7 +79,7 @@ func (q *Queries) InsertUsage(ctx context.Context, arg InsertUsageParams) (int64
 }
 
 const listUsageByTask = `-- name: ListUsageByTask :many
-SELECT id, task_id, project_id, phase, job_id, source, actor_id, backend, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, cost_estimated, duration_ms, started_at, finished_at, idempotency_key, created_at FROM usage_records WHERE task_id = $1 ORDER BY created_at, id
+SELECT id, task_id, project_id, phase, job_id, source, actor_id, backend, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, cost_estimated, duration_ms, started_at, finished_at, idempotency_key, created_at, paid_by, credential_kind FROM usage_records WHERE task_id = $1 ORDER BY created_at, id
 `
 
 func (q *Queries) ListUsageByTask(ctx context.Context, taskID pgtype.UUID) ([]UsageRecord, error) {
@@ -106,6 +112,8 @@ func (q *Queries) ListUsageByTask(ctx context.Context, taskID pgtype.UUID) ([]Us
 			&i.FinishedAt,
 			&i.IdempotencyKey,
 			&i.CreatedAt,
+			&i.PaidBy,
+			&i.CredentialKind,
 		); err != nil {
 			return nil, err
 		}

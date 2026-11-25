@@ -4,8 +4,10 @@ package backend
 
 import (
 	"context"
+	"os"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/agentenv"
 )
 
 // Spec describes one agent run.
@@ -19,6 +21,9 @@ type Spec struct {
 	// Env is added to the agent's environment, as KEY=VALUE. It carries the job's own identity
 	// for gator-cli, and the directory that holds it.
 	Env []string
+	// PayerLogin says Env carries the model login of the person who pays for the job: the agent
+	// gets that one and none of the runner's own (agentenv.WithoutLogins).
+	PayerLogin bool
 	// DenyRead are files the agent must not open: the runner's token file. Backends pass them
 	// to agentenv.Command, which enforces it where the platform can.
 	DenyRead []string
@@ -92,6 +97,17 @@ type Outcome struct {
 	ToolCalls   int
 	Summary     string
 	Usage       proto.Usage
+}
+
+// AgentEnv is the environment of an agent's process: what it may inherit of the runner's (allow
+// names more than agentenv's list), without the runner's own logins when the job brings its
+// payer's, and the job's own variables last, so they win.
+func AgentEnv(spec Spec, allow []string) []string {
+	base := agentenv.Filter(os.Environ(), allow)
+	if spec.PayerLogin {
+		base = agentenv.WithoutLogins(base)
+	}
+	return append(base, spec.Env...)
 }
 
 // Backend runs an agent CLI.

@@ -83,6 +83,9 @@ const maxSteers = 20
 // refuses to raise more than a job is allowed. This only bounds a server that has lost count.
 const maxObjections = 5
 
+// RunsPayerLogins implements client.PayerLoginRunner: a job's Credential is what its agent runs on.
+func (e *Executor) RunsPayerLogins() bool { return true }
+
 // AuthState implements client.AuthReporter.
 func (e *Executor) AuthState() map[string]string {
 	out := map[string]string{}
@@ -105,6 +108,14 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	if access.NoTools {
 		job.Repo, job.AgentToken = nil, "" // nothing to read and nobody to talk to: an empty directory
 	}
+	// The payer's login, when the job brings one: the agent runs on it and on none of this
+	// runner's, and nothing the job sends carries its values.
+	payer, err := openLogin(job.Credential)
+	if err != nil {
+		return proto.Finish{Status: proto.StatusFailed, StopReason: "login: " + err.Error()}
+	}
+	defer payer.close()
+	io = payer.maskIO(io)
 	prepare := e.WS.Prepare
 	if access.ReadOnly {
 		prepare = e.WS.PrepareReadOnly
@@ -120,7 +131,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		_ = ws.Cleanup(context.WithoutCancel(ctx), false)
 		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
 	}
-	env = append(env, signing...)
+	env = append(append(env, signing...), payer.Env()...)
 	servers := e.mcpServers(job)
 	opening := promptFor(job, ws)
 	// Skills go to a backend that loads them by itself; any other is told of them in its prompt
@@ -132,7 +143,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	}
 	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
 		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
-			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
+			MaxCostUSD: maxCost, Env: env, PayerLogin: payer != nil, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
 	}
 
 	var usage proto.Usage
@@ -249,6 +260,11 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	if err := ws.Cleanup(gctx, keep); err != nil && e.Log != nil {
 		e.Log.Warn("workspace cleanup", "job", job.JobID, "err", err)
 	}
+	// What the agent's CLI rewrote of its login goes back to the server, which keeps it: a
+	// refreshed token replaces the one it was handed.
+	fin.CredentialRefresh = payer.refreshed()
+	fin.CredentialRefused = payer.refused(fin)
+	payer.maskFinish(&fin)
 	return fin
 }
 

@@ -2,11 +2,13 @@
 INSERT INTO usage_records (
     task_id, project_id, phase, job_id, source, actor_id, backend, model,
     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-    cost_usd, cost_estimated, duration_ms, started_at, finished_at, idempotency_key
+    cost_usd, cost_estimated, duration_ms, started_at, finished_at, idempotency_key,
+    paid_by, credential_kind
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8,
     $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18
+    $13, $14, $15, $16, $17, $18,
+    sqlc.narg(paid_by), sqlc.arg(credential_kind)
 )
 ON CONFLICT (task_id, idempotency_key) DO NOTHING;
 

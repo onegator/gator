@@ -336,6 +336,10 @@ type UsageInput struct {
 	DurationMS                                                   int64
 	StartedAt, FinishedAt                                        pgtype.Timestamptz
 	IdempotencyKey                                               string
+	// PaidBy is the person whose own model login paid (none on the runner's), CredentialKind the
+	// kind of login ("runner" for the runner's own).
+	PaidBy         pgtype.UUID
+	CredentialKind string
 }
 
 // RecordUsage stores a usage report against a task. It returns false when the idempotency
@@ -369,6 +373,7 @@ func (s *Service) RecordUsage(ctx context.Context, taskID pgtype.UUID, in UsageI
 			CacheReadTokens: in.CacheReadTokens, CacheWriteTokens: in.CacheWriteTokens,
 			CostUsd: in.CostUSD, CostEstimated: in.CostEstimated, DurationMs: in.DurationMS,
 			StartedAt: in.StartedAt, FinishedAt: in.FinishedAt, IdempotencyKey: key,
+			PaidBy: in.PaidBy, CredentialKind: in.CredentialKind,
 		})
 		if err != nil {
 			return err

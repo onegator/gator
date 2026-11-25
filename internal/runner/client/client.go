@@ -44,6 +44,12 @@ type Loginer interface {
 	Login(ctx context.Context, backend string) (proto.LoginPrompt, error)
 }
 
+// PayerLoginRunner is implemented by executors that run a job on the login it carries
+// (proto.Job.Credential) and then on none of the runner's own.
+type PayerLoginRunner interface {
+	RunsPayerLogins() bool
+}
+
 // AuthReporter is implemented by executors that know which backends are logged in.
 type AuthReporter interface {
 	AuthState() map[string]string
@@ -329,7 +335,7 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 
 	reg := proto.Register{Name: c.cfg.Name, Location: c.cfg.Location, Placement: c.cfg.Placement, BinaryVersion: c.cfg.BinaryVersion,
 		Capabilities: proto.Capabilities{Backends: c.cfg.Backends, MaxParallel: c.cfg.MaxParallel, Projects: c.cfg.Projects,
-			CanLogin: c.canLogin(), ReadOnly: nonNil(c.cfg.ReadOnly), NoTools: nonNil(c.cfg.NoTools)}}
+			CanLogin: c.canLogin(), ReadOnly: nonNil(c.cfg.ReadOnly), NoTools: nonNil(c.cfg.NoTools), PayerLogins: c.runsPayerLogins()}}
 	if err := write(sctx, conn, proto.TypeRegister, 1, reg); err != nil {
 		return false, err
 	}
@@ -543,6 +549,12 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 func (c *Client) canLogin() bool {
 	_, ok := c.exec.(Loginer)
 	return ok
+}
+
+// runsPayerLogins says whether the executor runs jobs on their payers' logins, for the registration.
+func (c *Client) runsPayerLogins() bool {
+	p, ok := c.exec.(PayerLoginRunner)
+	return ok && p.RunsPayerLogins()
 }
 
 func (c *Client) login(ctx context.Context, backend string) {

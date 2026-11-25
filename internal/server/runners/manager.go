@@ -105,6 +105,11 @@ type Config struct {
 	ProvisionDelay time.Duration
 	// Brain records which Brain entries a job was handed and cited (brain.Citations); nil: none.
 	Brain BrainUse
+	// Payers says who pays for a job; nil: DefaultPayers.
+	Payers PayerResolver
+	// Credentials decides whose model login a job runs on (credentials.Service); nil: every job
+	// runs on its runner's own login, as before people could bring theirs.
+	Credentials Credentials
 }
 
 // AuthorRoles names, for the work of an automation, the role whose agent does a job of a given
@@ -175,6 +180,12 @@ func (c *Config) defaults() {
 	}
 	if c.ProvisionDelay == 0 {
 		c.ProvisionDelay = 2 * time.Second
+	}
+	if c.Payers == nil {
+		c.Payers = DefaultPayers()
+	}
+	if c.Credentials == nil {
+		c.Credentials = runnerLogins{}
 	}
 	c.cloudDefaults()
 }
@@ -284,6 +295,9 @@ type NewJob struct {
 	// nothing, so the person who asked for it consented to that one answer: it needs no consent
 	// on the task.
 	Tier string
+	// PaidBy is who pays for the job when the caller knows better than the rules (DefaultPayers):
+	// the person whose turn a summary is written for. Zero: the rules decide.
+	PaidBy pgtype.UUID
 }
 
 // Kinds and tiers of a job; see the jobs table (migration 00040).
@@ -395,17 +409,34 @@ func (m *Manager) insertJob(ctx context.Context, q *db.Queries, d process.Detail
 	if in.Bounds.MaxToolCalls <= 0 {
 		in.Bounds.MaxToolCalls = DefaultMaxToolCalls
 	}
+	payer, err := m.cfg.Payers.Payer(ctx, q, PayerQuestion{Task: d.Task, Kind: in.Kind, CreatedBy: in.CreatedBy, Turn: in.Turn, PaidBy: in.PaidBy})
+	if err != nil {
+		return db.Job{}, err
+	}
 	bounds, _ := json.Marshal(in.Bounds)
 	job, err := q.CreateJob(ctx, db.CreateJobParams{
 		TaskID: d.Task.ID, ProjectID: d.Task.ProjectID, Phase: d.Task.Phase, Role: role,
 		Backend: in.Backend, Instruction: in.Instruction, Bounds: bounds, MaxAttempts: int32(in.MaxAttempts),
 		CreatedByKind: string(in.CreatedBy.Kind), CreatedBy: in.CreatedBy.ID, Model: in.Model, Placement: in.Placement,
-		AgentID: in.Agent, TurnID: in.Turn, Tier: in.Tier, Kind: in.Kind,
+		AgentID: in.Agent, TurnID: in.Turn, Tier: in.Tier, Kind: in.Kind, PayerID: payer,
 	})
 	if err != nil {
 		return db.Job{}, err
 	}
-	return job, m.emitJob(ctx, q, "job.queued", job, nil)
+	// A job that will wait for its payer's login says so from the start, rather than when a runner
+	// first looks at it.
+	choice, err := m.cfg.Credentials.Choose(ctx, q, job, false)
+	if err != nil {
+		return db.Job{}, err
+	}
+	var extra map[string]any
+	if choice.Wait != "" {
+		if err := q.SetJobWaiting(ctx, db.SetJobWaitingParams{ID: job.ID, WaitingReason: choice.Wait}); err != nil {
+			return db.Job{}, err
+		}
+		job.WaitingReason, extra = choice.Wait, map[string]any{"waiting_reason": choice.Wait}
+	}
+	return job, m.emitJob(ctx, q, "job.queued", job, extra)
 }
 
 // policy is what the job's backend, model and cost cap default to: the role's policy, then for

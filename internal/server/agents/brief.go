@@ -30,7 +30,7 @@ type packer interface {
 
 // refresher keeps a conversation's summary fresh. conversations.Summaries is one.
 type refresher interface {
-	Refresh(ctx context.Context, conv db.Conversation, task pgtype.UUID, p conversations.Pack) error
+	Refresh(ctx context.Context, conv db.Conversation, task, paidBy pgtype.UUID, p conversations.Pack) error
 }
 
 // Briefer tells a reply's agent the conversation it answers in (runners.TurnBriefer): who asks
@@ -76,7 +76,7 @@ func (b *Briefer) Brief(ctx context.Context, job db.Job) (runners.TurnBrief, err
 		return runners.TurnBrief{}, err
 	}
 	if b.summaries != nil {
-		if err := b.summaries.Refresh(ctx, conv, job.TaskID, pack); err != nil {
+		if err := b.summaries.Refresh(ctx, conv, job.TaskID, job.PayerID, pack); err != nil {
 			b.log.Warn("asking for a conversation's summary", "conversation", conversations.UUIDString(conv.ID), "err", err)
 		}
 	}
@@ -146,9 +146,9 @@ func firstLine(s string) string {
 type summaryQueue struct{ jobs jobQueue }
 
 // QueueSummary implements conversations.SummaryJobs.
-func (s summaryQueue) QueueSummary(ctx context.Context, task pgtype.UUID, instruction string) (pgtype.UUID, error) {
+func (s summaryQueue) QueueSummary(ctx context.Context, task, paidBy pgtype.UUID, instruction string) (pgtype.UUID, error) {
 	job, err := s.jobs.CreateJob(ctx, task, runners.NewJob{Kind: runners.KindSummary, Tier: runners.TierChat, Role: "summarizer",
-		Instruction: instruction, CreatedBy: process.Actor{Kind: process.ActorSystem}})
+		Instruction: instruction, CreatedBy: process.Actor{Kind: process.ActorSystem}, PaidBy: paidBy})
 	return job.ID, err
 }
 
@@ -157,8 +157,8 @@ func (s summaryQueue) QueueSummary(ctx context.Context, task pgtype.UUID, instru
 type CurationQueue struct{ jobs jobQueue }
 
 // QueueCuration implements curator.Jobs.
-func (c CurationQueue) QueueCuration(ctx context.Context, task pgtype.UUID, instruction string) (pgtype.UUID, error) {
+func (c CurationQueue) QueueCuration(ctx context.Context, task, paidBy pgtype.UUID, instruction string) (pgtype.UUID, error) {
 	job, err := c.jobs.CreateJob(ctx, task, runners.NewJob{Kind: runners.KindSummary, Tier: runners.TierChat, Role: "curator",
-		Instruction: instruction, CreatedBy: process.Actor{Kind: process.ActorSystem}})
+		Instruction: instruction, CreatedBy: process.Actor{Kind: process.ActorSystem}, PaidBy: paidBy})
 	return job.ID, err
 }

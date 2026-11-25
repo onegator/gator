@@ -34,6 +34,30 @@ var allowed = []string{
 // executor. The CLAUDE* ones make Claude Code believe it runs nested inside another session.
 var never = []string{"GATOR_*", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"}
 
+// logins are the variables that log a backend in, or point it at an account: the runner's own
+// login. A job that brings its payer's login gets none of them (WithoutLogins), so the agent runs
+// on that person's account and on nobody else's.
+var logins = []string{
+	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
+	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_*", "GOOGLE_APPLICATION_CREDENTIALS",
+	"OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_HOME", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+}
+
+// WithoutLogins drops from env (KEY=VALUE) every variable that carries the runner's own login. A
+// login in a file of the runner's user (~/.claude/.credentials.json, a keychain) is not in env:
+// Claude Code prefers the login in its environment to those, and Codex reads only the CODEX_HOME
+// the job is given.
+func WithoutLogins(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if !matches(logins, k) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 func matches(patterns []string, key string) bool {
 	return slices.ContainsFunc(patterns, func(p string) bool {
 		if prefix, ok := strings.CutSuffix(p, "*"); ok {

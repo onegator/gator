@@ -12,26 +12,36 @@ import (
 const getWorkspaceSettings = `-- name: GetWorkspaceSettings :one
 INSERT INTO workspace_settings (id) VALUES (true)
 ON CONFLICT (id) DO UPDATE SET id = true
-RETURNING id, process_config, updated_at
+RETURNING id, process_config, updated_at, runner_logins
 `
 
 // The row always exists (the migration seeds it), so callers do not have to handle its absence.
 func (q *Queries) GetWorkspaceSettings(ctx context.Context) (WorkspaceSetting, error) {
 	row := q.db.QueryRow(ctx, getWorkspaceSettings)
 	var i WorkspaceSetting
-	err := row.Scan(&i.ID, &i.ProcessConfig, &i.UpdatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.ProcessConfig,
+		&i.UpdatedAt,
+		&i.RunnerLogins,
+	)
 	return i, err
 }
 
 const setWorkspaceProcessConfig = `-- name: SetWorkspaceProcessConfig :one
 INSERT INTO workspace_settings (id, process_config, updated_at) VALUES (true, $1, now())
 ON CONFLICT (id) DO UPDATE SET process_config = EXCLUDED.process_config, updated_at = now()
-RETURNING id, process_config, updated_at
+RETURNING id, process_config, updated_at, runner_logins
 `
 
 func (q *Queries) SetWorkspaceProcessConfig(ctx context.Context, processConfig []byte) (WorkspaceSetting, error) {
 	row := q.db.QueryRow(ctx, setWorkspaceProcessConfig, processConfig)
 	var i WorkspaceSetting
-	err := row.Scan(&i.ID, &i.ProcessConfig, &i.UpdatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.ProcessConfig,
+		&i.UpdatedAt,
+		&i.RunnerLogins,
+	)
 	return i, err
 }

@@ -147,3 +147,16 @@ func redactValues(v any) any {
 	}
 	return v
 }
+
+// Mask replaces each of values found in s with Redacted: the values of a login a job was handed,
+// wherever its agent printed them. A value too short to be a secret is left alone — masking "ok"
+// everywhere would hide more than it protects. Tokens are written without characters JSON escapes,
+// so masking a JSON document's text masks them inside its strings too.
+func Mask(s string, values []string) string {
+	for _, v := range values {
+		if len(v) >= 8 {
+			s = strings.ReplaceAll(s, v, Redacted)
+		}
+	}
+	return s
+}
