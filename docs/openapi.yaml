@@ -1259,6 +1259,71 @@ paths:
       responses:
         "200": { description: a unified diff, content: { text/x-diff: { schema: { type: string } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /checkpoints/{checkpointId}/comments:
+    post:
+      operationId: createReviewComment
+      description: |
+        A draft comment on lines of the checkpoint's diff (its turn's, or the job's up to it): a path,
+        a side (new numbers the file after the change, old before) and a range of lines the diff
+        shows; the server keeps the code there with it (snippet). It stays the author's draft until
+        they send their drafts. A member of the job's project who may read the job.
+      parameters: [ { $ref: "#/components/parameters/checkpointId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewReviewComment" } } }
+      responses:
+        "201": { description: kept as a draft, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewComment" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/comments:
+    get:
+      operationId: listJobReviewComments
+      description: The job's comments to lay over its diff, turn by turn — every comment sent, and the caller's own drafts.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ReviewComment" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/comments/send:
+    post:
+      operationId: sendReviewComments
+      description: |
+        "Send the notes to @worker": the caller's drafts on the job become one message, by the
+        caller, mentioning the agent (the job's own unless agentId says another), where the job's
+        agent answered (its turn's conversation, else the task's thread). The mention asks the agent
+        as any mention does — a work agent on a task nobody allowed agents on answers in chat and a
+        consent card asks. The comments go as structure, not as text to parse: the agent reads each
+        (file, lines, the code there, the note) in the package of its turn, under "Notes on your
+        changes". 400 when the caller has no drafts on the job.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      requestBody:
+        content: { application/json: { schema: { $ref: "#/components/schemas/SendReviewComments" } } }
+      responses:
+        "201": { description: sent, content: { application/json: { schema: { $ref: "#/components/schemas/SentReviewComments" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /review-comments/{commentId}:
+    patch:
+      operationId: updateReviewComment
+      description: What a draft says (its author only), or whether a comment is resolved (anyone who may comment on the job).
+      parameters: [ { $ref: "#/components/parameters/commentId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReviewCommentChange" } } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ReviewComment" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteReviewComment
+      description: Take back one of the caller's drafts; a comment that was sent stays (resolve it instead).
+      parameters: [ { $ref: "#/components/parameters/commentId" } ]
+      responses:
+        "204": { description: taken back }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /runners:
     get:
       operationId: listRunners
@@ -2148,6 +2213,7 @@ components:
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
     checkpointId: { name: checkpointId, in: path, required: true, schema: { type: string, format: uuid } }
+    commentId: { name: commentId, in: path, required: true, schema: { type: string, format: uuid } }
     turnId: { name: turnId, in: path, required: true, schema: { type: string, format: uuid } }
     agentId: { name: agentId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2405,6 +2471,49 @@ components:
         wholeTruncated: { type: boolean }
         tookMs: { type: integer, description: "how long the runner took to checkpoint (checkpoint_ms)" }
         createdAt: { type: string, format: date-time }
+    NewReviewComment:
+      type: object
+      required: [path, side, lineStart, body]
+      properties:
+        path: { type: string }
+        side: { type: string, enum: [old, new] }
+        lineStart: { type: integer, minimum: 1 }
+        lineEnd: { type: integer, minimum: 1, description: "default lineStart; at most 500 lines" }
+        body: { type: string, maxLength: 8000 }
+    ReviewComment:
+      type: object
+      required: [id, checkpointId, authorId, path, side, lineStart, lineEnd, body, snippet, state, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        checkpointId: { type: string, format: uuid }
+        checkpointSeq: { type: integer, description: "the turn it is on (in a job's list)" }
+        authorId: { type: string, format: uuid }
+        path: { type: string }
+        side: { type: string, enum: [old, new] }
+        lineStart: { type: integer }
+        lineEnd: { type: integer }
+        body: { type: string }
+        snippet: { type: string, description: "the lines it is about as the diff showed them, each with its diff marker" }
+        messageId: { type: string, format: uuid, description: "the message it went to the agent with; absent for a draft" }
+        state: { type: string, enum: [draft, sent, resolved], x-enum-varnames: [CommentDraft, CommentSent, CommentResolved] }
+        resolvedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ReviewCommentChange:
+      type: object
+      properties:
+        body: { type: string, maxLength: 8000 }
+        resolved: { type: boolean }
+    SendReviewComments:
+      type: object
+      properties:
+        agentId: { type: string, format: uuid, description: "the agent the notes are for; default the job's" }
+    SentReviewComments:
+      type: object
+      required: [message, sent]
+      properties:
+        message: { $ref: "#/components/schemas/Message" }
+        sent: { type: integer, description: "how many comments went with it" }
     FileChange:
       type: object
       required: [path, added, removed, status]

@@ -135,7 +135,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	hostDone := make(chan struct{})
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
-	reviews := review.New(pool, review.Deps{})
+	reviews := review.New(pool, review.Deps{Messages: chat.Messages, Threads: chat.Threads})
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
 		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations,
 		Checkpoints: reviews.Checkpoints}

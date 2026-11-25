@@ -232,7 +232,7 @@ func serve(ctx context.Context) error {
 		log.Info("cloud runners start on demand", "provisioner", cloud.Provisioner.Name(), "server_url", cloud.ServerURL)
 	}
 	// What each turn of a job changed, as runners checkpoint it, and what people say about it.
-	reviews := review.New(db.Pool, review.Deps{Blobs: blobs})
+	reviews := review.New(db.Pool, review.Deps{Blobs: blobs, Messages: chat.Messages, Threads: chat.Threads})
 	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
 		// Every turn's checkpoint of the worktree, its diffs redacted and kept with attachments.
 		Checkpoints:    reviews.Checkpoints,

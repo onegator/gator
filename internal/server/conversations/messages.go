@@ -64,6 +64,10 @@ type Draft struct {
 	// left out rather than told about it.
 	Mentions    []Member
 	Attachments []pgtype.UUID
+	// Within runs in the post's own transaction once the message is written, before anyone hears
+	// of it: what belongs to the message (the review comments it carries) is there with it, or the
+	// message is not. An error from it fails the post.
+	Within func(ctx context.Context, q *db.Queries, msg db.Message) error
 }
 
 // Posted is the outcome of a post.
@@ -168,6 +172,11 @@ func (m *Messages) Post(ctx context.Context, p auth.Principal, conversation pgty
 				return invalid("this server keeps no files")
 			}
 			if err := m.attach.attach(ctx, q, msg, author, d.Attachments); err != nil {
+				return err
+			}
+		}
+		if d.Within != nil {
+			if err := d.Within(ctx, q, msg); err != nil {
 				return err
 			}
 		}

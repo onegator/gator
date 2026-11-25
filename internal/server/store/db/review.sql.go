@@ -35,6 +35,15 @@ func (q *Queries) CheckpointDiff(ctx context.Context, id pgtype.UUID) (Checkpoin
 	return i, err
 }
 
+const deleteReviewComment = `-- name: DeleteReviewComment :exec
+DELETE FROM review_comments WHERE id = $1 AND message_id IS NULL
+`
+
+func (q *Queries) DeleteReviewComment(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteReviewComment, id)
+	return err
+}
+
 const getCheckpoint = `-- name: GetCheckpoint :one
 SELECT id, job_id, turn_id, seq, repo, base_commit, head_commit, files, diff_bytes, truncated, whole_files, whole_bytes,
        whole_truncated, took_ms, created_at
@@ -78,6 +87,56 @@ func (q *Queries) GetCheckpoint(ctx context.Context, id pgtype.UUID) (GetCheckpo
 		&i.WholeTruncated,
 		&i.TookMs,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getReviewComment = `-- name: GetReviewComment :one
+SELECT id, checkpoint_id, author_id, path, side, line_start, line_end, body, snippet, message_id, resolved_at, created_at, updated_at FROM review_comments WHERE id = $1
+`
+
+func (q *Queries) GetReviewComment(ctx context.Context, id pgtype.UUID) (ReviewComment, error) {
+	row := q.db.QueryRow(ctx, getReviewComment, id)
+	var i ReviewComment
+	err := row.Scan(
+		&i.ID,
+		&i.CheckpointID,
+		&i.AuthorID,
+		&i.Path,
+		&i.Side,
+		&i.LineStart,
+		&i.LineEnd,
+		&i.Body,
+		&i.Snippet,
+		&i.MessageID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getReviewCommentForUpdate = `-- name: GetReviewCommentForUpdate :one
+SELECT id, checkpoint_id, author_id, path, side, line_start, line_end, body, snippet, message_id, resolved_at, created_at, updated_at FROM review_comments WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetReviewCommentForUpdate(ctx context.Context, id pgtype.UUID) (ReviewComment, error) {
+	row := q.db.QueryRow(ctx, getReviewCommentForUpdate, id)
+	var i ReviewComment
+	err := row.Scan(
+		&i.ID,
+		&i.CheckpointID,
+		&i.AuthorID,
+		&i.Path,
+		&i.Side,
+		&i.LineStart,
+		&i.LineEnd,
+		&i.Body,
+		&i.Snippet,
+		&i.MessageID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -141,6 +200,53 @@ func (q *Queries) InsertCheckpoint(ctx context.Context, arg InsertCheckpointPara
 	)
 	var i InsertCheckpointRow
 	err := row.Scan(&i.ID, &i.Inserted)
+	return i, err
+}
+
+const insertReviewComment = `-- name: InsertReviewComment :one
+INSERT INTO review_comments (checkpoint_id, author_id, path, side, line_start, line_end, body, snippet)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, checkpoint_id, author_id, path, side, line_start, line_end, body, snippet, message_id, resolved_at, created_at, updated_at
+`
+
+type InsertReviewCommentParams struct {
+	CheckpointID pgtype.UUID `json:"checkpoint_id"`
+	AuthorID     pgtype.UUID `json:"author_id"`
+	Path         string      `json:"path"`
+	Side         string      `json:"side"`
+	LineStart    int32       `json:"line_start"`
+	LineEnd      int32       `json:"line_end"`
+	Body         string      `json:"body"`
+	Snippet      string      `json:"snippet"`
+}
+
+func (q *Queries) InsertReviewComment(ctx context.Context, arg InsertReviewCommentParams) (ReviewComment, error) {
+	row := q.db.QueryRow(ctx, insertReviewComment,
+		arg.CheckpointID,
+		arg.AuthorID,
+		arg.Path,
+		arg.Side,
+		arg.LineStart,
+		arg.LineEnd,
+		arg.Body,
+		arg.Snippet,
+	)
+	var i ReviewComment
+	err := row.Scan(
+		&i.ID,
+		&i.CheckpointID,
+		&i.AuthorID,
+		&i.Path,
+		&i.Side,
+		&i.LineStart,
+		&i.LineEnd,
+		&i.Body,
+		&i.Snippet,
+		&i.MessageID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -214,4 +320,215 @@ func (q *Queries) ListCheckpoints(ctx context.Context, jobID pgtype.UUID) ([]Lis
 		return nil, err
 	}
 	return items, nil
+}
+
+const listDraftReviewComments = `-- name: ListDraftReviewComments :many
+SELECT rc.id, rc.checkpoint_id, rc.author_id, rc.path, rc.side, rc.line_start, rc.line_end, rc.body, rc.snippet, rc.message_id, rc.resolved_at, rc.created_at, rc.updated_at FROM review_comments rc
+JOIN turn_checkpoints c ON c.id = rc.checkpoint_id
+WHERE c.job_id = $1 AND rc.author_id = $2 AND rc.message_id IS NULL AND rc.resolved_at IS NULL
+ORDER BY c.seq, rc.path, rc.line_start, rc.created_at
+FOR UPDATE OF rc
+`
+
+type ListDraftReviewCommentsParams struct {
+	JobID    pgtype.UUID `json:"job_id"`
+	AuthorID pgtype.UUID `json:"author_id"`
+}
+
+// An author's drafts on a job, locked while they are sent.
+func (q *Queries) ListDraftReviewComments(ctx context.Context, arg ListDraftReviewCommentsParams) ([]ReviewComment, error) {
+	rows, err := q.db.Query(ctx, listDraftReviewComments, arg.JobID, arg.AuthorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReviewComment
+	for rows.Next() {
+		var i ReviewComment
+		if err := rows.Scan(
+			&i.ID,
+			&i.CheckpointID,
+			&i.AuthorID,
+			&i.Path,
+			&i.Side,
+			&i.LineStart,
+			&i.LineEnd,
+			&i.Body,
+			&i.Snippet,
+			&i.MessageID,
+			&i.ResolvedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobReviewComments = `-- name: ListJobReviewComments :many
+SELECT rc.id, rc.checkpoint_id, rc.author_id, rc.path, rc.side, rc.line_start, rc.line_end, rc.body, rc.snippet, rc.message_id, rc.resolved_at, rc.created_at, rc.updated_at, c.seq AS checkpoint_seq FROM review_comments rc
+JOIN turn_checkpoints c ON c.id = rc.checkpoint_id
+WHERE c.job_id = $1 AND (rc.message_id IS NOT NULL OR rc.author_id = $2)
+ORDER BY c.seq, rc.path, rc.line_start, rc.created_at
+`
+
+type ListJobReviewCommentsParams struct {
+	JobID  pgtype.UUID `json:"job_id"`
+	Viewer pgtype.UUID `json:"viewer"`
+}
+
+type ListJobReviewCommentsRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	CheckpointID  pgtype.UUID        `json:"checkpoint_id"`
+	AuthorID      pgtype.UUID        `json:"author_id"`
+	Path          string             `json:"path"`
+	Side          string             `json:"side"`
+	LineStart     int32              `json:"line_start"`
+	LineEnd       int32              `json:"line_end"`
+	Body          string             `json:"body"`
+	Snippet       string             `json:"snippet"`
+	MessageID     pgtype.UUID        `json:"message_id"`
+	ResolvedAt    pgtype.Timestamptz `json:"resolved_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	CheckpointSeq int32              `json:"checkpoint_seq"`
+}
+
+// A job's comments: those sent, and the drafts of the one asking.
+func (q *Queries) ListJobReviewComments(ctx context.Context, arg ListJobReviewCommentsParams) ([]ListJobReviewCommentsRow, error) {
+	rows, err := q.db.Query(ctx, listJobReviewComments, arg.JobID, arg.Viewer)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJobReviewCommentsRow
+	for rows.Next() {
+		var i ListJobReviewCommentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CheckpointID,
+			&i.AuthorID,
+			&i.Path,
+			&i.Side,
+			&i.LineStart,
+			&i.LineEnd,
+			&i.Body,
+			&i.Snippet,
+			&i.MessageID,
+			&i.ResolvedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CheckpointSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReviewNotes = `-- name: ListReviewNotes :many
+SELECT rc.message_id, rc.path, rc.side, rc.line_start, rc.line_end, rc.snippet, rc.body, u.name AS author
+FROM review_comments rc JOIN users u ON u.id = rc.author_id
+WHERE rc.message_id = ANY($1::uuid[])
+ORDER BY rc.message_id, rc.path, rc.line_start, rc.created_at
+`
+
+type ListReviewNotesRow struct {
+	MessageID pgtype.UUID `json:"message_id"`
+	Path      string      `json:"path"`
+	Side      string      `json:"side"`
+	LineStart int32       `json:"line_start"`
+	LineEnd   int32       `json:"line_end"`
+	Snippet   string      `json:"snippet"`
+	Body      string      `json:"body"`
+	Author    string      `json:"author"`
+}
+
+// The comments sent with these messages, for the agent who reads them: the file, the lines, the
+// code they are about and what was said, by whom.
+func (q *Queries) ListReviewNotes(ctx context.Context, messageIds []pgtype.UUID) ([]ListReviewNotesRow, error) {
+	rows, err := q.db.Query(ctx, listReviewNotes, messageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReviewNotesRow
+	for rows.Next() {
+		var i ListReviewNotesRow
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.Path,
+			&i.Side,
+			&i.LineStart,
+			&i.LineEnd,
+			&i.Snippet,
+			&i.Body,
+			&i.Author,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const sendReviewComments = `-- name: SendReviewComments :exec
+UPDATE review_comments SET message_id = $1, updated_at = now()
+WHERE id = ANY($2::uuid[]) AND message_id IS NULL
+`
+
+type SendReviewCommentsParams struct {
+	MessageID pgtype.UUID   `json:"message_id"`
+	Ids       []pgtype.UUID `json:"ids"`
+}
+
+func (q *Queries) SendReviewComments(ctx context.Context, arg SendReviewCommentsParams) error {
+	_, err := q.db.Exec(ctx, sendReviewComments, arg.MessageID, arg.Ids)
+	return err
+}
+
+const updateReviewComment = `-- name: UpdateReviewComment :one
+UPDATE review_comments SET body = $1,
+    resolved_at = CASE WHEN $2::boolean THEN COALESCE(resolved_at, now()) ELSE NULL END, updated_at = now()
+WHERE id = $3
+RETURNING id, checkpoint_id, author_id, path, side, line_start, line_end, body, snippet, message_id, resolved_at, created_at, updated_at
+`
+
+type UpdateReviewCommentParams struct {
+	Body     string      `json:"body"`
+	Resolved bool        `json:"resolved"`
+	ID       pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateReviewComment(ctx context.Context, arg UpdateReviewCommentParams) (ReviewComment, error) {
+	row := q.db.QueryRow(ctx, updateReviewComment, arg.Body, arg.Resolved, arg.ID)
+	var i ReviewComment
+	err := row.Scan(
+		&i.ID,
+		&i.CheckpointID,
+		&i.AuthorID,
+		&i.Path,
+		&i.Side,
+		&i.LineStart,
+		&i.LineEnd,
+		&i.Body,
+		&i.Snippet,
+		&i.MessageID,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

@@ -2,6 +2,7 @@ package review
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"unicode"
 )
@@ -157,4 +158,75 @@ func Compose(diffs [][]byte) []byte {
 		}
 	}
 	return b.Bytes()
+}
+
+// maxSnippet bounds the code a comment carries to the agent.
+const maxSnippet = 4000
+
+// Snippet is the code a comment is about: the lines start..end of path on one side of a diff
+// ("old" numbers the file before, "new" after), each with its diff marker, as the diff shows them.
+// It answers false when the diff does not show those lines.
+func Snippet(diff []byte, path, side string, start, end int) (string, bool) {
+	for _, f := range parseUnified(diff) {
+		if f.path != path {
+			continue
+		}
+		var b strings.Builder
+		found := false
+		for _, h := range f.hunks {
+			oldLine, newLine, ok := hunkStart(h[0])
+			if !ok {
+				continue
+			}
+			for _, l := range h[1:] {
+				if l == "" || l[0] == '\\' {
+					continue
+				}
+				n, counts := 0, false
+				switch l[0] {
+				case '-':
+					n, counts = oldLine, side == "old"
+					oldLine++
+				case '+':
+					n, counts = newLine, side == "new"
+					newLine++
+				default:
+					n, counts = newLine, true
+					if side == "old" {
+						n = oldLine
+					}
+					oldLine++
+					newLine++
+				}
+				if counts && n >= start && n <= end {
+					found = true
+					if b.Len()+len(l) < maxSnippet {
+						b.WriteString(l)
+						b.WriteByte('\n')
+					}
+				}
+			}
+		}
+		if found {
+			return b.String(), true
+		}
+	}
+	return "", false
+}
+
+// hunkStart reads the first old and new line numbers of a hunk header, "@@ -a,b +c,d @@".
+func hunkStart(header string) (oldLine, newLine int, ok bool) {
+	var a, c int
+	rest := strings.TrimPrefix(header, "@@ ")
+	fields := strings.Fields(rest)
+	if len(fields) < 2 || !strings.HasPrefix(fields[0], "-") || !strings.HasPrefix(fields[1], "+") {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(strings.SplitN(fields[0][1:], ",", 2)[0], "%d", &a); err != nil {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(strings.SplitN(fields[1][1:], ",", 2)[0], "%d", &c); err != nil {
+		return 0, 0, false
+	}
+	return a, c, true
 }

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/server/api/gen"
 	"github.com/onegator/gator/internal/server/auth"
@@ -135,4 +137,178 @@ func derefInt(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// commentsOn answers 503 when the server takes no comments.
+func (s *Server) commentsOn(w http.ResponseWriter) bool {
+	if !s.reviewOn(w) {
+		return false
+	}
+	if s.Review.Comments == nil {
+		writeError(w, http.StatusServiceUnavailable, "review comments are not enabled on this server", "unavailable")
+		return false
+	}
+	return true
+}
+
+// CreateReviewComment keeps a draft comment, for a member of the job's project who may read it.
+func (s *Server) CreateReviewComment(w http.ResponseWriter, r *http.Request, checkpointId gen.CheckpointId) {
+	if !s.commentsOn(w) {
+		return
+	}
+	cp, err := s.Review.Checkpoints.Get(r.Context(), fromUUID(checkpointId))
+	if err != nil {
+		s.failReview(w, err)
+		return
+	}
+	if _, ok := s.requireJob(w, r, toUUID(cp.JobID), auth.RoleMember); !ok {
+		return
+	}
+	var in gen.NewReviewComment
+	if !decode(w, r, &in) {
+		return
+	}
+	p, _ := auth.FromContext(r.Context())
+	c, err := s.Review.Comments.Create(r.Context(), p, cp.ID, review.NewComment{Path: in.Path, Side: string(in.Side),
+		LineStart: in.LineStart, LineEnd: derefInt(in.LineEnd), Body: in.Body})
+	if err != nil {
+		s.failReview(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toReviewComment(c, int(cp.Seq)))
+}
+
+// ListJobReviewComments answers the comments to lay over a job's diff.
+func (s *Server) ListJobReviewComments(w http.ResponseWriter, r *http.Request, jobId gen.JobId) {
+	if !s.commentsOn(w) {
+		return
+	}
+	if _, ok := s.requireJob(w, r, jobId, auth.RoleViewer); !ok {
+		return
+	}
+	p, _ := auth.FromContext(r.Context())
+	rows, err := s.Review.Comments.List(r.Context(), p, fromUUID(jobId))
+	if err != nil {
+		s.failReview(w, err)
+		return
+	}
+	out := make([]gen.ReviewComment, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, toReviewComment(review.Comment{ID: c.ID, CheckpointID: c.CheckpointID, AuthorID: c.AuthorID, Path: c.Path,
+			Side: c.Side, LineStart: c.LineStart, LineEnd: c.LineEnd, Body: c.Body, Snippet: c.Snippet, MessageID: c.MessageID,
+			ResolvedAt: c.ResolvedAt, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt}, int(c.CheckpointSeq)))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// SendReviewComments posts the caller's drafts on a job to its agent.
+func (s *Server) SendReviewComments(w http.ResponseWriter, r *http.Request, jobId gen.JobId) {
+	if !s.commentsOn(w) || s.conversationsOff(w) {
+		return
+	}
+	job, ok := s.requireJob(w, r, jobId, auth.RoleMember)
+	if !ok {
+		return
+	}
+	var in gen.SendReviewComments
+	if r.ContentLength > 0 && !decode(w, r, &in) {
+		return
+	}
+	var agent pgtype.UUID
+	if in.AgentId != nil {
+		agent = fromUUID(*in.AgentId)
+	}
+	p, _ := auth.FromContext(r.Context())
+	posted, sent, err := s.Review.Comments.Send(r.Context(), p, job, agent)
+	if err != nil {
+		if errors.Is(err, review.ErrInvalid) || errors.Is(err, review.ErrForbidden) {
+			s.failReview(w, err)
+		} else {
+			s.failConversation(w, err)
+		}
+		return
+	}
+	v, err := s.Conversations.Messages.Get(r.Context(), p, posted.Message.ID)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, gen.SentReviewComments{Message: toMessage(v), Sent: sent})
+}
+
+// UpdateReviewComment changes a draft's words, or whether a comment is resolved.
+func (s *Server) UpdateReviewComment(w http.ResponseWriter, r *http.Request, commentId gen.CommentId) {
+	c, ok := s.reviewComment(w, r, commentId)
+	if !ok {
+		return
+	}
+	var in gen.ReviewCommentChange
+	if !decode(w, r, &in) {
+		return
+	}
+	p, _ := auth.FromContext(r.Context())
+	out, err := s.Review.Comments.Update(r.Context(), p, c.ID, review.Change{Body: in.Body, Resolved: in.Resolved})
+	if err != nil {
+		s.failReview(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toReviewComment(out, 0))
+}
+
+// DeleteReviewComment takes back a draft.
+func (s *Server) DeleteReviewComment(w http.ResponseWriter, r *http.Request, commentId gen.CommentId) {
+	c, ok := s.reviewComment(w, r, commentId)
+	if !ok {
+		return
+	}
+	p, _ := auth.FromContext(r.Context())
+	if err := s.Review.Comments.Delete(r.Context(), p, c.ID); err != nil {
+		s.failReview(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// reviewComment is a comment the caller may change: one they can see, on a job of a project they
+// are a member of.
+func (s *Server) reviewComment(w http.ResponseWriter, r *http.Request, id gen.CommentId) (review.Comment, bool) {
+	if !s.commentsOn(w) {
+		return review.Comment{}, false
+	}
+	p, ok := s.principal(w, r)
+	if !ok {
+		return review.Comment{}, false
+	}
+	c, err := s.Review.Comments.Get(r.Context(), p, fromUUID(id))
+	if err != nil {
+		s.failReview(w, err)
+		return review.Comment{}, false
+	}
+	cp, err := s.Review.Checkpoints.Get(r.Context(), c.CheckpointID)
+	if err != nil {
+		s.failReview(w, err)
+		return review.Comment{}, false
+	}
+	if _, ok := s.requireJob(w, r, toUUID(cp.JobID), auth.RoleMember); !ok {
+		return review.Comment{}, false
+	}
+	return c, true
+}
+
+func toReviewComment(c review.Comment, seq int) gen.ReviewComment {
+	state := gen.CommentDraft
+	switch {
+	case c.ResolvedAt.Valid:
+		state = gen.CommentResolved
+	case c.MessageID.Valid:
+		state = gen.CommentSent
+	}
+	out := gen.ReviewComment{Id: toUUID(c.ID), CheckpointId: toUUID(c.CheckpointID), AuthorId: toUUID(c.AuthorID), Path: c.Path,
+		Side: gen.ReviewCommentSide(c.Side), LineStart: int(c.LineStart), LineEnd: int(c.LineEnd), Body: c.Body, Snippet: c.Snippet,
+		MessageId: toUUIDPtr(c.MessageID), State: state, ResolvedAt: timePtr(c.ResolvedAt), CreatedAt: c.CreatedAt.Time,
+		UpdatedAt: c.UpdatedAt.Time}
+	if seq > 0 {
+		out.CheckpointSeq = &seq
+	}
+	return out
 }

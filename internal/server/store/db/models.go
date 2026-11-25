@@ -839,6 +839,22 @@ type Release struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
+type ReviewComment struct {
+	ID           pgtype.UUID        `json:"id"`
+	CheckpointID pgtype.UUID        `json:"checkpoint_id"`
+	AuthorID     pgtype.UUID        `json:"author_id"`
+	Path         string             `json:"path"`
+	Side         string             `json:"side"`
+	LineStart    int32              `json:"line_start"`
+	LineEnd      int32              `json:"line_end"`
+	Body         string             `json:"body"`
+	Snippet      string             `json:"snippet"`
+	MessageID    pgtype.UUID        `json:"message_id"`
+	ResolvedAt   pgtype.Timestamptz `json:"resolved_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Runner struct {
 	ID              pgtype.UUID        `json:"id"`
 	TokenID         pgtype.UUID        `json:"token_id"`

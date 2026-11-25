@@ -67,6 +67,22 @@ type Pack struct {
 	// said in it stays out of anything the project's people read — the record of what a job was
 	// handed, a summary job's instruction.
 	Private bool
+	// Notes are the review comments people sent with the ask or the latest messages: comments on
+	// lines of the agent's changes, with the code they are about.
+	Notes []Note
+}
+
+// Note is one review comment as an agent is told it: the file, the lines (on the side of the diff
+// they number: old before the change, new after), the code there as the diff showed it, and what
+// the person said about it.
+type Note struct {
+	Author    string
+	Path      string
+	Side      string
+	LineStart int
+	LineEnd   int
+	Snippet   string
+	Body      string
 }
 
 // Bytes is how much of the prompt the pack takes.
@@ -88,6 +104,7 @@ type packStore interface {
 	GetUser(ctx context.Context, id pgtype.UUID) (db.User, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
 	GetExternalIdentity(ctx context.Context, id pgtype.UUID) (db.ExternalIdentity, error)
+	ListReviewNotes(ctx context.Context, messageIds []pgtype.UUID) ([]db.ListReviewNotesRow, error)
 }
 
 // Packer builds the conversation package of a turn. It only reads: keeping the summary fresh is
@@ -142,7 +159,36 @@ func (p *Packer) Pack(ctx context.Context, conv db.Conversation, ask db.Message)
 		}
 		out.Older = append(out.Older, s)
 	}
+	if out.Notes, err = p.notes(ctx, ask, history[cut:]); err != nil {
+		return Pack{}, err
+	}
 	return out, p.background(ctx, conv, &out)
+}
+
+// maxNotes bounds the review comments one pack carries.
+const maxNotes = 50
+
+// notes are the review comments sent with the ask and the messages carried word for word.
+func (p *Packer) notes(ctx context.Context, ask db.Message, recent []db.Message) ([]Note, error) {
+	ids := []pgtype.UUID{ask.ID}
+	for _, m := range recent {
+		if m.AuthorKind == AuthorUser {
+			ids = append(ids, m.ID)
+		}
+	}
+	rows, err := p.store.ListReviewNotes(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	var out []Note
+	for _, r := range rows {
+		if len(out) == maxNotes {
+			break
+		}
+		out = append(out, Note{Author: r.Author, Path: r.Path, Side: r.Side, LineStart: int(r.LineStart), LineEnd: int(r.LineEnd),
+			Snippet: r.Snippet, Body: r.Body})
+	}
+	return out, nil
 }
 
 // history is what was said in conv, oldest first, but the ask itself: the message a thread hangs
