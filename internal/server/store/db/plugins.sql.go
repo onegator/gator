@@ -38,6 +38,17 @@ func (q *Queries) ClearPluginTokenExpiry(ctx context.Context, id pgtype.UUID) er
 	return err
 }
 
+const countProjectPluginsOf = `-- name: CountProjectPluginsOf :one
+SELECT count(*)::int FROM project_plugins WHERE plugin_id = $1
+`
+
+func (q *Queries) CountProjectPluginsOf(ctx context.Context, pluginID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countProjectPluginsOf, pluginID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteExpiredPluginConnectStates = `-- name: DeleteExpiredPluginConnectStates :exec
 DELETE FROM plugin_connect_states WHERE expires_at < now()
 `
@@ -45,6 +56,19 @@ DELETE FROM plugin_connect_states WHERE expires_at < now()
 func (q *Queries) DeleteExpiredPluginConnectStates(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, deleteExpiredPluginConnectStates)
 	return err
+}
+
+const deletePlugin = `-- name: DeletePlugin :execrows
+DELETE FROM plugins p WHERE p.id = $1 AND NOT EXISTS (SELECT 1 FROM project_plugins pp WHERE pp.plugin_id = p.id)
+`
+
+// A plugin no project has set up; one a project has keeps its row (and its calls, which are a record).
+func (q *Queries) DeletePlugin(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePlugin, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const disableProjectPlugin = `-- name: DisableProjectPlugin :exec

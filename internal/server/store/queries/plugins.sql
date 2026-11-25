@@ -128,3 +128,10 @@ FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id JOIN projects pr O
 WHERE NOT pp.enabled AND pp.disabled_reason IS NOT NULL AND pr.archived_at IS NULL
   AND (sqlc.narg(project_id)::uuid IS NULL OR pp.project_id = sqlc.narg(project_id)::uuid)
 ORDER BY pp.updated_at;
+
+-- name: CountProjectPluginsOf :one
+SELECT count(*)::int FROM project_plugins WHERE plugin_id = $1;
+
+-- name: DeletePlugin :execrows
+-- A plugin no project has set up; one a project has keeps its row (and its calls, which are a record).
+DELETE FROM plugins p WHERE p.id = $1 AND NOT EXISTS (SELECT 1 FROM project_plugins pp WHERE pp.plugin_id = p.id);

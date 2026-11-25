@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -261,7 +262,10 @@ func serve(ctx context.Context) error {
 
 	// Agents, skills, integrations and processes come from registries: Gator's own, fetched now so
 	// a fresh server has a catalogue, and the company's. Nothing installed updates by itself.
-	market := marketplace.New(db.Pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: db.Pool}})
+	// Native plugins from a registry are built for this platform, checked against their sha256 and
+	// kept next to the bundled ones, where the catalogue does not look.
+	market := marketplace.New(db.Pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: db.Pool},
+		Plugins: pluginHost, PluginDir: marketplacePluginDir(pluginCfg.CatalogueDir)})
 	go func() {
 		if err := market.Start(ctx, marketplace.BuiltinFromEnv(os.Getenv)); err != nil && ctx.Err() == nil {
 			log.Warn("marketplace: Gator's registry could not be fetched; the catalogue waits for a fetch", "err", err)
@@ -339,6 +343,15 @@ func serve(ctx context.Context) error {
 		}
 		return httpErr
 	}
+}
+
+// marketplacePluginDir is where native plugins from the marketplace go: GATOR_PLUGIN_DIR/marketplace,
+// or nowhere when the server has no plugin directory.
+func marketplacePluginDir(catalogue string) string {
+	if catalogue == "" {
+		return ""
+	}
+	return filepath.Join(catalogue, "marketplace")
 }
 
 // oauthApps are the server's OAuth apps for remote MCP servers, from the environment as plugins'

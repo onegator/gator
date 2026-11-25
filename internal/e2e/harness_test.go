@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -145,7 +146,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	// would fetch it from GATOR_MARKETPLACE_URL at start.
 	starter := marketplacetest.New(t)
 	starter.Starter()
-	market := marketplace.New(pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: pool}})
+	market := marketplace.New(pool, marketplace.Deps{Capabilities: plugins.Capabilities{Pool: pool}, Plugins: host,
+		PluginDir: filepath.Join(t.TempDir(), "marketplace")})
 	if err := market.Start(ctx, marketplace.Builtin{URL: starter.URL, PublicKey: starter.PublicKey}); err != nil {
 		t.Fatal(err)
 	}

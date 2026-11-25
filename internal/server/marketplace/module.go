@@ -33,6 +33,14 @@ type Deps struct {
 	// Capabilities says what a project's plugins can do, for what a package needs; nil: nothing
 	// is reported missing for want of a capability.
 	Capabilities capabilities
+	// Plugins installs native plugins (*plugins.Host), whose builds go to PluginDir; either
+	// missing: native plugins are not installed from the marketplace.
+	Plugins   pluginHost
+	PluginDir string
+	// Download brings native builds; default HTTPDownloader. Platform is GOOS/GOARCH; default
+	// this server's.
+	Download Downloader
+	Platform string
 }
 
 // DefaultKinds are the kinds a registry may offer.
@@ -57,11 +65,15 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	q := db.New(pool)
 	catalog := NewCatalog(q, deps.Fetcher, deps.Kinds, deps.Limits)
 	skills := SkillInstaller{}
+	if deps.Download == nil {
+		deps.Download = HTTPDownloader{}
+	}
+	native := NativeTrack{Dir: deps.PluginDir, Platform: deps.Platform, Download: deps.Download, Host: deps.Plugins}
 	tx := func(ctx context.Context, fn func(q *db.Queries) error) error { return store.InTx(ctx, pool, fn) }
 	return &Module{
 		Catalog: catalog,
 		Installations: NewInstallations(q, catalog, deps.Roles, deps.Capabilities, tx,
-			NewAgentInstaller(skills), skills, NewIntegrationInstaller(MCPTrack{})),
+			NewAgentInstaller(skills), skills, NewIntegrationInstaller(MCPTrack{}, native)),
 	}
 }
 
