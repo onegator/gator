@@ -321,8 +321,8 @@ func TestAChatGPTLoginIsOneJobsAtATime(t *testing.T) {
 	}
 
 	// A login the backend turned down is marked, its owner told, and the next job waits.
-	if err := f.svc.Refused(f.ctx, leased, "refresh_token_reused"); err != nil {
-		t.Fatal(err)
+	if marked, err := f.svc.Refused(f.ctx, leased, "refresh_token_reused"); err != nil || !marked {
+		t.Fatal(marked, err)
 	}
 	list, _ := f.svc.List(f.ctx, ann)
 	for _, v := range list {
@@ -393,5 +393,39 @@ func TestARefreshDoesNotOverwriteALoginSavedSince(t *testing.T) {
 	withKey := strings.Replace(chatgptAuth, `"OPENAI_API_KEY": null`, `"OPENAI_API_KEY": "sk-proj-made-by-codex-0123456789"`, 1)
 	if got := strings.Join(k.Sensitive(withKey), " "); !strings.Contains(got, "sk-proj-made-by-codex-0123456789") {
 		t.Fatalf("sensitive: %s", got)
+	}
+}
+
+// A job saying its login was turned down is a reason to check, not proof: a login its provider
+// still takes is not marked; one it refuses is.
+func TestARefusalIsConfirmedByACheck(t *testing.T) {
+	f := newFixture(t)
+	ann := f.user("Ann")
+	f.put(ann, AnthropicAPIKey, anthropicKy)
+	job := f.job(ann, ann, BackendClaude)
+	c := f.choose(job)
+	leased, err := f.q.LeaseJob(f.ctx, db.LeaseJobParams{ID: job.ID, CredentialID: c.ID, CredentialKind: c.Kind, CredentialVersion: c.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marked, err := f.svc.Refused(f.ctx, leased, "Invalid API key"); err != nil || marked {
+		t.Fatalf("a working key was marked: %v %v", marked, err)
+	}
+	f.status = http.StatusUnauthorized
+	if marked, err := f.svc.Refused(f.ctx, leased, "Invalid API key"); err != nil || !marked {
+		t.Fatalf("a refused key was not marked: %v %v", marked, err)
+	}
+}
+
+// The models endpoint may not take a subscription's token at all: its no leaves the login
+// unchecked, with the reason, rather than refused.
+func TestASubscriptionsCheckCannotRefuseIt(t *testing.T) {
+	f := newFixture(t)
+	ann := f.user("Ann")
+	f.put(ann, ClaudeSubscription, claudeToken)
+	f.status = http.StatusUnauthorized
+	v, err := f.svc.Check(f.ctx, ann, ClaudeSubscription)
+	if err != nil || v.Status != StatusUnchecked || !strings.Contains(v.LastError, "cannot tell") || v.CheckedAt == nil {
+		t.Fatalf("%+v %v", v, err)
 	}
 }

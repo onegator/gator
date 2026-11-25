@@ -48,11 +48,11 @@ func (f *fakeLogins) Refreshed(_ context.Context, _ db.Job, r proto.CredentialRe
 	return nil
 }
 
-func (f *fakeLogins) Refused(_ context.Context, _ db.Job, reason string) error {
+func (f *fakeLogins) Refused(_ context.Context, _ db.Job, reason string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refused = append(f.refused, reason)
-	return nil
+	return true, nil
 }
 
 func (f *fakeLogins) Sensitive(context.Context, db.Job) []string {

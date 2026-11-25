@@ -103,6 +103,12 @@ RFC 9728/8414 na swoim hoście i rejestrację RFC 7591 (inaczej potrzebna aplika
 (`https://mcp.datadoghq.com/api/unstable/mcp-server/mcp`) jest eksperymentalny (klucze API i aplikacji w
 dwóch nagłówkach, adres zależny od regionu), a Grafana jest samodzielnie hostowana (adres ustawia admin).
 
+Faza 8 ma jedno wywołanie do sprawdzenia z żywą usługą przed publikacją: czy `GET
+https://api.anthropic.com/v1/models` przyjmuje token subskrypcji Claude (`sk-ant-oat…`, nagłówki
+`Authorization: Bearer` i `anthropic-beta: oauth-2025-04-20`). Do czasu sprawdzenia 401 lub 403 z tego
+endpointu zostawia logowanie jako `unchecked` z notą, a nie odrzucone. Do sprawdzenia też słowa, którymi
+Claude Code i codex-acp mówią o odrzuconym logowaniu (`backend.LoginRefusal`): nagrania są syntetyczne.
+
 Faza 5 zamieniła kolejność swoich dwóch numerów: mosty komunikatorów powstały przed A2A, więc
 `00048_messaging_bridges.sql` (tożsamości z zewnątrz, odwołania rozmów i wiadomości, kody powiązań,
 `requested_by_kind='external'`) i `00049_external_agents.sql` (agenci zdalni, klienci A2A, ich taski i

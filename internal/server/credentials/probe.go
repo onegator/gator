@@ -2,9 +2,11 @@ package credentials
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -45,4 +47,17 @@ func (p HTTPProbe) Check(ctx context.Context, token string) error {
 	default:
 		return fmt.Errorf("%w: %s answered %d", ErrUnavailable, p.Provider, res.StatusCode)
 	}
+}
+
+// uncertainNo reads a probe's no as "could not tell" (ErrUncertain): for a login the endpoint may
+// not take at all.
+type uncertainNo struct{ Probe }
+
+func (p uncertainNo) Check(ctx context.Context, token string) error {
+	err := p.Probe.Check(ctx, token)
+	if errors.Is(err, ErrRefused) {
+		return fmt.Errorf("%w: %s; whether that endpoint takes a subscription's token is not known, so this check cannot tell. "+
+			"The next job on it will", ErrUncertain, strings.TrimPrefix(err.Error(), ErrRefused.Error()+": "))
+	}
+	return err
 }

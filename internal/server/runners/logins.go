@@ -22,8 +22,9 @@ type Credentials interface {
 	Choose(ctx context.Context, q *db.Queries, job db.Job, open bool) (CredentialChoice, error)
 	// Refreshed keeps what the job's agent rewrote of its login.
 	Refreshed(ctx context.Context, job db.Job, r proto.CredentialRefresh) error
-	// Refused marks the job's login as turned down, and says so to its owner.
-	Refused(ctx context.Context, job db.Job, reason string) error
+	// Refused marks the job's login as turned down, and says so to its owner, unless the login
+	// proves to work; it says whether it marked it.
+	Refused(ctx context.Context, job db.Job, reason string) (bool, error)
 	// Sensitive are the values of the job's login, to mask in what the runner reports.
 	Sensitive(ctx context.Context, job db.Job) []string
 }
@@ -55,5 +56,5 @@ func (runnerLogins) Choose(context.Context, *db.Queries, db.Job, bool) (Credenti
 	return CredentialChoice{Kind: RunnerLogin}, nil
 }
 func (runnerLogins) Refreshed(context.Context, db.Job, proto.CredentialRefresh) error { return nil }
-func (runnerLogins) Refused(context.Context, db.Job, string) error                    { return nil }
+func (runnerLogins) Refused(context.Context, db.Job, string) (bool, error)            { return false, nil }
 func (runnerLogins) Sensitive(context.Context, db.Job) []string                       { return nil }

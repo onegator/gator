@@ -61,10 +61,12 @@ func DefaultKinds(e Endpoints) *Registry {
 			desc: Description{Label: "Claude subscription",
 				Help: "Run `claude setup-token` on your computer, sign in with your Claude account, and paste the token it prints (sk-ant-oat…)."},
 			env: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
-			probe: anthropic(func(token string, h http.Header) {
+			// Whether the models endpoint takes a subscription's token is not documented; a no from
+			// it leaves the login unchecked, with the reason, rather than refused.
+			probe: uncertainNo{anthropic(func(token string, h http.Header) {
 				h.Set("Authorization", "Bearer "+token)
 				h.Set("anthropic-beta", "oauth-2025-04-20")
-			}),
+			})},
 		},
 		tokenKind{
 			name: AnthropicAPIKey, backend: BackendClaude, prefix: "sk-ant-api", minLen: 40,

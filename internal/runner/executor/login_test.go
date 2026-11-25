@@ -110,7 +110,8 @@ func TestCodexHomeIsTheJobsOwnAndItsRefreshComesBack(t *testing.T) {
 // Nothing rewritten, nothing sent back; and a login the backend turned down is said so, masked.
 func TestUnchangedLoginStaysAndARefusalIsReported(t *testing.T) {
 	be := &scripted{run: func(context.Context, int, backend.Spec, backend.Emit) backend.Outcome {
-		return backend.Outcome{Status: proto.StatusFailed, Reason: "claude success: Invalid API key · Please run /login (" + payerToken + ")"}
+		return backend.Outcome{Status: proto.StatusFailed, Reason: "claude success: Invalid API key · Please run /login (" + payerToken + ")",
+			LoginRefused: "Invalid API key · Please run /login (" + payerToken + ")"}
 	}}
 	e := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
 	io, _ := recordingIO()
@@ -243,5 +244,20 @@ func TestARotatedTokenIsMaskedFromTheMomentItIsWritten(t *testing.T) {
 		Redact: []string{accessToken, oldRefresh}}}, io)
 	if strings.Contains(sent(), newRefresh) || strings.Contains(fin.Summary, newRefresh) {
 		t.Fatalf("the rotated token left the runner:\n%s\n%s", sent(), fin.Summary)
+	}
+}
+
+// What the agent wrote about an invalid key is not a refused login, however it is phrased: only
+// the backend CLI's own error is.
+func TestTheAgentsWordsAreNeverALoginRefusal(t *testing.T) {
+	be := &scripted{run: func(context.Context, int, backend.Spec, backend.Emit) backend.Outcome {
+		return backend.Outcome{Status: proto.StatusFailed, Reason: "the agent gave up", Summary: "Invalid API key · Please run /login; OAuth token has expired"}
+	}}
+	e := &Executor{WS: &workspace.Manager{Root: t.TempDir()}, Backends: map[string]backend.Backend{"fake": be}}
+	io, _ := recordingIO()
+	fin := e.Run(context.Background(), proto.Job{JobID: "j8", Backend: "fake", Credential: &proto.Credential{ID: "c8",
+		Env: map[string]string{"ANTHROPIC_API_KEY": payerToken}, Redact: []string{payerToken}}}, io)
+	if fin.CredentialRefused != "" {
+		t.Fatalf("refused %q", fin.CredentialRefused)
 	}
 }

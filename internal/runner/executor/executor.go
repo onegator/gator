@@ -291,7 +291,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	// What the agent's CLI rewrote of its login goes back to the server, which keeps it: a
 	// refreshed token replaces the one it was handed.
 	fin.CredentialRefresh = payer.refreshed()
-	fin.CredentialRefused = payer.refused(fin)
+	fin.CredentialRefused = payer.refused(fin, last.LoginRefused)
 	payer.maskFinish(&fin)
 	return fin
 }

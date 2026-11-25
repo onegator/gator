@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-00000000000a","model":"claude-opus-5","claude_code_version":"2.1.270","tools":["Bash"]}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":900,"num_turns":1,"result":"Fixed the 'Invalid API key · Please run /login' message the settings page shows when a key is wrong.","session_id":"00000000-0000-4000-8000-00000000000a","total_cost_usd":0.001,"usage":{"input_tokens":5,"output_tokens":7}}

@@ -5,6 +5,7 @@ package backend
 import (
 	"context"
 	"os"
+	"regexp"
 
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/agentenv"
@@ -97,6 +98,24 @@ type Outcome struct {
 	ToolCalls   int
 	Summary     string
 	Usage       proto.Usage
+	// LoginRefused is the CLI's own words, when the CLI itself — not its model — said its login was
+	// turned down: an error result, an RPC error, what it printed on stderr before it died. Never
+	// what the agent wrote, which a task about invalid keys, or a page it read, could fill.
+	LoginRefused string
+}
+
+// refusals are how the CLIs say a login was turned down: an invalid or revoked key, an expired
+// OAuth token, a ChatGPT login whose refresh token was used elsewhere.
+var refusals = regexp.MustCompile(`(?i)invalid (x-)?api[ _-]?key|authentication_error|authentication_failed|authentication required|invalid bearer token|` +
+	`oauth token (has )?(expired|been revoked)|token (has )?(expired|been revoked)|please run /login|not logged in|` +
+	`refresh_token_reused|refresh token (was|has been) (already )?used|could not be refreshed|\b401\b[^\n]{0,40}(unauthori[sz]ed|authentication)`)
+
+// LoginRefusal is text when a CLI's own error says its login was turned down, else "".
+func LoginRefusal(text string) string {
+	if refusals.MatchString(text) {
+		return text
+	}
+	return ""
 }
 
 // AgentEnv is the environment of an agent's process: what it may inherit of the runner's (allow

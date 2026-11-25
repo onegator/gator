@@ -285,6 +285,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 		out.Reason = fmt.Sprintf("claude ended without a result (%s)", exitText(waitErr))
 		if t := strings.TrimSpace(stderr.String()); t != "" {
 			out.Reason += ": " + clip(t, 500)
+			out.LoginRefused = backend.LoginRefusal(clip(t, 500))
 		}
 		if p.BadLines > 0 {
 			out.Reason += fmt.Sprintf("; %d unparseable lines", p.BadLines)
@@ -298,6 +299,9 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 		if len(p.Result.Errors) > 0 {
 			out.Reason += ": " + clip(strings.Join(p.Result.Errors, "; "), 500)
 		}
+		// An error result's text is Claude Code's, not the model's: "Invalid API key · Please run
+		// /login" is what it says when the API turns the login down.
+		out.LoginRefused = backend.LoginRefusal(clip(strings.TrimSpace(p.Result.Text+" "+strings.Join(p.Result.Errors, "; ")), 500))
 	default:
 		out.Status = proto.StatusDone
 	}

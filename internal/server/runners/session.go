@@ -832,11 +832,14 @@ func (s *session) finish(fin proto.Finish) error {
 	}
 	status, reason := verdict(fin)
 	if fin.CredentialRefused != "" && job.CredentialID.Valid {
-		if err := s.m.cfg.Credentials.Refused(ctx, job, fin.CredentialRefused); err != nil {
+		marked, err := s.m.cfg.Credentials.Refused(ctx, job, fin.CredentialRefused)
+		if err != nil {
 			return errRetry
 		}
-		status, reason = proto.StatusFailed, "the model login of the person who pays for this job was turned down ("+
-			fin.CredentialRefused+"); they can connect it again in Settings → Model logins"
+		if marked {
+			status, reason = proto.StatusFailed, "the model login of the person who pays for this job was turned down ("+
+				fin.CredentialRefused+"); they can connect it again in Settings → Model logins"
+		}
 	}
 	// Usage first: it is idempotent per job, so a crash before the finish commit loses nothing.
 	if fin.Usage.Reported() {

@@ -293,24 +293,13 @@ func (l *login) maskFinish(fin *proto.Finish) {
 	}
 }
 
-// refusals are how the backends say a login was turned down: an invalid or revoked key, an
-// expired OAuth token, a ChatGPT login whose refresh token was used elsewhere.
-var refusals = regexp.MustCompile(`(?i)invalid (x-)?api[ _-]?key|authentication_error|invalid bearer token|` +
-	`oauth token (has )?(expired|been revoked)|token (has )?(expired|been revoked)|please run /login|not logged in|` +
-	`refresh_token_reused|refresh token (was|has been) (already )?used|could not be refreshed|\b401\b[^\n]{0,40}(unauthori[sz]ed|authentication)`)
-
-// refused is, for a failed job on its payer's login, the backend's words that the login was turned
-// down, masked; empty when the job failed for another reason.
-func (l *login) refused(fin proto.Finish) string {
-	if l == nil || fin.Status != proto.StatusFailed {
+// refused is, for a failed job on its payer's login, the backend CLI's own words that the login
+// was turned down, masked; empty when the job failed for another reason, or only its agent said so.
+func (l *login) refused(fin proto.Finish, said string) string {
+	if l == nil || fin.Status != proto.StatusFailed || strings.TrimSpace(said) == "" {
 		return ""
 	}
-	for _, said := range []string{fin.StopReason, fin.Summary} {
-		if m := refusals.FindStringIndex(said); m != nil {
-			return clipText(l.mask(strings.TrimSpace(said)), 300)
-		}
-	}
-	return ""
+	return clipText(l.mask(strings.TrimSpace(said)), 300)
 }
 
 func clipText(s string, n int) string {

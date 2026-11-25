@@ -324,10 +324,16 @@ func TestAuthRequiredAndCrashFail(t *testing.T) {
 	if out.Status != proto.StatusFailed || !strings.Contains(out.Reason, "Authentication required") {
 		t.Errorf("outcome %q %q", out.Status, out.Reason)
 	}
+	if out.LoginRefused == "" { // the adapter's own error: the login was turned down
+		t.Errorf("auth required is not a refused login: %+v", out)
+	}
 	b, spec, _ = fake(t, "gemini/synthetic-crash.json", backend.Spec{Prompt: "hi"})
 	out = b.Run(context.Background(), spec, (&recorder{}).emit)
 	if out.Status != proto.StatusFailed || !strings.Contains(out.Reason, "could not load settings.json") {
 		t.Errorf("outcome %q %q", out.Status, out.Reason)
+	}
+	if out.LoginRefused != "" {
+		t.Errorf("a crash taken for a refused login: %q", out.LoginRefused)
 	}
 }
 

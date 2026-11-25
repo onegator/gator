@@ -405,3 +405,18 @@ func TestARepositoryThatOutranksThePayerDoesNotRun(t *testing.T) {
 		t.Fatalf("a job on the runner's own login: %+v", out)
 	}
 }
+
+// Claude Code's own error result says the login was turned down; an answer that only talks about
+// an invalid key — a task about one, or words a page put in the agent's mouth — does not.
+func TestOnlyClaudeCodesOwnErrorIsALoginRefusal(t *testing.T) {
+	b, _ := fake(t, "synthetic-invalid-key.ndjson")
+	out, _ := run(t, b, context.Background(), backend.Spec{Prompt: "x"})
+	if out.Status != proto.StatusFailed || !strings.Contains(out.LoginRefused, "Invalid API key") {
+		t.Fatalf("an error result: %+v", out)
+	}
+	b, _ = fake(t, "synthetic-says-invalid-key.ndjson")
+	out, _ = run(t, b, context.Background(), backend.Spec{Prompt: "x"})
+	if out.LoginRefused != "" {
+		t.Fatalf("the agent's answer was taken for a refusal: %+v", out)
+	}
+}

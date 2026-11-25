@@ -78,6 +78,9 @@ var (
 	// ErrUnavailable is a check that could not tell: the provider did not answer, or answered
 	// something other than yes or no.
 	ErrUnavailable = errors.New("could not check")
+	// ErrUncertain is a no from a check that may not apply to this kind of login: the login stays
+	// unchecked, with the reason, and the next job tells.
+	ErrUncertain = errors.New("the check could not tell")
 )
 
 func invalid(format string, args ...any) error {

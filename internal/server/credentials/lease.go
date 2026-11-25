@@ -186,12 +186,29 @@ func (s *Service) Refreshed(ctx context.Context, job db.Job, r proto.CredentialR
 }
 
 // Refused implements runners.Credentials: the login is marked so that no job is leased with it
-// again until its owner connects it anew, and its owner is told.
-func (s *Service) Refused(ctx context.Context, job db.Job, reason string) error {
+// again until its owner connects it anew, and its owner is told. A kind that can be checked is
+// checked first, and a login its provider still takes is left alone: a backend's words are a
+// reason to ask, not proof. It says whether the login was marked.
+func (s *Service) Refused(ctx context.Context, job db.Job, reason string) (bool, error) {
 	if !job.CredentialID.Valid {
-		return nil
+		return false, nil
 	}
-	err := s.locked(ctx, func(q *db.Queries) error {
+	row, err := db.New(s.pool).GetUserCredentialByID(ctx, job.CredentialID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if k, ok := s.kinds.Get(row.Kind); ok {
+		if c, ok := k.(Checker); ok {
+			if secret, err := s.open(row); err == nil && c.Check(ctx, secret) == nil {
+				s.log.Info("a job said its login was turned down; its provider still takes it", "job", uuidString(job.ID), "kind", row.Kind)
+				return false, nil
+			}
+		}
+	}
+	err = s.locked(ctx, func(q *db.Queries) error {
 		row, err := q.GetUserCredentialByID(ctx, job.CredentialID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -208,10 +225,11 @@ func (s *Service) Refused(ctx context.Context, job db.Job, reason string) error 
 		}
 		return emit(ctx, q, "credential.refused", row.UserID, map[string]any{"kind": row.Kind, "job_id": uuidString(job.ID)})
 	})
-	if err == nil {
-		s.changed()
+	if err != nil {
+		return false, err
 	}
-	return err
+	s.changed()
+	return true, nil
 }
 
 // Sensitive implements runners.Credentials.

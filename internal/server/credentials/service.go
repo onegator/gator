@@ -177,6 +177,8 @@ func (s *Service) Check(ctx context.Context, user pgtype.UUID, kind string) (Vie
 	switch {
 	case errors.Is(err, ErrUnavailable), errors.Is(err, ErrCannotCheck):
 		return s.view(row), err
+	case errors.Is(err, ErrUncertain):
+		row, err = s.setStatus(ctx, q, row, StatusUnchecked, redact.Values(err.Error(), k.Sensitive(secret)), true)
 	case err != nil:
 		row, err = s.setStatus(ctx, q, row, StatusError, redact.Values(err.Error(), k.Sensitive(secret)), true)
 	default:
