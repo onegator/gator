@@ -92,14 +92,18 @@ never mirrored back to it; an outside account is an identity of that project and
 (`external_identities`), heard by agents in chat and fenced as untrusted, approving nothing, until
 its person links it with a code made in Gator (`POST /projects/{id}/external-links`, ten minutes,
 once — never by email address); a linked member's Approve is `process.Approve` in their name. An
-agent's answer streams out at most every 2 s.
+agent's answer streams out at most every 2 s. An outside identity asks agents at most six times a
+minute and within a daily budget ($2, delegations included); a GitHub comment asks only from people
+the repository trusts (`commenters`). A plugin's `api_url` (where its secret goes) may name another
+host only if the operator lists it in `GATOR_PLUGIN_API_HOSTS`.
 
 **A2A**: a project's admin adds an agent outside Gator from its Agent Card (`POST
 /projects/{id}/remote-agents`, card fetched through `netguard`, its bearer token encrypted with the
 keyring). Mentioning it is a turn like any other, under the same hop, fan-out and budget guards; the
 turn is an A2A task (`message/send`, then `tasks/get` until it ends) made by a worker in the server,
 its answer written into the agent's message and carried to other agents as untrusted. It answers
-only in conversations open to the whole project. Inbound, the admin exposes agents (`PUT
+only in conversations open to the whole project, a person stops it like any turn, and the worker makes
+four calls at once (two per agent, three tries each, 100 a day per agent). Inbound, the admin exposes agents (`PUT
 /agents/{id}/a2a`) and lets clients in (`POST /projects/{id}/a2a-clients`: a `gtr_a2a_…` token that
 reaches only `/a2a/<project>/<agent>`, a daily budget, a rate). A client's ask is its message in
 `#a2a-<client>`, answered in chat; it reads the answer from `tasks/get`. Cards are at
@@ -265,7 +269,10 @@ the session must offer (not every tool of an agent asks first). A job with no to
 never goes to an ACP backend. Each supported agent has a profile (its login variables
 and files for `AuthState`, its read-only mode) and synthetic replays in `testdata/<agent>`: `codex`
 (via codex-acp) and `gemini`; anything else runs as experimental. A policy picks it per role, tier or
-agent (`"backend": "acp:codex"`).
+agent (`"backend": "acp:codex"`). A runner tells the server which of its backends keep a job
+read-only and which run one with no tools, and a chat job or a summary is leased only to those;
+summaries run on the server's `GATOR_DEFAULT_BACKEND` whatever the role's policy says. An agent that
+leaves its read-only mode during a read-only job is stopped.
 
 **To check live before relying on it:** the adapters' current versions and flags (`codex-acp`,
 `gemini --experimental-acp`), whether they report usage (`usage` in the prompt's answer,

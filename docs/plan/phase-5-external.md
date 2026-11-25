@@ -259,4 +259,37 @@ agenta pyta przed działaniem, więc same odpowiedzi na prośby nie są obietnic
   wciąż czeka na tę samą bramkę (klucz karty = faza i chwila wejścia); podpis odpowiedzi w GitHubie
   nie woła `@handle`; karta A2A musi wskazywać endpoint na swoim hoście (tam idzie token), a ten sam
   `messageId` do innego agenta to inne pytanie.
+- **Po drugim przeglądzie** (szczegóły w commitach):
+  - ACP: agent, który w jobie read-only sam zmieni tryb (`current_mode_update`), jest przerywany, a job
+    kończy się porażką; `AuthState` patrzy tylko na zmienne i pliki logowania (nie na `CODEX_HOME`,
+    `OPENAI_BASE_URL`); bufor słów agenta jest ograniczony (64 KiB niedokończonego akapitu, 1 MiB całości).
+  - **Routing**: runner mówi, które backendy utrzymują job read-only, a które job bez narzędzi
+    (`proto.Capabilities.read_only`, `no_tools`; runner sprzed tych pól — wszystkie), a serwer leasuje
+    job `chat` i `summary` tylko tam. Job `summary` (streszczenia, kuracja) idzie na
+    `GATOR_DEFAULT_BACKEND` serwera, cokolwiek polityka roli wybrała. Job `chat` z backendem, który
+    nie umie read-only (np. `acp:gemini`), czeka na runner, który umie, i jest widoczny jako taki, który
+    nie ma runnera — bez cichej zamiany.
+  - **A2A**: Stop kończy biegnący turn agenta zdalnego (`Control` przez `Elsewhere.Stopped`), a
+    wywołanie jest kończone; worker sprawdza turn przed wysłaniem, między pytaniami o task i przed
+    zapisem. Worker robi 4 wywołania naraz, najwyżej 2 do jednego agenta, wywołanie próbowane 3 razy
+    kończy się porażką, a agent zdalny odpowiada najwyżej na 100 wywołań dziennie (jego turn kosztuje
+    $0, więc limit jest w wywołaniach). Wysyłki klienta są szeregowane od sprawdzenia budżetu do posta
+    (na tym serwerze), najwyżej 5 jego pytań może być otwartych naraz, a `tasks/get` ma własny limit.
+  - **Mosty**: tożsamość z zewnątrz pyta agentów najwyżej 6 razy na minutę (ponowienie dostawy to nie
+    nowe pytanie); komentarz w GitHubie pyta tylko od OWNER, MEMBER, COLLABORATOR (ustawienie
+    `commenters`; odpowiedź jest publiczna); `message.update` zmienia tylko wiadomość autora;
+    Approve ze Slacka to `process.ApproveWaiting` (faza i chwila wejścia sprawdzane pod blokadą taska);
+    kody powiązań są tylko dla mostu projektu, który je przyjmuje (`links` w manifeście: Slack tak,
+    GitHub nie); `api_url` pluginu (tam idzie jego sekret) tylko na hoście pluginu albo na hoście z
+    `GATOR_PLUGIN_API_HOSTS` operatora (`plugin/netguard.APIBase`). Polityka wyjścia przeniosła się do
+    publicznego `plugin/netguard`, a `internal/server/netguard` jest jej fasadą.
+  - Hooki zdarzeń (mosty) mają własny kursor outboxu: wolne API czatu nie wstrzymuje hooków innych
+    pluginów. Sprzątacz usuwa przeterminowane kody, a host zapomina dostawy webhooków po 30 dniach
+    (podpisana dostawa GitHuba starsza niż to byłaby obsłużona znowu; to, co z niej powstaje, i tak
+    powstaje raz po id).
+  - **00048 poprawiona w miejscu** (gałąź nie była wypchnięta): indeksy turnów z zewnątrz, turnów po
+    rodzicu i mostów po rozmowie. W `docs/openapi.yaml`: `requestedByKind` ma `external`,
+    `Agent.kind` jest enumem, `Message.origin` jest opisany.
+  - **Zawężone**: szeregowanie wysyłek klienta A2A i limity na minutę są w pamięci jednego serwera
+    (jak limity webhooków); przy kilku węzłach budżet i liczba otwartych pytań i tak trzymają.
 
