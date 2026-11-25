@@ -3714,6 +3714,7 @@ components:
         checksum: { type: string, description: "its checksum, as the preview showed it" }
         acceptedPermissions: { type: array, items: { type: string }, description: "accepted now; with what was accepted before, every permission of the new version" }
         resolve: { type: string, enum: [keep_local, take_theirs], description: "what becomes of what a person changed since installing" }
+        downgrade: { type: boolean, description: "a version older than the one installed is refused (400) unless this says so" }
     UpdatePreview:
       type: object
       required: [from, to, checksum, addedPermissions, removedPermissions, needsAcceptance, localChanges]

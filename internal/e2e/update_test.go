@@ -202,3 +202,42 @@ func TestAnAgentsOwnSettingsAreLocalChanges(t *testing.T) {
 		t.Fatalf("the skill the new version dropped stayed: %+v", skills)
 	}
 }
+
+// An update is decided and applied in one transaction on the locked installation: two people
+// updating at once apply it once, and the second is told it is done. An older version is never
+// installed by accident.
+func TestAnUpdateIsAppliedOnceAndNeverBackwardsByAccident(t *testing.T) {
+	h := newHarness(t)
+	r := marketplacetest.New(t)
+	r.Package("agents/release-helper", helper("1.0.0", "Write the changelog.\n"))
+	r.Publish()
+	reg, _ := h.registry(r)
+	p := h.oneProject("once")
+	inst := h.install(p.Id.String(), gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
+	r.Package("agents/release-helper", helper("1.1.0", "Write the changelog, shorter.\n"))
+	r.Publish()
+	h.fetch(reg.Id.String(), 200)
+	in := h.pinUpdate(inst.Id.String(), gen.InstallationUpdate{})
+	codes := make(chan int, 2)
+	for range 2 {
+		go func() { codes <- h.do("PATCH", "/installations/"+inst.Id.String(), in, nil) }()
+	}
+	got := []int{<-codes, <-codes}
+	slices.Sort(got)
+	if !slices.Equal(got, []int{200, 409}) {
+		t.Fatalf("two updates at once: %v", got)
+	}
+	if n := h.count(`SELECT count(*) FROM events WHERE type = 'marketplace.updated' AND payload->>'installation' = $1`, inst.Id.String()); n != 1 {
+		t.Fatalf("applied %d times", n)
+	}
+	var d gen.MarketplaceDetail
+	h.do("GET", "/marketplace/agent/release-helper?registryId="+reg.Id.String()+"&version=1.0.0", nil, &d)
+	back := gen.InstallationUpdate{Version: "1.0.0", Checksum: d.Checksum}
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), back, nil); code != 400 {
+		t.Fatalf("a silent downgrade: %d", code)
+	}
+	back.Downgrade = ptr(true)
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), back, nil); code != 200 {
+		t.Fatalf("a downgrade asked for: %d", code)
+	}
+}

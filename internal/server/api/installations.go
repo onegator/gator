@@ -184,6 +184,7 @@ func (s *Server) UpdateInstallation(w http.ResponseWriter, r *http.Request, inst
 	if in.Resolve != nil {
 		req.Resolve = string(*in.Resolve)
 	}
+	req.Downgrade = in.Downgrade != nil && *in.Downgrade
 	inst, err := s.Marketplace.Installations.Update(r.Context(), p, fromUUID(installationId), req)
 	if err != nil {
 		s.failInstall(w, err)
