@@ -16,10 +16,12 @@ const SkillFile = "SKILL.md"
 
 // SkillManifest is a SKILL.md's frontmatter.
 type SkillManifest struct {
-	Name          string            `yaml:"name" json:"name"`
-	Description   string            `yaml:"description" json:"description"`
-	Version       string            `yaml:"version,omitempty" json:"version,omitempty"`
-	ExamplePrompt string            `yaml:"example-prompt,omitempty" json:"example_prompt,omitempty"`
+	Name        string `yaml:"name" json:"name"`
+	Description string `yaml:"description" json:"description"`
+	Version     string `yaml:"version,omitempty" json:"version,omitempty"`
+	// ExamplePrompt is metadata.example-prompt: the Agent Skills format keeps what it does not
+	// name under metadata, and a top-level example-prompt is refused like any unknown field.
+	ExamplePrompt string            `yaml:"-" json:"example_prompt,omitempty"`
 	License       string            `yaml:"license,omitempty" json:"license,omitempty"`
 	AllowedTools  yaml.Node         `yaml:"allowed-tools,omitempty" json:"-"`
 	Compatibility string            `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
@@ -105,6 +107,7 @@ func describeSkill(files Files) (Manifest, error) {
 	if sm.Version == "" {
 		sm.Version = sm.Metadata["version"] // where the Agent Skills format keeps what it does not name
 	}
+	sm.ExamplePrompt = sm.Metadata["example-prompt"]
 	m := Manifest{Name: sm.Name, Version: sm.Version, DisplayName: sm.Name, Description: sm.Description,
 		ExamplePrompt: sm.ExamplePrompt, Readme: body, Detail: detail(sm)}
 	if icon, ok := files.Get("assets/icon.png"); ok {

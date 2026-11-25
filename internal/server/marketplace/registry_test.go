@@ -322,3 +322,15 @@ func TestASkillNamesEveryFileAnAgentCouldRun(t *testing.T) {
 		t.Fatal("a private key without its prefix")
 	}
 }
+
+// A skill's example prompt is metadata, as the Agent Skills format keeps what it does not name.
+func TestASkillsExamplePromptIsMetadata(t *testing.T) {
+	ok := "---\nname: x-skill\ndescription: d\nmetadata:\n  version: 1.0.0\n  example-prompt: \"write one\"\n---\nbody\n"
+	if m, err := (marketplace.Skill{}).Describe(marketplace.Item{}, filesOf(map[string]string{"SKILL.md": ok})); err != nil || m.ExamplePrompt != "write one" {
+		t.Fatalf("%v %+v", err, m)
+	}
+	top := "---\nname: x-skill\ndescription: d\nexample-prompt: write one\n---\nbody\n"
+	if _, err := (marketplace.Skill{}).Describe(marketplace.Item{}, filesOf(map[string]string{"SKILL.md": top})); err == nil {
+		t.Fatal("a top-level example-prompt")
+	}
+}
