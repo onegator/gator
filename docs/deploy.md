@@ -156,10 +156,24 @@ Migrations never run on startup, and every migration has a down step
 
 ```sh
 cp deploy/server.env.example deploy/server.env && chmod 600 deploy/server.env
+# The key that encrypts secrets at rest (plugin and MCP credentials, people's model logins).
+# Put its line in server.env as GATOR_SECRETS_KEY=… and keep a copy in your password manager:
+# without it nothing encrypted can be read again.
+docker run --rm ghcr.io/onegator/gator-server secrets new-key
 POSTGRES_PASSWORD=... docker compose -f deploy/compose.yaml up -d
+# The first workspace admin, before OIDC is set up: prints a 30-day token to sign in with
+# (`gator login --token -`, or paste it in the app).
+docker compose -f deploy/compose.yaml exec server gator-server admin create-admin you@example.com "Your Name"
 ```
 
 The `migrate` service runs once before `server` starts. Pin `GATOR_IMAGE_TAG` in production.
+`GATOR_IMAGE` runs another image than the published one — one built here with
+`docker build -t gator-server:dev .` runs with `GATOR_IMAGE=gator-server GATOR_IMAGE_TAG=dev`.
+The Dockerfiles need no BuildKit; the classic builder builds them too.
+
+Attachments people add to messages live in the `attachments` volume
+(`GATOR_ATTACHMENTS_DIR=/var/lib/gator/attachments`, set by the compose file); back it up with the
+database. Without a directory or `GATOR_ATTACHMENTS_S3_*`, uploads answer 503.
 
 ## Mac runner
 
