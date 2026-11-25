@@ -97,7 +97,9 @@ Code installs itself in `~/.local/bin`, so a machine whose owner is signed in ca
 that its backend is not there. The app's agent puts `~/.local/bin` on the PATH; a hand-written
 plist should too.
 
-Signing a backend in happens **on the runner's own machine, as the user the runner runs as** —
+Since people can connect their own model logins (see [People's own model logins](#peoples-own-model-logins)),
+the runner's own login is a fallback: it is used only for a job whose payer has none, and only
+when the workspace lends it. Signing a backend in happens **on the runner's own machine, as the user the runner runs as** —
 `claude` in a terminal there. The runner reads `~/.claude/.credentials.json`, or
 `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from its environment. No runner can be driven
 through an interactive login from the app today: runners say so in `capabilities.canLogin`, and
@@ -242,7 +244,9 @@ push the image to (`registry.fly.io/gator-runners:<tag>`). `FLY_API_TOKEN` shoul
 scoped to that app (`fly tokens create deploy -a gator-runners`). Machines start and bill per
 second; nothing runs between jobs.
 
-**Backend login.** A cloud machine has no keychain and nobody to log in interactively. Give it
+**Backend login.** A job whose payer connected a login of their own brings it in its lease, and a
+machine needs nothing more. For the others — only when the workspace lends the runners' logins
+(below) — a cloud machine has no keychain and nobody to log in interactively. Give it
 a credential through the environment and name it in `GATOR_CLOUD_RUNNER_ENV`:
 
 - `CLAUDE_CODE_OAUTH_TOKEN` — a long-lived token from `claude setup-token`, run once by the
@@ -261,6 +265,88 @@ branches give it a token with write access to those repositories in `GITHUB_TOKE
 The agent's environment does not carry `GITHUB_TOKEN`, so the agent cannot push by itself.
 Without it, set `GATOR_RUNNER_PUSH=0` on the machines through the same mechanism and read the
 results from the receipt.
+
+## People's own model logins
+
+A job runs on the model login of the person who pays for it. Each person connects theirs in the
+app (Settings → Model logins), with `gator credentials set KIND`, or with
+`PUT /api/v1/me/credentials/{kind}`:
+
+| Kind | What it is | The agent gets |
+|---|---|---|
+| `claude_subscription` | the long-lived token `claude setup-token` prints (`sk-ant-oat…`) | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `anthropic_api_key` | a Console API key (`sk-ant-api…`), billed per token | `ANTHROPIC_API_KEY` |
+| `chatgpt_subscription` | the `~/.codex/auth.json` that `codex login` writes | a fresh `CODEX_HOME` holding it |
+| `openai_api_key` | a platform API key (`sk-…`), billed per token | `OPENAI_API_KEY`, `CODEX_API_KEY` and a fresh `CODEX_HOME` |
+
+**Who pays.** The person who asked for the job: ran a task, asked an agent, answered a card.
+For a turn one agent asked another for, the person the chain acts for. For the work of an
+automation, the person who switched it on. For a task's process phases, its summaries and its
+Brain curation, the task's creator (for curation, the conversation's creator first; for a summary,
+the person whose turn found it stale). Failing all of those, the person who allowed agents on the
+task. The rules are `runners.DefaultPayers`, one small resolver.
+
+**Which login.** The job's backend never changes: a `claude` job runs on a Claude subscription,
+else an Anthropic API key; an `acp:codex` job on a ChatGPT subscription, else an OpenAI API key. A
+login marked refused is skipped, and so is a ChatGPT login another job holds. When the payer has
+none of those, the job stays queued with a `waitingReason` ("Waiting for Ann to connect a Claude
+subscription or an Anthropic API key in Settings → Model logins") until they connect one. A payer
+whose logins are all refused or busy waits too: somebody else's is never used in its place.
+
+**The runners' own logins** are lent only to jobs whose payer has no login of their own (or that
+nobody pays for), and only when a workspace admin allows it: `PUT /api/v1/workspace/model-credentials
+{"runnerLogins": true}`. A new workspace has it off; upgrading a workspace that has run jobs turns
+it on, so nothing stops working, and an admin turns it off once people have connected theirs.
+
+**Storage.** A login is encrypted with the server's keyring (`GATOR_SECRETS_KEY`; after a key change the old key
+stays in `GATOR_SECRETS_OLD_KEYS` to read logins saved under it) and never returned by the API: people see its kind,
+the last four characters, its status, when it was checked and last used, and why it was refused.
+An admin sees that a person has one (`GET /users/{id}/credentials`), never its value. Saving
+checks the shape only; `POST /me/credentials/{kind}/check` makes one call to the provider
+(`GET /v1/models`; `GATOR_ANTHROPIC_API_URL` and `GATOR_OPENAI_API_URL` move it). A ChatGPT login
+is not checked from the server: the call would spend its refresh token.
+
+**ChatGPT logins rotate.** Codex refreshes its token as it works and replaces the refresh token
+each time, so two jobs on one login would each make the other's stop working. A ChatGPT login is
+held by one job at a time — the lease takes a lock, and a unique index backs it — and what Codex
+left in `auth.json` comes back with the job's receipt (never kept in it) and replaces the stored
+one. A job whose lease expires frees the login for the next job while it may still be running;
+if both refresh, the login ends up refused and its owner connects it again.
+
+**Refused logins.** When a backend says a job's login was turned down (an invalid key, an
+expired or revoked token, a reused refresh token), the job fails saying so, the login is marked
+`error` with the reason, and its owner gets a `credential.refused` event on their WebSocket.
+
+**Usage** records whose login paid for each job (`paid_by`, `credential_kind`): a person reads
+theirs at `GET /me/model-usage`, an admin everyone's at `GET /workspace/model-usage`.
+
+### The trust boundary
+
+**A runner sees the login of every job it runs.** It must: the agent needs it to work. The
+login travels in the lease, over the runner's authenticated WebSocket (TLS end to end when the
+server is behind HTTPS, as it should be), and the runner puts it in the agent's environment and,
+for Codex, in a directory made for the job (mode 0700, the file 0600) that it removes when the
+job ends. It is never written to the runner's own files, except that a finish waiting for the
+server's acknowledgement — which carries a refreshed `auth.json` — sits in the runner's journal
+(mode 0600) until it is acknowledged. The agent runs as the runner's user with every permission
+bypassed, so it can read its payer's login, print it and send it anywhere; and so can anyone who
+controls that runner. Run people's jobs only on runners you trust with their accounts:
+
+- A **Mac runner** takes local jobs only from its owner (the person who minted its token) or
+  from nobody in particular — so a person's login reaches their own Mac and the shared runners,
+  never another person's Mac.
+- A **shared or cloud runner** sees the logins of everyone whose jobs it runs. Treat its host as
+  you treat the server.
+- A runner advertises that it can run jobs on their payers' logins (`capabilities.payer_logins`);
+  one that does not — an older runner — is handed only jobs on its own login.
+
+The runner masks every value of a job's login in what it sends (events, summaries, digests,
+receipts), and the server masks them again before storing or publishing anything; logs never
+carry them. A job on its payer's login gets **none of the runner's own login variables**
+(`ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_*`, `CODEX_*`, `AWS_*`, …). A login the
+runner's user keeps on disk (`~/.claude/.credentials.json`, the macOS keychain) is still readable
+by the agent, as everything of that user is, but Claude Code prefers the login in its environment
+and Codex reads only the `CODEX_HOME` it is given.
 
 ## What an agent can reach
 

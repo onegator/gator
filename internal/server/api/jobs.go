@@ -314,6 +314,13 @@ func toJob(j db.Job) gen.Job {
 	if j.Model != "" {
 		out.Model = &j.Model
 	}
+	out.PayerId = toUUIDPtr(j.PayerID)
+	if j.CredentialKind != "" {
+		out.CredentialKind = &j.CredentialKind
+	}
+	if j.WaitingReason != "" {
+		out.WaitingReason = &j.WaitingReason
+	}
 	// Measured since M5 and, until now, readable by nobody.
 	bytes, docs := int(j.ContextBytes), int(j.ContextDocs)
 	out.ContextBytes, out.ContextDocs = &bytes, &docs

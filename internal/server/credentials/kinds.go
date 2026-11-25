@@ -160,7 +160,7 @@ func (codexLogin) Backend() string { return BackendCodex }
 func (codexLogin) Describe() Description {
 	return Description{Label: "ChatGPT subscription",
 		Help: "Run `codex login` on your computer, sign in with your ChatGPT account, and paste the contents of ~/.codex/auth.json. " +
-			"Gator keeps it up to date as Codex refreshes it; one job uses it at a time."}
+			"Gator keeps it up to date as Codex refreshes it; one job uses it at a time.", Multiline: true}
 }
 
 // codexAuth is what Gator reads of auth.json; the file is kept as it was written.

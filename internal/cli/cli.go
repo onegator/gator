@@ -55,6 +55,12 @@ Tasks
   gator task run ID [--allow-agents] [--cloud] [--backend NAME] [--instruction TEXT] [-f]
   gator task logs ID [-f] [--job JOB_ID]
 
+Model logins (the Claude or Codex account your jobs run on)
+  gator credentials                   your logins, and the kinds you can connect
+  gator credentials set KIND [--file PATH]   paste the token on stdin, or read a file (auth.json)
+  gator credentials check KIND        try it with one small call to its provider
+  gator credentials remove KIND
+
 Every command takes --json for output a script can read, and --server URL.
 GATOR_SERVER and GATOR_TOKEN override the stored server and token.
 Exit codes: 0 ok, 1 your request, 2 network, 3 sign-in, 4 server, 5 the work moved on.
@@ -147,7 +153,9 @@ func dispatch(ctx context.Context, env *Env, args []string) error {
 		fmt.Fprintf(env.Stdout, "gator %s (%s)\n", version.Version, version.Commit)
 		return nil
 	}
-	if cmd == "task" || cmd == "project" {
+	if cmd == "credentials" && (len(rest) == 0 || strings.HasPrefix(rest[0], "-")) {
+		cmd = "credentials list"
+	} else if cmd == "task" || cmd == "project" || cmd == "credentials" {
 		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 			return coded(exitUserErr, "%s needs a subcommand; run gator help", cmd)
 		}
@@ -181,6 +189,11 @@ func init() {
 		"task logs":      cmdTaskLogs,
 		"project list":   cmdProjects,
 		"task list":      cmdTasks,
+
+		"credentials list":   cmdCredentials,
+		"credentials set":    cmdCredentialSet,
+		"credentials check":  cmdCredentialCheck,
+		"credentials remove": cmdCredentialRemove,
 	}
 }
 

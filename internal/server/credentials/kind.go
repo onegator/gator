@@ -42,6 +42,8 @@ type Kind interface {
 type Description struct {
 	Label string // "Claude subscription"
 	Help  string // how to get one
+	// Multiline says the login is a file's contents (auth.json), not one line.
+	Multiline bool
 }
 
 // Secret is a login as it is stored: its value, and what may be shown of it.
