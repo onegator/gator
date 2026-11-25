@@ -733,13 +733,19 @@ func missingRequired(raw []byte, v any) string {
 	if json.Unmarshal(raw, &body) != nil {
 		return ""
 	}
+	// encoding/json matches keys without regard to case ({"Enabled": true} sets enabled), so this
+	// does too: a key the decoder took is a key that was sent.
+	sent := make(map[string]json.RawMessage, len(body))
+	for k, v := range body {
+		sent[strings.ToLower(k)] = v
+	}
 	for i := range t.NumField() {
 		f := t.Field(i)
 		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if name == "" || name == "-" || strings.Contains(opts, "omitempty") {
 			continue
 		}
-		if val, ok := body[name]; !ok || string(val) == "null" {
+		if val, ok := sent[strings.ToLower(name)]; !ok || string(val) == "null" {
 			return name
 		}
 	}

@@ -18,6 +18,8 @@ func TestMissingRequired(t *testing.T) {
 		{`{"config": {}}`, &gen.ProjectConfig{}, ""},
 		{`{}`, &gen.FocusSetting{}, "enabled"},
 		{`{"enabled": false}`, &gen.FocusSetting{}, ""},
+		{`{"Enabled": true}`, &gen.FocusSetting{}, ""}, // the decoder takes it, so it was sent
+		{`{"ENABLED": null}`, &gen.FocusSetting{}, "enabled"},
 		{`{}`, &gen.AgentA2A{}, "exposed"},
 		{`{"name": "x"}`, &gen.NewA2AClient{}, ""}, // the rest is optional
 	} {
