@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -320,5 +321,55 @@ func TestTheJudgeReadsNothingOfTheLogin(t *testing.T) {
 		Digest: &proto.Digest{Left: []string{"rotate " + payerSecret}}})
 	if strings.Contains(te.Summary+strings.Join(te.Digest.Left, ""), payerSecret) {
 		t.Fatalf("the judge would read %+v", te)
+	}
+}
+
+// A job that waited because another job held its payer's ChatGPT login stops waiting once that
+// job ends — or, when it went another way (stopped, its lease lost), on the next sweep — so that a
+// cloud job gets its machine.
+func TestAJobWaitingForABusyLoginIsReleased(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	first, logins, payer := f.payersJob(t)
+	s := f.session(t)
+	s.caps.PayerLogins = []string{f.backend}
+	if got, err := s.lease(ctx, 1); err != nil || len(got) != 1 {
+		t.Fatalf("lease %v %v", got, err)
+	}
+	f.m.cfg.Credentials = logins
+	task, _ := f.m.process.Create(ctx, process.CreateParams{ProjectID: f.project, Kind: "bug", Title: "next " + suffix()}, process.Actor{Kind: process.ActorUser, ID: payer})
+	f.allowAgents(t, task.ID)
+	second, err := f.m.CreateJob(ctx, task.ID, NewJob{Role: "implementer", Backend: f.backend, CreatedBy: process.Actor{Kind: process.ActorUser, ID: payer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy := func() {
+		if _, err := f.pool.Exec(ctx, "UPDATE jobs SET credential_exclusive = (id = $1), waiting_reason = CASE WHEN id = $2 THEN 'busy' ELSE '' END WHERE id IN ($1, $2)",
+			first.ID, second.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busy()
+	if _, err := f.m.Sweep(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if f.job(t, second.ID).WaitingReason != "busy" {
+		t.Fatal("released while the login was still held")
+	}
+	if err := s.finish(proto.Finish{JobID: uuidString(first.ID), Status: proto.StatusFailed}); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.job(t, second.ID).WaitingReason; r != "" {
+		t.Fatalf("still waiting after the holder ended: %q", r)
+	}
+	// Ended another way: the sweep notices.
+	if _, err := f.pool.Exec(ctx, "UPDATE jobs SET waiting_reason = 'busy' WHERE id = $1", second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.Sweep(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.job(t, second.ID).WaitingReason; r != "" {
+		t.Fatalf("the sweep left it waiting: %q", r)
 	}
 }

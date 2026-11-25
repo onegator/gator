@@ -155,6 +155,26 @@ func (q *Queries) ReleaseAllWaitingJobs(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const releaseFreedWaits = `-- name: ReleaseFreedWaits :execrows
+UPDATE jobs j SET waiting_reason = '', updated_at = now()
+WHERE j.status = 'queued' AND j.waiting_reason <> '' AND j.payer_id IS NOT NULL
+  AND EXISTS (
+      SELECT 1 FROM user_credentials c
+      WHERE c.user_id = j.payer_id AND c.backend = j.backend AND c.status <> 'error'
+        AND NOT EXISTS (SELECT 1 FROM jobs a WHERE a.credential_id = c.id AND a.credential_exclusive
+                        AND a.status IN ('leased', 'running', 'stalled')))
+`
+
+// Queued jobs that wait while their payer has a usable login nobody holds — a ChatGPT login whose
+// job ended, was stopped or lost its lease — stop saying they wait; the next lease decides again.
+func (q *Queries) ReleaseFreedWaits(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseFreedWaits)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const releaseWaitingJobs = `-- name: ReleaseWaitingJobs :execrows
 UPDATE jobs SET waiting_reason = '', updated_at = now()
 WHERE payer_id = $1 AND status = 'queued' AND waiting_reason <> ''

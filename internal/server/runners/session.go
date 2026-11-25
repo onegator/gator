@@ -871,7 +871,7 @@ func (s *session) finish(fin proto.Finish) error {
 		s.m.provisionSoon() // the machine that ran it goes now, not on the next sweep
 	}
 	if job.CredentialExclusive {
-		s.m.Offer() // a login one job at a time may use is free for the next
+		s.m.releaseFreedWaits(ctx) // a login one job at a time may use is free for the next
 	}
 	return nil
 }

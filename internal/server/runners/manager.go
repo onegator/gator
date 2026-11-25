@@ -761,7 +761,24 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepResult, error)
 	if res.Requeued > 0 {
 		m.Offer()
 	}
+	// A job that waited for a login another job held — one that has since ended, stopped or lost
+	// its lease, whichever way — is offered again, and a cloud one gets its machine.
+	m.releaseFreedWaits(ctx)
 	return res, nil
+}
+
+// releaseFreedWaits clears the reason of queued jobs whose payer's login is free again and offers
+// the queue: the next lease decides anew whether they still wait.
+func (m *Manager) releaseFreedWaits(ctx context.Context) {
+	n, err := db.New(m.pool).ReleaseFreedWaits(ctx)
+	if err != nil {
+		m.log.Warn("releasing jobs that waited for a login", "err", err)
+		return
+	}
+	if n > 0 {
+		m.Offer()
+		m.provisionSoon()
+	}
 }
 
 // Run sweeps until ctx is done.

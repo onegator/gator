@@ -99,3 +99,14 @@ ORDER BY created_at LIMIT 1;
 
 -- name: RunnerLoginsAllowed :one
 SELECT runner_logins FROM workspace_settings WHERE id;
+
+-- name: ReleaseFreedWaits :execrows
+-- Queued jobs that wait while their payer has a usable login nobody holds — a ChatGPT login whose
+-- job ended, was stopped or lost its lease — stop saying they wait; the next lease decides again.
+UPDATE jobs j SET waiting_reason = '', updated_at = now()
+WHERE j.status = 'queued' AND j.waiting_reason <> '' AND j.payer_id IS NOT NULL
+  AND EXISTS (
+      SELECT 1 FROM user_credentials c
+      WHERE c.user_id = j.payer_id AND c.backend = j.backend AND c.status <> 'error'
+        AND NOT EXISTS (SELECT 1 FROM jobs a WHERE a.credential_id = c.id AND a.credential_exclusive
+                        AND a.status IN ('leased', 'running', 'stalled')));
