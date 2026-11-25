@@ -53,8 +53,8 @@ func TestMarketplaceMigrationsRoundTrip(t *testing.T) {
 			        '00000000-0000-0000-0000-0000000d0001', '["reads CI logs"]', '00000000-0000-0000-0000-00000000f001')`)
 		exec(`INSERT INTO mcp_servers (id, project_id, name, url, auth, allowed_tools)
 			VALUES ('00000000-0000-0000-0000-0000000c0001', '00000000-0000-0000-0000-0000000000a1', 'sentry', 'https://mcp.sentry.dev/mcp', 'oauth', '{search_issues}')`)
-		exec(`INSERT INTO mcp_calls (mcp_server_id, project_id, method, tool, outcome)
-			VALUES ('00000000-0000-0000-0000-0000000c0001', '00000000-0000-0000-0000-0000000000a1', 'tools/call', 'search_issues', 'ok')`)
+		exec(`INSERT INTO mcp_calls (mcp_server_id, server_name, project_id, method, tool, outcome)
+			VALUES ('00000000-0000-0000-0000-0000000c0001', 'sentry', '00000000-0000-0000-0000-0000000000a1', 'tools/call', 'search_issues', 'ok')`)
 	}
 
 	if err := goose.UpContext(ctx, conn, "migrations"); err != nil {
@@ -64,19 +64,20 @@ func TestMarketplaceMigrationsRoundTrip(t *testing.T) {
 		t.Fatal("up made no marketplace tables")
 	}
 	seed()
-	// The calls are a record: nobody changes one, but a server going takes its calls with it.
+	// The calls are a record: nobody changes one, and a server going leaves them, by name.
 	if _, err := pool.Exec(ctx, `UPDATE mcp_calls SET outcome = 'error'`); err == nil {
 		t.Fatal("a call was changed")
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM mcp_calls`); err == nil {
 		t.Fatal("a call was deleted")
 	}
+	// What the down step must still undo: a project going takes its calls.
 	if _, err := pool.Exec(ctx, `INSERT INTO mcp_servers (name, url, auth) VALUES ('gator', 'https://x', 'none')`); err == nil {
 		t.Fatal("a remote server named gator")
 	}
 	exec(`DELETE FROM mcp_servers WHERE name = 'sentry'`)
-	if count(`SELECT count(*) FROM mcp_calls`) != 0 {
-		t.Fatal("a server's calls go with it")
+	if count(`SELECT count(*) FROM mcp_calls WHERE mcp_server_id IS NULL AND server_name = 'sentry'`) != 1 {
+		t.Fatal("a server's calls stay after it")
 	}
 	exec(`INSERT INTO mcp_servers (id, project_id, name, url, auth) VALUES ('00000000-0000-0000-0000-0000000c0001', '00000000-0000-0000-0000-0000000000a1', 'sentry', 'https://x', 'none')`)
 	exec(`INSERT INTO mcp_calls (mcp_server_id, method, outcome) VALUES ('00000000-0000-0000-0000-0000000c0001', 'tools/list', 'ok')`)

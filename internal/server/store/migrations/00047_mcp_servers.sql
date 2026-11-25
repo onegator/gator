@@ -27,10 +27,13 @@ CREATE TABLE mcp_servers (
 );
 
 -- One line per call through the proxy, as plugin_calls are for plugins: who (job, agent), what
--- (method, tool, the arguments with secrets masked), how it went and how long it took.
+-- (method, tool, the arguments with secrets masked), how it went and how long it took. A record:
+-- removing a server keeps its calls (by name), as a plugin's calls outlive switching it off; only
+-- the project's deletion takes them.
 CREATE TABLE mcp_calls (
     id            bigserial PRIMARY KEY,
-    mcp_server_id uuid NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+    mcp_server_id uuid REFERENCES mcp_servers(id) ON DELETE SET NULL,
+    server_name   text NOT NULL DEFAULT '',
     project_id    uuid REFERENCES projects(id) ON DELETE CASCADE,
     job_id        uuid REFERENCES jobs(id) ON DELETE SET NULL,
     agent_id      uuid REFERENCES agents(id) ON DELETE SET NULL,

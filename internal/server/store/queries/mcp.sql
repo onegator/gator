@@ -50,8 +50,8 @@ RETURNING *;
 DELETE FROM mcp_servers WHERE id = $1;
 
 -- name: InsertMCPCall :exec
-INSERT INTO mcp_calls (mcp_server_id, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms)
-VALUES (sqlc.arg(mcp_server_id), sqlc.narg(project_id), sqlc.narg(job_id), sqlc.narg(agent_id), sqlc.arg(method), sqlc.arg(tool),
+INSERT INTO mcp_calls (mcp_server_id, server_name, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms)
+VALUES (sqlc.arg(mcp_server_id), sqlc.arg(server_name), sqlc.narg(project_id), sqlc.narg(job_id), sqlc.narg(agent_id), sqlc.arg(method), sqlc.arg(tool),
         sqlc.arg(payload), sqlc.arg(outcome), sqlc.narg(error), sqlc.arg(result_bytes), sqlc.arg(duration_ms));
 
 -- name: ListMCPCalls :many

@@ -65,7 +65,7 @@ func (r DBRecorder) Record(ctx context.Context, c Call) {
 		why = &c.Err
 	}
 	g := c.Grant
-	err := r.Store.InsertMCPCall(context.WithoutCancel(ctx), db.InsertMCPCallParams{McpServerID: g.Server.ID, ProjectID: g.Job.ProjectID,
+	err := r.Store.InsertMCPCall(context.WithoutCancel(ctx), db.InsertMCPCallParams{McpServerID: g.Server.ID, ServerName: g.Server.Name, ProjectID: g.Job.ProjectID,
 		JobID: g.Job.ID, AgentID: g.Agent.ID, Method: c.Method, Tool: c.Tool, Payload: payload, Outcome: c.Outcome, Error: why,
 		ResultBytes: int32(c.Bytes), DurationMs: int32(c.Duration.Milliseconds())})
 	if err != nil && r.Log != nil {

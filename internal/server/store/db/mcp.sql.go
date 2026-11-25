@@ -183,13 +183,14 @@ func (q *Queries) GetMCPServerIn(ctx context.Context, arg GetMCPServerInParams) 
 }
 
 const insertMCPCall = `-- name: InsertMCPCall :exec
-INSERT INTO mcp_calls (mcp_server_id, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms)
-VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11)
+INSERT INTO mcp_calls (mcp_server_id, server_name, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11, $12)
 `
 
 type InsertMCPCallParams struct {
 	McpServerID pgtype.UUID `json:"mcp_server_id"`
+	ServerName  string      `json:"server_name"`
 	ProjectID   pgtype.UUID `json:"project_id"`
 	JobID       pgtype.UUID `json:"job_id"`
 	AgentID     pgtype.UUID `json:"agent_id"`
@@ -205,6 +206,7 @@ type InsertMCPCallParams struct {
 func (q *Queries) InsertMCPCall(ctx context.Context, arg InsertMCPCallParams) error {
 	_, err := q.db.Exec(ctx, insertMCPCall,
 		arg.McpServerID,
+		arg.ServerName,
 		arg.ProjectID,
 		arg.JobID,
 		arg.AgentID,
@@ -220,7 +222,7 @@ func (q *Queries) InsertMCPCall(ctx context.Context, arg InsertMCPCallParams) er
 }
 
 const listMCPCalls = `-- name: ListMCPCalls :many
-SELECT id, mcp_server_id, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms, created_at FROM mcp_calls WHERE mcp_server_id = $1 AND project_id IS NOT DISTINCT FROM $2::uuid
+SELECT id, mcp_server_id, server_name, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms, created_at FROM mcp_calls WHERE mcp_server_id = $1 AND project_id IS NOT DISTINCT FROM $2::uuid
 ORDER BY id DESC LIMIT $3
 `
 
@@ -243,6 +245,7 @@ func (q *Queries) ListMCPCalls(ctx context.Context, arg ListMCPCallsParams) ([]M
 		if err := rows.Scan(
 			&i.ID,
 			&i.McpServerID,
+			&i.ServerName,
 			&i.ProjectID,
 			&i.JobID,
 			&i.AgentID,
@@ -266,7 +269,7 @@ func (q *Queries) ListMCPCalls(ctx context.Context, arg ListMCPCallsParams) ([]M
 }
 
 const listMCPCallsOfServer = `-- name: ListMCPCallsOfServer :many
-SELECT id, mcp_server_id, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms, created_at FROM mcp_calls WHERE mcp_server_id = $1 ORDER BY id DESC LIMIT $2
+SELECT id, mcp_server_id, server_name, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms, created_at FROM mcp_calls WHERE mcp_server_id = $1 ORDER BY id DESC LIMIT $2
 `
 
 type ListMCPCallsOfServerParams struct {
@@ -287,6 +290,7 @@ func (q *Queries) ListMCPCallsOfServer(ctx context.Context, arg ListMCPCallsOfSe
 		if err := rows.Scan(
 			&i.ID,
 			&i.McpServerID,
+			&i.ServerName,
 			&i.ProjectID,
 			&i.JobID,
 			&i.AgentID,

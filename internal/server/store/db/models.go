@@ -461,6 +461,7 @@ type MarketplaceRegistry struct {
 type McpCall struct {
 	ID          int64              `json:"id"`
 	McpServerID pgtype.UUID        `json:"mcp_server_id"`
+	ServerName  string             `json:"server_name"`
 	ProjectID   pgtype.UUID        `json:"project_id"`
 	JobID       pgtype.UUID        `json:"job_id"`
 	AgentID     pgtype.UUID        `json:"agent_id"`

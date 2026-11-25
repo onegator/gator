@@ -534,3 +534,27 @@ func TestAJobReachesNoOtherProjectsServer(t *testing.T) {
 		t.Fatalf("calls: %d", n)
 	}
 }
+
+// A server's calls are a record that outlives it: uninstalling its integration keeps them, by name.
+func TestAServersCallsOutliveIt(t *testing.T) {
+	h := newHarness(t)
+	s := h.remoteSetup()
+	_, job := h.replyJobOf(s.project, "oncall")
+	cs, err := h.proxySession(h.srv.URL+"/mcp/proxy/issues-mcp", map[string]string{"Authorization": "Bearer " + h.identity(job, s.project)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "search_issues", Arguments: map[string]any{"query": "x"}})
+	var installs []gen.Installation
+	h.do("GET", "/projects/"+s.project+"/installations", nil, &installs)
+	for _, in := range installs {
+		if in.Name == "issues-mcp" {
+			if code := h.do("DELETE", "/installations/"+in.Id.String(), nil, nil); code != 204 {
+				t.Fatalf("uninstall: %d", code)
+			}
+		}
+	}
+	if n := h.count(`SELECT count(*) FROM mcp_calls WHERE job_id = $1 AND server_name = 'issues-mcp' AND mcp_server_id IS NULL`, job); n != 1 {
+		t.Fatalf("the calls kept: %d", n)
+	}
+}

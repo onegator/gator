@@ -98,7 +98,9 @@ func Migrate(ctx context.Context, url string) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	if err := goose.UpContext(ctx, db, "migrations"); err != nil {
+	// 00045 is reserved for the Brain's embeddings and not written yet, while 00046 and later are:
+	// whoever adds it applies it to databases already past it, which goose refuses unless told.
+	if err := goose.UpContext(ctx, db, "migrations", goose.WithAllowMissing()); err != nil {
 		return err
 	}
 	return migrateRiver(ctx, url, rivermigrate.DirectionUp)
