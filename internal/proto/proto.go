@@ -54,6 +54,7 @@ const (
 	TypeFinish       MessageType = "finish"
 	TypeLoginPrompt  MessageType = "login_prompt"
 	TypeTurnEnding   MessageType = "turn_ending" // v2
+	TypeCheckpoint   MessageType = "checkpoint"  // v4, kept until acked like events
 )
 
 // Server → runner.
@@ -318,6 +319,9 @@ type Job struct {
 	// at <server>/mcp/proxy/<name> with the job's own token, and only there: no credential of a
 	// remote server is in a job, ever. Additive in v3.
 	MCP []string `json:"mcp,omitempty"`
+	// NoCheckpoints says the project turned checkpoints off (v4): on a large repository adding
+	// every file after every turn can cost more than the diff is worth.
+	NoCheckpoints bool `json:"no_checkpoints,omitempty"`
 }
 
 // Skill is one skill of a job's agent: its SKILL.md and whatever else the folder holds
@@ -443,6 +447,72 @@ type Finish struct {
 	// Objections counts the times this turn was sent back to work before it was allowed to
 	// end. A receipt that hides them would make a two-hour job look like a one-hour one.
 	Objections int `json:"objections,omitempty"`
+	// Checkpoints are the turns' checkpoints the runner sent (v4), counted; their diffs went
+	// before, each in its own checkpoint message.
+	Checkpoints []CheckpointSummary `json:"checkpoints,omitempty"`
+}
+
+// Checkpoint bounds: each diff a checkpoint carries is cut at MaxDiffBytes (both fit one runner
+// message, base64 and all), and at most MaxCheckpointFiles files are listed.
+const (
+	MaxDiffBytes       = 1 << 20
+	MaxCheckpointFiles = 1000
+)
+
+// File statuses in a checkpoint.
+const (
+	FileAdded    = "added"
+	FileModified = "modified"
+	FileDeleted  = "deleted"
+)
+
+// FileChange is one file a turn changed, by how much. A binary file is listed as changed, with no
+// line counts and nothing of it in the diff.
+type FileChange struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Removed int    `json:"removed"`
+	Status  string `json:"status"`
+	Binary  bool   `json:"binary,omitempty"`
+}
+
+// Checkpoint is the worktree of a job after one of its turns (v4): a commit the runner made on a
+// hidden ref, without touching the agent's branch or index, and what changed since the turn
+// before — Seq 1 is the first turn, against the worktree as the job found it. Whole is the job
+// so far (the worktree as the job found it, to this turn), for a view of all of it.
+type Checkpoint struct {
+	JobID      string       `json:"job_id"`
+	Repo       string       `json:"repo"`
+	Seq        int          `json:"seq"`
+	BaseCommit string       `json:"base_commit"`
+	HeadCommit string       `json:"head_commit"`
+	Files      []FileChange `json:"files"`
+	Diff       []byte       `json:"diff,omitempty"`
+	Truncated  bool         `json:"truncated,omitempty"`
+	WholeFiles []FileChange `json:"whole_files,omitempty"`
+	Whole      []byte       `json:"whole,omitempty"`
+	// WholeTruncated says Whole was cut at MaxDiffBytes.
+	WholeTruncated bool `json:"whole_truncated,omitempty"`
+	// TookMS is how long the checkpoint took: on a large repository it is the price of the feature.
+	TookMS int64 `json:"took_ms"`
+}
+
+// CheckpointSummary is a checkpoint as the receipt counts it.
+type CheckpointSummary struct {
+	Seq     int `json:"seq"`
+	Files   int `json:"files"`
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
+}
+
+// Summary counts what a checkpoint's turn changed.
+func (c Checkpoint) Summary() CheckpointSummary {
+	out := CheckpointSummary{Seq: c.Seq, Files: len(c.Files)}
+	for _, f := range c.Files {
+		out.Added += f.Added
+		out.Removed += f.Removed
+	}
+	return out
 }
 
 // TurnEnding is the runner asking, before it sends a Finish, whether the turn may end. The

@@ -1213,6 +1213,52 @@ paths:
       responses:
         "202": { description: delivered to the runner }
         "409": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/checkpoints:
+    get:
+      operationId: listJobCheckpoints
+      description: |
+        What each turn of the job changed, turn by turn: the runner checkpoints the worktree after
+        every turn of a work job (a commit on a hidden ref, never pushed; the agent's branch and index
+        are left alone) and sends the turn's files with their line counts. A chat job, a job without a
+        repository, a v3 runner and a project with process_config.checkpoints.enabled=false have none.
+        For whoever may read the job.
+      parameters: [ { $ref: "#/components/parameters/jobId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Checkpoint" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /jobs/{jobId}/diff:
+    get:
+      operationId: getJobDiff
+      description: |
+        The job's diff over its turns from..to (seq numbers, both included; default the first and the
+        last), as a unified diff ("this turn / the whole job" in the diff view). From the first turn
+        it is exactly the worktree as the job found it against turn `to`. From a later turn it is the
+        turns' own diffs put together file by file, each file's parts one after another: the server
+        keeps diffs, not the repository. Every diff is redacted like logs before it is kept and cut at
+        1 MiB (Checkpoint.truncated).
+      parameters:
+        - { $ref: "#/components/parameters/jobId" }
+        - { name: from, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: to, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: repo, in: query, schema: { type: string }, description: "the repository, for a project with more than one; default the job's first" }
+        - { name: ignoreWhitespace, in: query, schema: { type: boolean }, description: "leave out changes that only change whitespace" }
+      responses:
+        "200": { description: a unified diff, content: { text/x-diff: { schema: { type: string } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /checkpoints/{checkpointId}/diff:
+    get:
+      operationId: getCheckpointDiff
+      description: |
+        One turn's diff against the turn before (the first turn's against the worktree as the job
+        found it), or with whole=true the job's diff up to this turn. For whoever may read its job.
+      parameters:
+        - { $ref: "#/components/parameters/checkpointId" }
+        - { name: whole, in: query, schema: { type: boolean } }
+        - { name: ignoreWhitespace, in: query, schema: { type: boolean } }
+      responses:
+        "200": { description: a unified diff, content: { text/x-diff: { schema: { type: string } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /runners:
     get:
       operationId: listRunners
@@ -2101,6 +2147,7 @@ components:
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
+    checkpointId: { name: checkpointId, in: path, required: true, schema: { type: string, format: uuid } }
     turnId: { name: turnId, in: path, required: true, schema: { type: string, format: uuid } }
     agentId: { name: agentId, in: path, required: true, schema: { type: string, format: uuid } }
     runnerId: { name: runnerId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2338,6 +2385,35 @@ components:
         createdAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
+    Checkpoint:
+      type: object
+      description: One turn of a job, checkpointed. files and the diff are the turn's; wholeFiles and the whole diff are the job's up to it.
+      required: [id, jobId, seq, repo, baseCommit, headCommit, files, diffBytes, truncated, wholeFiles, wholeBytes, wholeTruncated, tookMs, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        jobId: { type: string, format: uuid }
+        turnId: { type: string, format: uuid, description: "the conversation turn the job answered, for a reply" }
+        seq: { type: integer, description: "the turn of the job: 1 is the first, then one more after every steer or objection" }
+        repo: { type: string }
+        baseCommit: { type: string, description: "the checkpoint before (the worktree as the job found it, for seq 1); on the runner only" }
+        headCommit: { type: string }
+        files: { type: array, items: { $ref: "#/components/schemas/FileChange" } }
+        diffBytes: { type: integer, format: int64 }
+        truncated: { type: boolean, description: "the turn's diff was cut at 1 MiB" }
+        wholeFiles: { type: array, items: { $ref: "#/components/schemas/FileChange" } }
+        wholeBytes: { type: integer, format: int64 }
+        wholeTruncated: { type: boolean }
+        tookMs: { type: integer, description: "how long the runner took to checkpoint (checkpoint_ms)" }
+        createdAt: { type: string, format: date-time }
+    FileChange:
+      type: object
+      required: [path, added, removed, status]
+      properties:
+        path: { type: string }
+        added: { type: integer }
+        removed: { type: integer }
+        status: { type: string, enum: [added, modified, deleted], x-enum-varnames: [FileAdded, FileModified, FileDeleted] }
+        binary: { type: boolean, description: "changed, with no line counts and nothing of it in the diff" }
     JobEvent:
       type: object
       required: [seq, type, at, payload]
@@ -3763,6 +3839,16 @@ components:
         actions: { type: array, items: { type: string } }
         day: { type: string, description: "brain_proposal: the day (YYYY-MM-DD) whose proposals the card lists" }
         proposals: { type: array, items: { $ref: "#/components/schemas/BrainCardProposal" }, description: "brain_proposal: what the Brain was proposed from the task that day" }
+        changes: { $ref: "#/components/schemas/CardChanges" }
+    CardChanges:
+      type: object
+      description: "job: what the job changed so far, from its last checkpoint (a line under the card, and the diff action: GET /jobs/{id}/diff)"
+      required: [files, added, removed, line]
+      properties:
+        files: { type: integer }
+        added: { type: integer }
+        removed: { type: integer }
+        line: { type: string, description: "e.g. \"3 files, +42 −7\"" }
     BrainCardProposal:
       type: object
       required: [id, kind, scope, title, status]

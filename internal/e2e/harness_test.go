@@ -42,6 +42,7 @@ import (
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
+	"github.com/onegator/gator/internal/server/review"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -134,8 +135,10 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	hostDone := make(chan struct{})
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
+	reviews := review.New(pool, review.Deps{})
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations}
+		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations,
+		Checkpoints: reviews.Checkpoints}
 	for _, c := range configure {
 		c(&rcfg)
 	}
@@ -168,7 +171,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
 		Marketplace: market,
 		Remote:      remote,
-		Bridges:     bridge}
+		Bridges:     bridge,
+		Review:      reviews}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())

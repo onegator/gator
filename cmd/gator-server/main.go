@@ -42,6 +42,7 @@ import (
 	"github.com/onegator/gator/internal/server/product"
 	"github.com/onegator/gator/internal/server/provision"
 	"github.com/onegator/gator/internal/server/quality"
+	"github.com/onegator/gator/internal/server/review"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
@@ -230,7 +231,11 @@ func serve(ctx context.Context) error {
 	if cloud.Provisioner != nil {
 		log.Info("cloud runners start on demand", "provisioner", cloud.Provisioner.Name(), "server_url", cloud.ServerURL)
 	}
+	// What each turn of a job changed, as runners checkpoint it, and what people say about it.
+	reviews := review.New(db.Pool, review.Deps{Blobs: blobs})
 	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
+		// Every turn's checkpoint of the worktree, its diffs redacted and kept with attachments.
+		Checkpoints:    reviews.Checkpoints,
 		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
 		Preparer:       pluginHost,
@@ -314,6 +319,8 @@ func serve(ctx context.Context) error {
 		Bridges: bridge,
 		// Agents outside Gator, both ways.
 		A2A: &a2a.Module{Remote: farAgents, Inbound: a2aIn},
+		// What each turn changed, and the comments on its lines.
+		Review: reviews,
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),

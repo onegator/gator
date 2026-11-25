@@ -144,6 +144,9 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
 	}
 
+	cps := newCheckpoints(job, ws, io, e.DenyRead, e.Log)
+	cps.baseline(ctx)
+
 	var usage proto.Usage
 	var last backend.Outcome
 	prompt, session, tools := opening, "", 0
@@ -167,6 +170,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		last = be.Run(runCtx, spec(prompt, session, budget, costLeft(job, usage)), backend.Emit(io.Emit))
 		close(done)
 		cancelRun(nil)
+		cps.afterTurn(ctx)
 		addUsage(&usage, last.Usage)
 		tools += last.ToolCalls
 		if last.SessionID != "" {
@@ -204,7 +208,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		digest, summary = nil, last.Summary // a summary is all answer: there is no work to digest
 	}
 	fin := proto.Finish{Status: last.Status, StopReason: last.Reason, SessionID: session, Summary: summary,
-		Usage: usage, Objections: objections}
+		Usage: usage, Objections: objections, Checkpoints: cps.summaries()}
 	if last.Interrupted {
 		cause := context.Cause(ctx)
 		switch {

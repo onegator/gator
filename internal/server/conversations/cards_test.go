@@ -193,7 +193,8 @@ func (f fakeTasks) GetTask(_ context.Context, id pgtype.UUID) (db.Task, error) {
 
 type fakeJobs struct {
 	fakeTasks
-	jobs map[[16]byte]db.Job
+	jobs    map[[16]byte]db.Job
+	changes map[[16]byte][]byte
 }
 
 func (f fakeJobs) GetJob(_ context.Context, id pgtype.UUID) (db.Job, error) {
@@ -210,6 +211,13 @@ func (f fakeJobs) GetAgent(context.Context, pgtype.UUID) (db.Agent, error) {
 
 func (f fakeJobs) JobProgress(context.Context, pgtype.UUID) (db.JobProgressRow, error) {
 	return db.JobProgressRow{}, nil
+}
+
+func (f fakeJobs) JobChanges(_ context.Context, id pgtype.UUID) ([]byte, error) {
+	if f.changes != nil {
+		return f.changes[id.Bytes], nil
+	}
+	return []byte("[]"), nil
 }
 
 func TestSourcesLeaveNoCardForWhatIsGone(t *testing.T) {
@@ -277,5 +285,27 @@ func TestCardSourcesAreAdditive(t *testing.T) {
 	c := m.Consumer(nil, nil, 0)
 	if len(c.handlers["pin.added"]) != 1 || len(c.handlers["job.queued"]) != 1 {
 		t.Fatalf("handlers: %d for pins, %d for jobs", len(c.handlers["pin.added"]), len(c.handlers["job.queued"]))
+	}
+}
+
+// A job that changed files says under its card how much, and offers the diff.
+func TestJobCardCountsTheChanges(t *testing.T) {
+	ctx := context.Background()
+	task := db.Task{ID: newID(1), Title: "T", Kind: "bug", Phase: "implementation"}
+	jobs := fakeJobs{fakeTasks: fakeTasks{task.ID.Bytes: task},
+		jobs: map[[16]byte]db.Job{newID(5).Bytes: {ID: newID(5), TaskID: task.ID, Status: "running", Phase: "implementation"}},
+		changes: map[[16]byte][]byte{newID(5).Bytes: []byte(`[{"path":"a.go","added":40,"removed":7,"status":"modified"},` +
+			`{"path":"b.go","added":2,"removed":0,"status":"added"},{"path":"logo.png","added":0,"removed":0,"status":"added","binary":true}]`)}}
+	got, err := jobCards{jobs: jobs}.Cards(ctx, db.EventsAfterRow{AggregateID: newID(5)})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("job card: %+v %v", got, err)
+	}
+	data := got[0].Card.Data
+	changes, _ := data["changes"].(map[string]any)
+	if changes["line"] != "3 files, +42 −7" || !slices.Contains(data["actions"].([]string), "diff") {
+		t.Fatalf("card: %+v", data)
+	}
+	if !slices.Contains(jobCards{}.Events(), EventJobCheckpoint) {
+		t.Fatal("the card does not follow checkpoints")
 	}
 }

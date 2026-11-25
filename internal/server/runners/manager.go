@@ -105,6 +105,27 @@ type Config struct {
 	ProvisionDelay time.Duration
 	// Brain records which Brain entries a job was handed and cited (brain.Citations); nil: none.
 	Brain BrainUse
+	// Checkpoints keeps what runners say each turn changed (review.Checkpoints); nil: a
+	// checkpoint is acknowledged and dropped.
+	Checkpoints CheckpointRecorder
+}
+
+// CheckpointRecorder keeps a checkpoint of a job's worktree. review.Checkpoints is one.
+type CheckpointRecorder interface {
+	Record(ctx context.Context, job db.Job, cp proto.Checkpoint) error
+}
+
+// Refusal is an error that says the runner sent what it had no business sending: the message is
+// acknowledged with the error rather than resent, since a resend would be refused again.
+type Refusal interface {
+	error
+	Refusal()
+}
+
+// refused says whether err is a Refusal.
+func refused(err error) bool {
+	var r Refusal
+	return errors.As(err, &r)
 }
 
 // AuthorRoles names, for the work of an automation, the role whose agent does a job of a given

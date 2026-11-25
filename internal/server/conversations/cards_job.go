@@ -2,6 +2,7 @@ package conversations
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -15,6 +16,7 @@ type jobReader interface {
 	GetJob(ctx context.Context, id pgtype.UUID) (db.Job, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
 	JobProgress(ctx context.Context, jobID pgtype.UUID) (db.JobProgressRow, error)
+	JobChanges(ctx context.Context, jobID pgtype.UUID) ([]byte, error)
 }
 
 // jobCards shows each job in its task's thread as one card that follows the job from queued to
@@ -26,7 +28,7 @@ type jobCards struct {
 // Events implements CardSource.
 func (jobCards) Events() []string {
 	return []string{"job.queued", "job.leased", "job.started", "job.stalled", "job.resumed", "job.requeued",
-		"job.no_runner", "job.provisioned", "job.provision_failed", "job.finished", EventJobProgress}
+		"job.no_runner", "job.provisioned", "job.provision_failed", "job.finished", EventJobProgress, EventJobCheckpoint}
 }
 
 // Cards implements CardSource.
@@ -56,9 +58,41 @@ func (s jobCards) Cards(ctx context.Context, e db.EventsAfterRow) ([]PlacedCard,
 	if err != nil {
 		return nil, err
 	}
+	files, err := s.jobs.JobChanges(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
 	card := JobCard(job, agent)
 	withProgress(card, progress)
+	withChanges(card, files)
 	return []PlacedCard{{Task: task, Card: card}}, nil
+}
+
+// EventJobCheckpoint says a turn of a job was checkpointed (the review package writes it): its
+// card counts what the job changed so far.
+const EventJobCheckpoint = "job.checkpoint"
+
+// withChanges puts under a job's card what it changed so far ("3 files, +42 −7") and the diff
+// action that opens it — the same action an artifact's card has.
+func withChanges(c Card, files []byte) {
+	var fs []struct {
+		Added   int `json:"added"`
+		Removed int `json:"removed"`
+	}
+	if json.Unmarshal(files, &fs) != nil || len(fs) == 0 {
+		return
+	}
+	added, removed := 0, 0
+	for _, f := range fs {
+		added, removed = added+f.Added, removed+f.Removed
+	}
+	word := "files"
+	if len(fs) == 1 {
+		word = "file"
+	}
+	c.Data["changes"] = map[string]any{"files": len(fs), "added": added, "removed": removed,
+		"line": fmt.Sprintf("%d %s, +%d −%d", len(fs), word, added, removed)}
+	c.Data["actions"] = append(c.Data["actions"].([]string), "diff")
 }
 
 // EventJobProgress says an agent's job called more tools: its card follows. The agents package

@@ -147,3 +147,7 @@ func redactValues(v any) any {
 	}
 	return v
 }
+
+// RedactText masks what has the shape of a credential in plain text: a diff of a worktree, a
+// tool's input. A secret committed to a file is still a secret in the diff a person reads.
+func RedactText(s string) string { return secretValues.ReplaceAllString(s, Redacted) }

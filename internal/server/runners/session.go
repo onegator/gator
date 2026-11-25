@@ -272,6 +272,8 @@ func (s *session) handle(env proto.RawEnvelope) {
 				s.m.log.Warn("dispatch after finish", "runner", s.name, "err", err)
 			}
 		}
+	case proto.TypeCheckpoint:
+		report(s, env, "checkpoint", s.checkpoint)
 	case proto.TypeTurnEnding:
 		report(s, env, "turn_ending", func(te proto.TurnEnding) error {
 			s.turnEnding(te)
@@ -474,6 +476,9 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 		for _, d := range brief.Docs {
 			pj.Turn.Conversation = append(pj.Turn.Conversation, proto.ContextDoc{Kind: d.Kind, Phase: d.Phase, Title: d.Title, Body: d.Body})
 		}
+	}
+	if s.version >= liveVersion && j.Tier != TierChat {
+		pj.NoCheckpoints = !s.m.process.CheckpointsOn(ctx, j.ProjectID)
 	}
 	if r, err := q.GetPrimaryRepo(ctx, j.ProjectID); err == nil {
 		pj.Repo = &proto.Repo{Name: r.Name, URL: r.Url, DefaultBranch: r.DefaultBranch}
@@ -696,6 +701,28 @@ func (s *session) events(ev proto.Events) error {
 			out, _ := json.Marshal(e)
 			s.m.hub.Publish(events.Event{Type: "job.output", Aggregate: "job", AggregateID: ev.JobID, Payload: out, CreatedAt: at})
 		}
+	}
+	return nil
+}
+
+// checkpoint keeps what a turn of a job this runner holds changed. A checkpoint that cannot be
+// kept for a reason of ours is resent; one that is wrong is refused, and acked.
+func (s *session) checkpoint(cp proto.Checkpoint) error {
+	ctx := s.ctx
+	job, err := s.ownJob(ctx, db.New(s.m.pool), cp.JobID)
+	if err != nil {
+		return err
+	}
+	rec := s.m.cfg.Checkpoints
+	if rec == nil {
+		return nil
+	}
+	if err := rec.Record(ctx, job, cp); err != nil {
+		if refused(err) {
+			return err
+		}
+		s.m.log.Warn("keeping a checkpoint", "job", cp.JobID, "seq", cp.Seq, "err", err)
+		return errRetry
 	}
 	return nil
 }

@@ -32,6 +32,9 @@ type JobIO struct {
 	// returns what objects, or nothing when nothing does — including when the server is old,
 	// unreachable or slow, because an agent must never be held by a question nobody answers.
 	TurnEnding func(proto.TurnEnding) []proto.Objection
+	// Checkpoint delivers a checkpoint of the worktree, reliably, in order with the events.
+	// Nil: the server does not take them.
+	Checkpoint func(proto.Checkpoint)
 }
 
 // Executor runs one job and returns its receipt. It must stop when ctx is cancelled
@@ -141,6 +144,9 @@ type Client struct {
 	took         bool
 	finished     chan struct{}
 	finishedOnce sync.Once
+
+	// version is the protocol the server speaks on the current connection (0 before one).
+	version int
 
 	// told is what the server was last told of the backends' capabilities; a heartbeat carries
 	// them again only when they changed.
@@ -369,6 +375,9 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 	var ok proto.Registered
 	_ = env.Into(&ok)
 	c.log.Info("runner registered", "runner_id", ok.RunnerID, "proto", ok.Version)
+	c.mu.Lock()
+	c.version = ok.Version
+	c.mu.Unlock()
 
 	c.attach(sctx, conn)
 	defer c.detach(conn)
@@ -402,12 +411,27 @@ func (c *Client) writeLocked(m *outMsg) {
 		return
 	}
 	c.seq++
-	if m.typ == proto.TypeEvents || m.typ == proto.TypeFinish {
+	if reliable(m.typ) {
 		c.inflight[c.seq] = m
 	}
 	if err := write(c.connCtx, c.conn, m.typ, c.seq, m.payload); err != nil {
 		c.log.Debug("write failed; will resend after reconnect", "type", m.typ, "err", err)
 	}
+}
+
+// liveVersion is the protocol of checkpoints, runtime requests and backend capabilities.
+const liveVersion = 4
+
+// speaks says whether the server on the current connection speaks protocol v.
+func (c *Client) speaks(v int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.version >= v
+}
+
+// reliable are the messages kept until the server acks them and resent after a reconnect.
+func reliable(t proto.MessageType) bool {
+	return t == proto.TypeEvents || t == proto.TypeFinish || t == proto.TypeCheckpoint
 }
 
 func (c *Client) sendReliable(m *outMsg) {
@@ -630,9 +654,15 @@ func (c *Client) start(parent context.Context, job proto.Job) {
 			seqMu.Unlock()
 			c.sendReliable(&outMsg{typ: proto.TypeEvents, payload: proto.Events{JobID: job.JobID, Events: []proto.JobEvent{ev}}})
 		}
-		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer, TurnEnding: func(te proto.TurnEnding) []proto.Objection {
-			return c.askTurnEnding(jctx, rj, te)
-		}})
+		checkpoint := func(cp proto.Checkpoint) {
+			if !c.speaks(liveVersion) {
+				return // a server that does not know checkpoints would refuse one until the end of time
+			}
+			cp.JobID = job.JobID
+			c.sendReliable(&outMsg{typ: proto.TypeCheckpoint, payload: cp})
+		}
+		fin := c.exec.Run(jctx, job, JobIO{Emit: emit, Steer: rj.steer, Checkpoint: checkpoint,
+			TurnEnding: func(te proto.TurnEnding) []proto.Objection { return c.askTurnEnding(jctx, rj, te) }})
 		cause := context.Cause(jctx)
 		cancel(nil)
 		fin.JobID = job.JobID

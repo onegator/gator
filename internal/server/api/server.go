@@ -40,6 +40,7 @@ import (
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
+	"github.com/onegator/gator/internal/server/review"
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
@@ -95,6 +96,9 @@ type Server struct {
 	Bridges *bridges.Service
 	// A2A is agents outside Gator, both ways; nil: their endpoints answer 503.
 	A2A *a2a.Module
+	// Review is what each turn of a job changed and what people say about it; nil: its endpoints
+	// answer 503.
+	Review *review.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
