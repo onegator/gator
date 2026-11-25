@@ -53,8 +53,10 @@ na Macu według kontraktu. Numer migracji i nazwa fazy idą po fazie 7
 ## Odstępstwa od planu
 
 - **Bez nowej wersji protokołu.** Faza 7 rezerwuje proto v4, więc logowanie płatnika jest polem
-  addytywnym, a zgodność trzyma flaga `capabilities.payer_logins` (runner, który jej nie ma, nigdy
-  nie dostanie loginu płatnika ani joba, który by go wymagał).
+  addytywnym, a zgodność trzyma lista `capabilities.payer_logins` (backendy, które runner uruchamia
+  na loginie płatnika). Runner, który jej nie ma, i backend spoza niej (Claude z `apiKeyHelper` albo
+  kluczem w `env` zarządzanych ustawień, które przebijają token płatnika) nigdy nie dostaną loginu
+  płatnika ani joba, który by go wymagał.
 - **Login nie jest szyfrowany osobno w drodze.** Idzie w leasie przez uwierzytelniony WebSocket
   runnera, jak token joba; poufność w drodze daje TLS. Runner i tak musi mieć go jawnie.
 - **Opcja "pożycz logowania runnerów" jest ustawieniem workspace'u, nie runnera.** Nowy workspace ma
@@ -67,9 +69,39 @@ na Macu według kontraktu. Numer migracji i nazwa fazy idą po fazie 7
 - **Wygasły lease zwalnia login ChatGPT**, choć stary job mógł jeszcze działać; jeśli obaj
   odświeżą, login skończy jako odrzucony i właściciel podłączy go ponownie. Refresh od runnera,
   którego job został już przeleasowany, przepada (`ownJob`).
-- **Wykrywanie odrzuconego logowania** to dopasowanie słów backendu (`invalid api key`, wygasły
-  token OAuth, `refresh_token_reused`, 401) na nieudanym jobie, nie kod błędu: Claude Code i Codex nie
-  dają stabilnego kodu. Job wtedy kończy się porażką z powodem, a nie wraca do kolejki.
+- **Wykrywanie odrzuconego logowania** to dopasowanie słów (`invalid api key`, wygasły token OAuth,
+  `refresh_token_reused`, `authentication required`, 401), bo Claude Code i Codex nie dają stabilnego
+  kodu — ale tylko w błędzie samego CLI (wynik `is_error` i stderr Claude Code, błąd RPC adaptera
+  ACP), nigdy w tym, co napisał agent. Dla rodzaju, który da się sprawdzić, serwer przed oznaczeniem
+  pyta dostawcę; login, który dostawca przyjmuje, zostaje. Job wtedy kończy się porażką z powodem, a
+  nie wraca do kolejki.
+- **Sprawdzenie subskrypcji Claude jest niepewne**: nie wiadomo, czy `GET /v1/models` przyjmuje
+  token OAuth (do sprawdzenia na żywo, lista w README). 401/403 zostawia login jako `unchecked` z notą.
+- **Jeden płatnik na runner naraz.** Joby jednego runnera działają jako ten sam użytkownik i czytają
+  sobie środowisko (`/proc/<pid>/environ`) i pliki, a żaden runner nie izoluje dziś jobów od siebie:
+  job na loginie Ann idzie tylko obok jobów na loginie Ann, nigdy obok Boba ani joba na loginie
+  runnera; pozostałe sloty czekają. Login payera trafia tylko na maszynę payera albo runner wspólny
+  (bez właściciela), kto by nie zakolejkował joba. Katalog loginu (z własnym `CLAUDE_CONFIG_DIR`, więc
+  transkrypty się nie mieszają) leży pod `GATOR_RUNNER_LOGIN_DIR`, a runner sprząta pozostałości po
+  awarii przy starcie. Zostaje ryzyko sekwencyjne: to, co job zostawił poza katalogiem loginu, i
+  dziennik runnera na Linuksie, czyta następny job.
+- **Turn z zewnątrz nie ma płatnika.** Slack, GitHub, A2A albo ktokolwiek bez `OnBehalfOf`: login
+  runnera tylko, gdy workspace go pożycza, inaczej czeka. Nikt z zewnątrz nie wydaje loginu członka.
+- **Model czyta własne środowisko.** Maskowanie (runner, serwer, wszystko, co agent wysyła swoim
+  tokenem: gator-cli, MCP, proxy MCP, to, co czyta Judge) trzyma login z dala od tego, co Gator
+  przechowuje i pokazuje, nie od agenta, który chce go wynieść. **Na później**: lokalne proxy po
+  stronie runnera, które dokłada uwierzytelnienie do wywołań modelu, tak że agent w ogóle nie widzi
+  tokenu.
+- **Blokada leasów jest globalna**, nie tylko dla loginów rotujących: który login dostanie job, wiadomo
+  dopiero po zablokowaniu jego wiersza, a blokada musi poprzedzać wiersze. Zapis, usunięcie i
+  odrzucenie loginu oraz zmiana reguły workspace'u biorą ją pierwsze, więc kolejność jest jedna
+  (blokada, joby, login) i nie ma zakleszczeń.
+- **Szyfrogram loginu jest związany z (`user_id`, `kind`)** (AAD). Tabela powstaje w 00055, więc nie
+  ma starych wierszy do przeszyfrowania.
+- **Refresh zastępuje tylko wersję z leasu**: login ma wersję, job zapisuje ją przy leasie, a nowszy
+  login, który właściciel zapisał w trakcie, zostaje.
+- **Nowa zależność**: `golang.org/x/term` (już w grafie modułów) dla ukrytego wpisywania w
+  `gator credentials set`.
 - **Zawężone**: powiadomienie o odrzuconym logowaniu to zdarzenie WebSocket `credential.refused` dla
   właściciela (i status w `GET /me/credentials`), bez pusha. Logowanie, które runner trzyma na dysku
   użytkownika (`~/.claude/.credentials.json`, keychain), agent wciąż może przeczytać; Claude Code

@@ -13,6 +13,15 @@ info:
     events carry ids and seq, never message bodies; a client reads the messages after its last
     seq. A client sends {"typing":"<conversationId>"} to say it is typing; the others in the
     conversation get a conversation.typing event, which is never stored.
+
+
+    Model logins. On "me" alone, and only the caller's own: credential.saved and credential.removed
+    ({kind}) when the caller saves or removes a login, credential.refused ({kind, job_id}) when a job
+    found it turned down and its provider confirmed it. On job:<id> and the task's topic: job.queued
+    carries waiting_reason when the job waits from the start for its payer's login, job.waiting
+    ({waiting_reason}) when a runner looked at it and it still waits or waits for another reason,
+    and job.leased carries credential_kind (a kind of the payer's, or runner). Everyone hears
+    workspace.runner_logins_changed ({runner_logins, by}).
 servers:
   - url: /api/v1
 paths:
@@ -606,6 +615,7 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentials" } } } }
         "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /me/credentials/{kind}:
     parameters:
       - { name: kind, in: path, required: true, description: "a kind from GET /me/credentials: claude_subscription, anthropic_api_key, chatgpt_subscription, openai_api_key", schema: { type: string } }
@@ -628,6 +638,7 @@ paths:
       responses:
         "204": { description: removed }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /me/credentials/{kind}/check:
     parameters:
       - { name: kind, in: path, required: true, schema: { type: string } }
@@ -635,13 +646,15 @@ paths:
       operationId: checkMyCredential
       description: >
         Try the caller's login with one small call to its provider (its list of models). A refusal marks it
-        status error with the reason; 502 when the provider could not tell (nothing changes); 422 for a kind that
+        status error with the reason (a Claude subscription, whose token that endpoint may not take, stays
+        unchecked with the reason instead); 502 when the provider could not tell (nothing changes); 422 for a kind that
         cannot be checked from the server (a ChatGPT login: checking it would spend its refresh token).
       responses:
         "200": { description: checked, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredential" } } } }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /me/model-usage:
     get:
       operationId: getMyModelUsage
@@ -650,6 +663,8 @@ paths:
         - { name: since, in: query, required: false, schema: { type: string, format: date-time } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelUsage" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /users/{userId}/credentials:
     get:
       operationId: listUserCredentials
@@ -659,6 +674,7 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ModelCredential" } } } } }
         "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /workspace/model-usage:
     get:
       operationId: getWorkspaceModelUsage
@@ -670,12 +686,15 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelUsage" } } } }
         "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /workspace/model-credentials:
     get:
       operationId: getModelCredentialPolicy
-      description: Whether a job whose payer has no login of their own runs on the runner's own login.
+      description: Whether a job whose payer has no login of their own runs on the runner's own login. People only.
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentialPolicy" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     put:
       operationId: setModelCredentialPolicy
       description: >
@@ -687,6 +706,7 @@ paths:
       responses:
         "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentialPolicy" } } } }
         "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /presets:
     get:
       operationId: listProjectPresets
@@ -2416,7 +2436,7 @@ components:
         contextDocs: { type: integer, description: "how many documents" }
         objections: { type: integer, description: "how many times this turn was sent back to work before it was allowed to end" }
         payerId: { type: string, format: uuid, description: "the person whose model login pays for the job: who asked for it, else who switched its automation on, else its task's creator" }
-        credentialKind: { type: string, description: "the login it was leased with: a kind of the payer's (claude_subscription, …), runner for the runner's own; absent until leased" }
+        credentialKind: { type: string, description: "the login it was leased with: a kind of the payer's (claude_subscription, anthropic_api_key, chatgpt_subscription, openai_api_key), or runner for the runner's own; absent until leased" }
         waitingReason: { type: string, description: "why a queued job is not leased, for want of a login: in words for whoever looks; absent when it is not waiting" }
         createdAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
@@ -2836,7 +2856,7 @@ components:
         userId: { type: string, format: uuid, description: "whose login paid; absent for the runners' own (and in /me/model-usage)" }
         name: { type: string }
         email: { type: string }
-        credentialKind: { type: string, description: "a kind, or runner" }
+        credentialKind: { type: string, description: "a kind of login (claude_subscription, anthropic_api_key, chatgpt_subscription, openai_api_key), or runner for the runners' own" }
         jobs: { type: integer, format: int64 }
         inputTokens: { type: integer, format: int64 }
         outputTokens: { type: integer, format: int64 }
