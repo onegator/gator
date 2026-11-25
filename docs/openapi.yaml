@@ -1860,6 +1860,25 @@ paths:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpCall" } } } } }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/connect:
+    post:
+      operationId: connectProjectMcpServer
+      description: >
+        Start connecting a server that signs in with OAuth: answers the provider's address for the person's browser.
+        The provider sends it back to /connect/callback, as for a plugin, and the token is kept on the server
+        (renewed before it expires); a job only ever reaches the server through the proxy. Needs the server's
+        OAuth app for the provider (GATOR_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET) and GATOR_PUBLIC_URL. For the
+        project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectRequest" } } }
+      responses:
+        "200": { description: started, content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectStart" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /workspace/mcp-servers:
     get:
       operationId: listWorkspaceMcpServers

@@ -104,7 +104,15 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		CardSources: []conversations.CardSource{curator.NewCards(db.New(pool))}})
 	knows := brain.New(pool, brain.Deps{Conversations: chat.Access})
 	svc.UseBrain(knows.Packer, knows.Legacy)
+	// Remote MCP servers; one that signs in with OAuth signs in at the fake provider, and comes back
+	// through the plugins' /connect/callback.
+	remote := mcpremote.New(pool, mcpremote.Deps{Keys: keys, BreakerThreshold: 3, BreakerCooldown: time.Hour, PublicURL: fakePublicURL,
+		OAuthHTTP: oauth.httpClient(), Apps: func(provider string) (mcpremote.OAuthApp, bool) {
+			c, ok := oauth.client(provider)
+			return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret}, ok
+		}})
 	host := plugins.New(pool, svc, keys, hub, slog.Default(), plugins.Config{Brain: knows.Plugins, CallTimeout: 2 * time.Second,
+		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth},
 		MinBackoff: 50 * time.Millisecond, MaxBackoff: 200 * time.Millisecond, BreakerThreshold: 3,
 		SyncEvery: time.Hour, PollEvery: 100 * time.Millisecond, RefreshEvery: time.Hour,
 		CatalogueDir: catalogue, PublicURL: fakePublicURL, HooksURL: fakeHooksURL,
@@ -145,7 +153,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows,
 		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
 		Marketplace: market,
-		Remote:      mcpremote.New(pool, mcpremote.Deps{Keys: keys, BreakerThreshold: 3, BreakerCooldown: time.Hour})}
+		Remote:      remote}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())

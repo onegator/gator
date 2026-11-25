@@ -58,7 +58,13 @@ $$;
 CREATE TRIGGER mcp_calls_append_only BEFORE UPDATE OR DELETE ON mcp_calls
     FOR EACH ROW EXECUTE FUNCTION mcp_calls_append_only();
 
+-- Connecting a remote server with OAuth goes through the same /connect/callback as a plugin's: the
+-- state says which of the two it is for, and plugin_name names the plugin or the server.
+ALTER TABLE plugin_connect_states ADD COLUMN target text NOT NULL DEFAULT 'plugin' CHECK (target IN ('plugin', 'mcp'));
+
 -- +goose Down
+DELETE FROM plugin_connect_states WHERE target <> 'plugin';
+ALTER TABLE plugin_connect_states DROP COLUMN target;
 DROP TRIGGER mcp_calls_append_only ON mcp_calls;
 DROP FUNCTION mcp_calls_append_only();
 DROP TABLE mcp_calls;

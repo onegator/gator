@@ -151,7 +151,7 @@ func (h *Host) Connect(ctx context.Context, projectID, userID pgtype.UUID, name,
 	state, verifier := randomToken(), oauth2.GenerateVerifier()
 	if err := q.InsertPluginConnectState(ctx, db.InsertPluginConnectStateParams{
 		Hash: hashState(state), ProjectID: projectID, PluginName: name, UserID: userID, Verifier: verifier,
-		ReturnTo: returnTo, ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(connectStateTTL), Valid: true},
+		ReturnTo: returnTo, ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(connectStateTTL), Valid: true}, Target: TargetPlugin,
 	}); err != nil {
 		return "", err
 	}
@@ -171,6 +171,18 @@ func (h *Host) Connect(ctx context.Context, projectID, userID pgtype.UUID, name,
 		opts = append(opts, oauth2.SetAuthURLParam(k, v))
 	}
 	return cfg.AuthCodeURL(state, opts...), nil
+}
+
+// Targets of a connection: what plugin_connect_states.plugin_name names.
+const (
+	TargetPlugin = "plugin"
+	TargetMCP    = "mcp" // a remote MCP server (mcpremote)
+)
+
+// Connector finishes connections of a target other than a plugin's, when the provider sends the
+// browser back to the same /connect/callback. mcpremote.OAuth is one.
+type Connector interface {
+	CompleteConnect(ctx context.Context, st db.PluginConnectState, code string) error
 }
 
 // ConnectHandler serves GET /connect/callback, where the provider sends the browser back. It
@@ -212,7 +224,7 @@ func (h *Host) connectCallback(w http.ResponseWriter, r *http.Request) {
 		if st.ReturnTo != "" {
 			u, _ := url.Parse(st.ReturnTo)
 			v := u.Query()
-			v.Set("plugin", st.PluginName)
+			v.Set(st.Target, st.PluginName)
 			v.Set("project", uuidString(st.ProjectID))
 			if failure != "" {
 				v.Set("error", failure)
@@ -237,8 +249,17 @@ func (h *Host) connectCallback(w http.ResponseWriter, r *http.Request) {
 		finish(http.StatusBadRequest, "The provider said: "+msg)
 		return
 	}
-	if err := h.completeConnect(ctx, st, qv.Get("code")); err != nil {
-		h.log.Warn("plugin connection failed", "plugin", st.PluginName, "project", uuidString(st.ProjectID), "err", err)
+	complete := h.completeConnect
+	if st.Target != TargetPlugin {
+		c, ok := h.cfg.Connectors[st.Target]
+		if !ok {
+			finish(http.StatusBadRequest, "This server does not connect "+st.Target+" any more.")
+			return
+		}
+		complete = c.CompleteConnect
+	}
+	if err := complete(ctx, st, qv.Get("code")); err != nil {
+		h.log.Warn("connection failed", "target", st.Target, "name", st.PluginName, "project", uuidString(st.ProjectID), "err", err)
 		finish(http.StatusBadGateway, "Gator could not finish connecting: "+err.Error())
 		return
 	}
@@ -379,7 +400,9 @@ func (h *Host) refreshOne(ctx context.Context, r db.ListExpiringPluginTokensRow)
 	return h.storeToken(ctx, r.ProjectID, p, m.Connect, tok, false)
 }
 
-// describeOAuthErr keeps the provider's own words and drops the response dump.
+// DescribeOAuthErr keeps the provider's own words and drops the response dump.
+func DescribeOAuthErr(err error) error { return describeOAuthErr(err) }
+
 func describeOAuthErr(err error) error {
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) {

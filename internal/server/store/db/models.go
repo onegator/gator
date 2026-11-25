@@ -586,6 +586,7 @@ type PluginConnectState struct {
 	ReturnTo   string             `json:"return_to"`
 	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	Target     string             `json:"target"`
 }
 
 type PluginKv struct {

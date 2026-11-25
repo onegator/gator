@@ -17,7 +17,10 @@ import (
 type Module struct {
 	Servers *Servers
 	Proxy   *Proxy
-	Keys    Keyring
+	// OAuth connects servers that sign in with OAuth (through /connect/callback, as a
+	// plugins.Connector) and renews their tokens.
+	OAuth *OAuth
+	Keys  Keyring
 }
 
 // Deps are what the module is built from; zero values take the defaults.
@@ -31,15 +34,24 @@ type Deps struct {
 	BreakerCooldown  time.Duration
 	MaxResult        int // bytes of one answer an agent gets; default DefaultMaxResult
 	Log              *slog.Logger
+	// PublicURL is where providers send the browser back (PublicURL/connect/callback); empty:
+	// no server can be connected with OAuth.
+	PublicURL string
+	// Apps are the server's OAuth apps by provider; default: none.
+	Apps func(provider string) (OAuthApp, bool)
+	// OAuthHTTP makes the requests to providers; default a 20 s timeout.
+	OAuthHTTP *http.Client
 }
 
 // New builds the module.
 func New(pool *pgxpool.Pool, d Deps) *Module {
 	q := db.New(pool)
 	keys := Keyring{Keys: d.Keys}
-	dial := HTTPDialer{Credentials: keys, HTTP: d.HTTP}
 	breakers, cache := NewBreakers(d.BreakerThreshold, d.BreakerCooldown), NewToolCache(0)
+	roles := auth.Authorizer{Pool: pool}
+	oauth := NewOAuth(q, roles, keys, d.Apps, d.PublicURL, d.OAuthHTTP, cache)
+	dial := HTTPDialer{Credentials: oauth, HTTP: d.HTTP}
 	proxy := NewProxy(ProxyDeps{Gate: JobGate{Store: q}, Dialer: dial, Recorder: DBRecorder{Store: q, Log: d.Log},
 		Breakers: breakers, Cache: cache, MaxResult: d.MaxResult, Log: d.Log})
-	return &Module{Servers: NewServers(q, auth.Authorizer{Pool: pool}, keys, dial, cache, breakers), Proxy: proxy, Keys: keys}
+	return &Module{Servers: NewServers(q, roles, keys, dial, cache, breakers), Proxy: proxy, OAuth: oauth, Keys: keys}
 }

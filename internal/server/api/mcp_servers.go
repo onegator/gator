@@ -164,3 +164,25 @@ func toMcpCall(c db.McpCall) gen.McpCall {
 	}
 	return out
 }
+
+// ConnectProjectMcpServer starts connecting a server that signs in with OAuth.
+func (s *Server) ConnectProjectMcpServer(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, serverName gen.ServerName) {
+	p, ok := s.remoteCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.PluginConnectRequest
+	if r.ContentLength != 0 && !decode(w, r, &in) {
+		return
+	}
+	u, err := s.Remote.OAuth.Connect(r.Context(), p, fromUUID(projectId), serverName, deref(in.ReturnTo))
+	if errors.Is(err, mcpremote.ErrNotConnectable) {
+		writeError(w, http.StatusConflict, err.Error(), "not_connectable")
+		return
+	}
+	if err != nil {
+		s.failRemote(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gen.PluginConnectStart{Url: u})
+}

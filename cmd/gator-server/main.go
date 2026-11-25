@@ -167,7 +167,11 @@ func serve(ctx context.Context) error {
 	// Jobs are handed their part of it, and the knowledge shelves are read from it.
 	svc.UseBrain(knows.Packer, knows.Legacy)
 	// Plugins propose to the Brain too (brain.propose), as proposals a person approves.
-	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins}
+	// Remote MCP servers agents reach through Gator's proxy; their credentials stay here, and one
+	// that signs in with OAuth is connected through the plugins' /connect/callback.
+	remote := mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log, PublicURL: cfg.PublicURL, Apps: oauthApps})
+	pluginCfg := plugins.Config{PublicURL: cfg.PublicURL, Automations: autos, Brain: knows.Plugins,
+		Connectors: map[string]plugins.Connector{plugins.TargetMCP: remote.OAuth}}
 	pluginCfg.LoadEnv()
 	pluginHost := plugins.New(db.Pool, svc, keyring, hub, log, pluginCfg)
 	go pluginHost.Run(ctx)
@@ -278,7 +282,7 @@ func serve(ctx context.Context) error {
 		// Packages from registries, installed with the permissions a person accepted.
 		Marketplace: market,
 		// Remote MCP servers agents reach through the proxy; their credentials stay here.
-		Remote: mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log}),
+		Remote: remote,
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),
@@ -335,6 +339,13 @@ func serve(ctx context.Context) error {
 		}
 		return httpErr
 	}
+}
+
+// oauthApps are the server's OAuth apps for remote MCP servers, from the environment as plugins'
+// are (GATOR_<PROVIDER>_CLIENT_ID, _CLIENT_SECRET, _SCOPES).
+func oauthApps(provider string) (mcpremote.OAuthApp, bool) {
+	c, ok := plugins.OAuthClientFromEnv(provider)
+	return mcpremote.OAuthApp{ID: c.ID, Secret: c.Secret, Scopes: c.Scopes}, ok
 }
 
 func parseLevel(s string) slog.Level {
