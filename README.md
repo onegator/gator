@@ -317,10 +317,13 @@ checksum|index|keygen|sign|verify` is what a registry's maintainer runs.
 A job's lease carries its agent's skills (Claude Code loads them with `--plugin-dir` from the
 runner's own directory; other backends read them through `skill_read`) and names the remote MCP
 servers it was given. The runner reaches each through Gator's proxy, `POST /mcp/proxy/<name>`, with the
-job's own token: the server's credentials (a token, or OAuth through `/connect/callback`) never leave
-gator-server, every call is written to `mcp_calls`, tools outside the allowlist (and, for chat,
-tools the server does not mark read-only) are refused, answers come back fenced as untrusted, and
-a server that keeps failing is not called for a while.
+job's own token: the server's credentials never leave gator-server — a token, or OAuth the way the
+MCP spec has it (the server's metadata, its authorization server's, a client registered for it alone,
+PKCE), connected through `/connect/start` and `/connect/callback` in the browser that started it.
+Every call is written to `mcp_calls` (arguments masked), tools outside the allowlist (and, for chat,
+outside the read-only tools allowed for chat) are refused, answers come back bounded and fenced as
+untrusted, and a server that keeps failing is not called for a while. The server's own requests reach
+no private address (`netguard`) unless `GATOR_OUTBOUND_ALLOW_PRIVATE=1`.
 
 ## License
 

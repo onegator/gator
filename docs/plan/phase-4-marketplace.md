@@ -301,11 +301,15 @@ GET  /projects/{projectId}/mcp-servers  PUT …/{name}  POST …/{name}/connect
   kaskadami (`pg_trigger_depth`). Test „token nigdy na runnerze” uruchamia prawdziwy executor i backend
   Claude z nagraną sesją i skryptem, który zrzuca env, argumenty i pliki joba; w trakcie joba test woła
   proxy z konfiguracji MCP sesji, tak jak zrobiłby to Claude Code.
-- **OAuth MCP**: endpointy dostawcy z `integration.yaml` i aplikacja serwera per dostawca
-  (`GATOR_<PROVIDER>_CLIENT_ID`), jak u pluginów — bez discovery i dynamicznej rejestracji klienta ze
-  specyfikacji MCP. Callback jest wspólny: stan ma `target`, a plugins dostają `Connector` (nic o MCP
-  nie wiedzą). Token odnawia się przy użyciu (2 min przed wygaśnięciem), nie w tle; tokenów OAuth nie da
-  się wkleić. Łączenie tylko dla serwerów projektu.
+- **OAuth MCP** (po review): zgodnie ze specyfikacją autoryzacji MCP — protected resource metadata
+  (RFC 9728) serwera, metadata serwera autoryzacji (RFC 8414), dynamiczna rejestracja klienta (RFC
+  7591) per serwer (klient w zaszyfrowanych sekretach), PKCE S256 i `resource` (RFC 8707). Paczka nie
+  podaje endpointów, tylko serwer autoryzacji, który musi się zgadzać z tym z metadanych (domyślnie
+  origin serwera MCP), a jego endpointy muszą leżeć na jego hoście. Aplikacja serwera per dostawca
+  (`GATOR_<PROVIDER>_CLIENT_ID`) jest używana tylko na hostach z `GATOR_<PROVIDER>_OAUTH_HOSTS`.
+  Callback jest wspólny z pluginami: stan ma `target`, a plugins dostają `Connector`. Token odnawia się
+  przy użyciu, z blokadą per serwer; tokenów i klienta OAuth nie da się wkleić. Łączenie tylko dla
+  serwerów projektu.
 - **Natywne pluginy**: tylko dla workspace'u (pluginy są workspace'owe, projekt je włącza). Build dla
   platformy serwera, pobrany (https, http do localhost albo `file://`) do pliku 0600 z liczeniem sha256,
   wykonywalny dopiero po zgodności, w `GATOR_PLUGIN_DIR/marketplace/<name>/<version>/<name>`.
@@ -331,6 +335,30 @@ GET  /projects/{projectId}/mcp-servers  PUT …/{name}  POST …/{name}/connect
   potrzebuje: `/marketplace`, `/marketplace/{kind}/{name}` (wersje, uprawnienia, README, przykładowy
   prompt, `missing`, `installed`), `/registries`, instalacje projektu i workspace'u, podgląd i
   aktualizacja, `/projects/{id}/skills`, serwery MCP (lista, ustawienia, narzędzia, wywołania, connect).
+- **Po review** (szczegóły w commitach): połączenie (plugin i MCP) zaczyna się na `/connect/start`,
+  które wiąże je z przeglądarką ciasteczkiem, a callback przyjmuje tylko tę przeglądarkę (i tę samą
+  osobę, gdy przeglądarka jest zalogowana do Gatora); paczka natywna nie zajmie nazwy pluginu, którego
+  nie zainstalowała (a nieudana instalacja sprząta wiersz i binarkę); zmiana adresu serwera MCP i
+  usunięcie jego sekretów to jeden UPDATE pod blokadą wiersza, a rozpoczęte logowania znikają; wyjście
+  serwera (MCP, OAuth, pobrania, rejestry) idzie przez `netguard` (żadnych adresów prywatnych, link-local,
+  metadata ani plain http, sprawdzane przy łączeniu; `GATOR_OUTBOUND_ALLOW_PRIVATE=1` dla sieci firmy,
+  `GATOR_MARKETPLACE_ALLOW_FILE=1` dla `file://`); narzędzia read-only dla chat to migawka z chwili
+  dopuszczenia (`read_only_tools`, z paczki `tools_read_only`), a grant jest chat, gdy chat jest job albo
+  agent; odpowiedzi serwera do 4 MiB, lista do 256 narzędzi, schemat do 16 KiB, tytuł jedna linia; koszt,
+  budżet dzienny i model zawsze są linią uprawnień; lokalne zmiany agenta to też tools, skills, policy,
+  tier i rola, a skille porzucone przez nową wersję znikają; proces ma jednego właściciela kindu i roli w
+  zakresie, a usunięcie oddaje tylko to, co wciąż jest jego; instalacja i aktualizacja podają rejestr,
+  wersję i checksum (rejestr Gatora pierwszy przy kolizji nazw), a aktualizacja jest liczona i
+  stosowana w jednej transakcji na zablokowanej instalacji, bez cichego cofania wersji; indeks ma
+  `serial` i `expires` (odrzucany replay, fork serialu i zamrożenie), paczki czytane przez `os.Root`,
+  link w ścieżce paczki odrzucany, odmowa nie podaje hasha; rejestr bez klucza tylko przez https/ssh i
+  pokazany jako `trusted: false` z linią uprawnień; adres rejestru i błąd fetcha tylko dla adminów, bez
+  poświadczeń; wywołania serwerów workspace'u czyta admin workspace'u, argumenty maskowane też po
+  kształcie sekretu, a adres MCP nie może nieść poświadczeń w query; breaker nie liczy serwera
+  niepołączonego ani anulowanego wywołania; `mcp_calls` przeżywają serwer (po nazwie), a `migrate`
+  dopuszcza brakujące 00045. Deadlock z testów: `Threads.ForTask` bierze teraz projekt i task przed
+  kanałem, posty i wątki ponawiają transakcję przy 40P01, a pakiety z konsumentami outboxu (api,
+  conversations, e2e) mają własne bazy (`storetest.Main`).
 - **Nie zrobione**: okresowe odświeżanie rejestrów; automatyczny skan paczek (sekrety, sieć w
   skryptach) przed otwarciem na społeczność; wpisy natywnych pluginów w rejestrze; OAuth discovery MCP i
   łączenie serwerów workspace'u przez OAuth; `skill read` przez REST/gator-cli (jest tylko w MCP).
