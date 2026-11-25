@@ -81,6 +81,7 @@ type installStore interface {
 	ListInstallations(ctx context.Context, projectID pgtype.UUID) ([]db.Installation, error)
 	FindInstallation(ctx context.Context, arg db.FindInstallationParams) (db.Installation, error)
 	ListSkillNamesVisibleIn(ctx context.Context, projectID pgtype.UUID) ([]string, error)
+	ListMCPServerNamesVisibleIn(ctx context.Context, projectID pgtype.UUID) ([]string, error)
 }
 
 // packages is where installing takes a package from. *Catalog is one.
@@ -301,6 +302,17 @@ func (s *Installations) missing(ctx context.Context, project pgtype.UUID, r Requ
 		for _, sk := range r.Skills {
 			if !slices.Contains(have, sk) {
 				out = append(out, "skill "+sk)
+			}
+		}
+	}
+	if len(r.MCP) > 0 {
+		have, err := s.store.ListMCPServerNamesVisibleIn(ctx, project)
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range r.MCP {
+			if !slices.Contains(have, m) {
+				out = append(out, "MCP server "+m)
 			}
 		}
 	}

@@ -1808,8 +1808,80 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SkillInfo" } } } } }
         "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers:
+    get:
+      operationId: listProjectMcpServers
+      description: "The remote MCP servers the project's agents may be given: its own, and the workspace's it does not shadow. Never a secret, only which are set."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpServer" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}:
+    get:
+      operationId: getProjectMcpServer
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putProjectMcpServer
+      description: >
+        Change the project's own server, or make one (url and auth then required; bearer or none — OAuth comes with its
+        package): its address, the tools agents may call, whether it is on, and its credentials (secrets: {token: …};
+        an empty value removes one). A new address drops the old one's credentials. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpServerSettings" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/tools:
+    get:
+      operationId: listProjectMcpServerTools
+      description: "Ask the server, with its credentials, which tools it has: which agents may call, which it marks read-only (the only ones chat agents get). For the project's admins."
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpTool" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/calls:
+    get:
+      operationId: listProjectMcpServerCalls
+      description: "Every call the project's jobs made through the proxy to this server, newest first: method, tool, arguments (secrets masked), outcome, time. For the project's admins."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/serverName" }
+        - { $ref: "#/components/parameters/listLimit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpCall" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /workspace/mcp-servers:
+    get:
+      operationId: listWorkspaceMcpServers
+      description: "The workspace's own remote MCP servers, which every project's agents may be given."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpServer" } } } } }
+  /workspace/mcp-servers/{serverName}:
+    put:
+      operationId: putWorkspaceMcpServer
+      description: "Change (or make) a workspace server, as a project's. Workspace admins only."
+      parameters: [ { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpServerSettings" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   parameters:
+    serverName: { name: serverName, in: path, required: true, schema: { type: string } }
     installationId: { name: installationId, in: path, required: true, schema: { type: string, format: uuid } }
     registryId: { name: registryId, in: path, required: true, schema: { type: string, format: uuid } }
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -3510,3 +3582,56 @@ components:
         description: { type: string }
         files: { type: array, items: { type: string } }
         source: { type: object, additionalProperties: true, description: "{kind: marketplace, registry, package, version, agent?}: agent is the agent package that brought it" }
+    McpServer:
+      type: object
+      description: "A remote MCP server agents reach through Gator's proxy (/mcp/proxy/<name>, with a job's own token); its credentials never leave the server."
+      required: [id, name, displayName, url, auth, allowedTools, enabled, connected, secretsSet, breaker, workspace, source, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: the workspace's" }
+        name: { type: string, description: "what agents' tools are named after: mcp__<name>__<tool>" }
+        displayName: { type: string }
+        url: { type: string }
+        auth: { type: string, enum: [oauth, bearer, none] }
+        allowedTools: { type: array, items: { type: string }, description: "the tools agents may call; the rest are off until an admin switches them on" }
+        enabled: { type: boolean }
+        connected: { type: boolean, description: "it has what it needs to be called: a token, or nothing at all" }
+        secretsSet: { type: array, items: { type: string }, description: "which credentials are set, never their values" }
+        breaker: { type: string, enum: [closed, open, half-open], description: "open: it failed too often lately, and is not called for a while" }
+        workspace: { type: boolean }
+        source: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    McpServerSettings:
+      type: object
+      description: fields left out stay as they are
+      properties:
+        displayName: { type: string }
+        url: { type: string, description: "https, or http to localhost" }
+        auth: { type: string, enum: [bearer, none], description: "only when making a server" }
+        allowedTools: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+        secrets: { type: object, additionalProperties: { type: string }, description: "credentials, e.g. {token: …}; an empty value removes one" }
+    McpTool:
+      type: object
+      required: [name, description, readOnly, allowed]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        readOnly: { type: boolean, description: "the server marks it read-only; only these reach chat agents" }
+        allowed: { type: boolean }
+    McpCall:
+      type: object
+      required: [id, method, tool, outcome, resultBytes, durationMs, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        jobId: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        method: { type: string, description: "tools/list or tools/call" }
+        tool: { type: string }
+        payload: { type: object, additionalProperties: true, description: "the arguments, anything that looks like a secret masked" }
+        outcome: { type: string, enum: [ok, error, denied, open], description: "denied: the allowlist refused it; open: the breaker did" }
+        error: { type: string }
+        resultBytes: { type: integer }
+        durationMs: { type: integer }
+        createdAt: { type: string, format: date-time }

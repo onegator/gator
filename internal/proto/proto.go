@@ -265,6 +265,10 @@ type Job struct {
 	// Skills are the skills the job's agent carries, each an Agent Skills folder, whole. Additive
 	// in v3: a runner that does not know them runs the job without.
 	Skills []Skill `json:"skills,omitempty"`
+	// MCP are the remote MCP servers the job's agent may reach, by name. The runner reaches each
+	// at <server>/mcp/proxy/<name> with the job's own token, and only there: no credential of a
+	// remote server is in a job, ever. Additive in v3.
+	MCP []string `json:"mcp,omitempty"`
 }
 
 // Skill is one skill of a job's agent: its SKILL.md and whatever else the folder holds

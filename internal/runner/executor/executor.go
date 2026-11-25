@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -52,13 +53,26 @@ const MCPServerName = "gator"
 // mcpServers are the MCP servers the agent reaches: Gator's, at /mcp, with the job's own identity
 // — the Brain and the agent surface, held by the server to what the job's kind may call. None
 // without an identity, so a summary (and a job of an older server) has none.
+//
+// The remote MCP servers the job's agent was given are reached through Gator's proxy, at
+// /mcp/proxy/<name>, with the same identity: the job never holds a remote server's credential.
 func (e *Executor) mcpServers(job proto.Job) []backend.MCPServer {
 	if job.AgentToken == "" || e.ServerURL == "" {
 		return nil
 	}
-	return []backend.MCPServer{{Name: MCPServerName, URL: strings.TrimRight(e.ServerURL, "/") + "/mcp",
-		Headers: map[string]string{"Authorization": "Bearer " + job.AgentToken}}}
+	base := strings.TrimRight(e.ServerURL, "/")
+	identity := map[string]string{"Authorization": "Bearer " + job.AgentToken}
+	out := []backend.MCPServer{{Name: MCPServerName, URL: base + "/mcp", Headers: identity}}
+	for _, name := range job.MCP {
+		if name == MCPServerName || !remoteName.MatchString(name) {
+			continue // a name the server never sends: not one to put in a URL or a tool's name
+		}
+		out = append(out, backend.MCPServer{Name: name, URL: base + "/mcp/proxy/" + name, Headers: identity})
+	}
+	return out
 }
+
+var remoteName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 var _ client.Executor = (*Executor)(nil)
 

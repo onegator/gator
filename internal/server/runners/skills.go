@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/server/mcpremote"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -52,6 +53,23 @@ func (s *session) skills(ctx context.Context, q *db.Queries, j db.Job, a db.Agen
 		}
 		total += size
 		out = append(out, sk)
+	}
+	return out
+}
+
+// proxied are the remote MCP servers the job's agent was given that are there and switched on:
+// the runner reaches each through Gator's proxy, with the job's own token. A summary has no agent
+// and gets none.
+func (s *session) proxied(ctx context.Context, q *db.Queries, j db.Job, a db.Agent) []string {
+	if j.Kind == KindSummary {
+		return nil
+	}
+	var out []string
+	for _, name := range mcpremote.GrantedServers(a) {
+		srv, err := q.MCPServerFor(ctx, db.MCPServerForParams{Name: name, ProjectID: j.ProjectID})
+		if err == nil && srv.Enabled {
+			out = append(out, name)
+		}
 	}
 	return out
 }

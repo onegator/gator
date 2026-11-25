@@ -35,6 +35,7 @@ import (
 	"github.com/onegator/gator/internal/server/marketplace"
 	"github.com/onegator/gator/internal/server/marketplace/marketplacetest"
 	"github.com/onegator/gator/internal/server/mcp"
+	"github.com/onegator/gator/internal/server/mcpremote"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
@@ -143,7 +144,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	s := &api.Server{Pool: pool, Process: svc, Runners: mgr, Plugins: host, Quality: scorecards, Automations: autos, Hub: hub, Log: slog.Default(),
 		Tokens: auth.Tokens{Pool: pool}, Authz: auth.Authorizer{Pool: pool}, Conversations: chat, Agents: team, Brain: knows,
 		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
-		Marketplace: market}
+		Marketplace: market,
+		Remote:      mcpremote.New(pool, mcpremote.Deps{Keys: keys, BreakerThreshold: 3, BreakerCooldown: time.Hour})}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())

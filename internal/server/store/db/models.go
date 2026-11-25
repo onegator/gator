@@ -456,6 +456,39 @@ type MarketplaceRegistry struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type McpCall struct {
+	ID          int64              `json:"id"`
+	McpServerID pgtype.UUID        `json:"mcp_server_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	JobID       pgtype.UUID        `json:"job_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	Method      string             `json:"method"`
+	Tool        string             `json:"tool"`
+	Payload     []byte             `json:"payload"`
+	Outcome     string             `json:"outcome"`
+	Error       *string            `json:"error"`
+	ResultBytes int32              `json:"result_bytes"`
+	DurationMs  int32              `json:"duration_ms"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type McpServer struct {
+	ID             pgtype.UUID        `json:"id"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	Name           string             `json:"name"`
+	DisplayName    string             `json:"display_name"`
+	Url            string             `json:"url"`
+	Auth           string             `json:"auth"`
+	Secrets        string             `json:"secrets"`
+	AllowedTools   []string           `json:"allowed_tools"`
+	Enabled        bool               `json:"enabled"`
+	Oauth          []byte             `json:"oauth"`
+	TokenExpiresAt pgtype.Timestamptz `json:"token_expires_at"`
+	Source         []byte             `json:"source"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Membership struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	UserID    pgtype.UUID `json:"user_id"`

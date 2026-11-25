@@ -2,11 +2,12 @@ package marketplace
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/onegator/gator/internal/server/mcpremote"
 )
 
 // IntegrationFile is an integration package's manifest.
@@ -20,9 +21,9 @@ const (
 
 // Auth of a remote MCP server.
 const (
-	AuthOAuth  = "oauth"
-	AuthBearer = "bearer"
-	AuthNone   = "none"
+	AuthOAuth  = mcpremote.AuthOAuth
+	AuthBearer = mcpremote.AuthBearer
+	AuthNone   = mcpremote.AuthNone
 )
 
 // IntegrationManifest is integration.yaml: a remote MCP server agents reach through Gator's
@@ -64,11 +65,7 @@ type Binary struct {
 var (
 	platformPattern = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9]+$`)
 	sha256Pattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	toolPattern     = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 )
-
-// ValidToolName says whether s can name a remote MCP tool.
-func ValidToolName(s string) bool { return toolPattern.MatchString(s) }
 
 // Integration is the integration kind.
 type Integration struct{}
@@ -133,6 +130,9 @@ func ParseIntegration(files Files) (IntegrationManifest, error) {
 }
 
 func checkMCP(im IntegrationManifest) error {
+	if !mcpremote.ValidName(im.Name) {
+		return invalid("%q cannot name a remote MCP server", im.Name)
+	}
 	if err := CheckServerURL(im.URL); err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func checkMCP(im IntegrationManifest) error {
 		return invalid("auth must be oauth, bearer or none, not %q", im.Auth)
 	}
 	for _, t := range im.ToolsDefaultAllow {
-		if !ValidToolName(t) {
+		if !mcpremote.ValidToolName(t) {
 			return invalid("%q is not a tool name", t)
 		}
 	}
@@ -186,22 +186,12 @@ func checkNative(im IntegrationManifest) error {
 	return nil
 }
 
-// CheckServerURL holds an address the server will send credentials to: https, or plain http to
-// this machine only (a server on localhost, a test).
+// CheckServerURL holds an address the server will send credentials to (see mcpremote.CheckURL).
 func CheckServerURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
-		return invalid("%q is not a server's address", raw)
+	if err := mcpremote.CheckURL(raw); err != nil {
+		return invalid("%v", err)
 	}
-	switch u.Scheme {
-	case "https":
-		return nil
-	case "http":
-		if loopback(u.Hostname()) {
-			return nil
-		}
-	}
-	return invalid("%q must be https (plain http only to localhost)", raw)
+	return nil
 }
 
 // checkDownloadURL holds where a binary comes from: https, http to localhost, or a file on the
@@ -211,14 +201,6 @@ func checkDownloadURL(raw string) error {
 		return nil
 	}
 	return CheckServerURL(raw)
-}
-
-func loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func hostOf(raw string) string {

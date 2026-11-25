@@ -30,6 +30,7 @@ import (
 	"github.com/onegator/gator/internal/server/knowledge"
 	"github.com/onegator/gator/internal/server/marketplace"
 	"github.com/onegator/gator/internal/server/mcp"
+	"github.com/onegator/gator/internal/server/mcpremote"
 	"github.com/onegator/gator/internal/server/notify"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
@@ -276,6 +277,8 @@ func serve(ctx context.Context) error {
 		Brain:  knows,
 		// Packages from registries, installed with the permissions a person accepted.
 		Marketplace: market,
+		// Remote MCP servers agents reach through the proxy; their credentials stay here.
+		Remote: mcpremote.New(db.Pool, mcpremote.Deps{Keys: keyring, Log: log}),
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),
