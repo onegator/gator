@@ -44,6 +44,9 @@ func (s *Server) SetWorkspaceProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, err := process.ParseProjectConfig(raw)
+	if err == nil {
+		err = cfg.CheckBackends()
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 		return

@@ -56,3 +56,32 @@ func TestPolicyForTurnLayersTierAndAgent(t *testing.T) {
 		t.Errorf("a phase job ignores the tiers: %+v", got)
 	}
 }
+
+// A role can run on an agent speaking ACP (acp:codex) as well as on Claude, per role, tier or
+// agent; a name no runner could advertise is refused when the configuration is written.
+func TestBackendNamesInAPolicy(t *testing.T) {
+	cfg, err := ParseProjectConfig([]byte(`{"policy":{"default":{"backend":"claude"},
+		"roles":{"worker":{"backend":"acp:codex","model":"gpt-5-codex"}},"tiers":{"chat":{"backend":"acp:gemini"}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.CheckBackends(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.PolicyFor("worker", "claude"); got.Backend != "acp:codex" || got.Model != "gpt-5-codex" {
+		t.Errorf("worker policy %+v", got)
+	}
+	if got := cfg.PolicyForTurn("reviewer", "chat", RolePolicy{}, "claude"); got.Backend != "acp:gemini" {
+		t.Errorf("chat turn %+v", got)
+	}
+	for _, bad := range []string{`{"policy":{"roles":{"worker":{"backend":"acp:"}}}}`, `{"policy":{"default":{"backend":"Claude Code"}}}`,
+		`{"autopilot":{"backend":"acp:codex:x"}}`, `{"policy":{"tiers":{"chat":{"backend":"acp:/bin/sh"}}}}`} {
+		cfg, err := ParseProjectConfig([]byte(bad))
+		if err == nil {
+			err = cfg.CheckBackends()
+		}
+		if err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}

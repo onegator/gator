@@ -17,6 +17,7 @@ import (
 
 	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/store/db"
 )
 
@@ -367,6 +368,9 @@ func policyJSON(p *Policy) ([]byte, error) {
 	}
 	if p.MaxCostUSD < 0 || p.DailyBudgetUSD < 0 {
 		return nil, fmt.Errorf("%w: a cost cap is not negative", ErrInvalid)
+	}
+	if p.Backend != "" && !process.ValidBackend(p.Backend) {
+		return nil, fmt.Errorf("%w: %q is not a backend name (claude, acp:<agent>)", ErrInvalid, p.Backend)
 	}
 	return json.Marshal(p)
 }

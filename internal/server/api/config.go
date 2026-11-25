@@ -40,6 +40,9 @@ func (s *Server) SetProjectConfig(w http.ResponseWriter, r *http.Request, projec
 		return
 	}
 	cfg, err := process.ParseProjectConfig(raw)
+	if err == nil {
+		err = cfg.CheckBackends()
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 		return

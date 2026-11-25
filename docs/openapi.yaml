@@ -2008,7 +2008,7 @@ components:
     NewJob:
       type: object
       properties:
-        backend: { type: string, description: "claude | codex | pi; defaults to the project's policy for the role" }
+        backend: { type: string, description: "claude, or acp:<agent> for an agent speaking ACP through a runner (GATOR_ACP_AGENTS); defaults to the project's policy for the role" }
         model: { type: string, description: "defaults to the policy's model when the backend is the policy's" }
         maxCostUsd: { type: number, format: double, minimum: 0, description: "cost cap for this job; defaults to the policy's" }
         instruction: { type: string }
@@ -3324,7 +3324,7 @@ components:
       type: object
       description: "The agent's own backend, model and cost cap per turn, over the project's policy for its role and tier; empty takes the project's."
       properties:
-        backend: { type: string }
+        backend: { type: string, pattern: "^[a-z][a-z0-9-]{0,31}(:[a-z][a-z0-9-]{0,31})?$", description: "claude, or acp:<agent> for an agent speaking the Agent Client Protocol through a runner (acp:codex, acp:gemini); a job waits for a runner with that backend logged in" }
         model: { type: string }
         maxCostUsd: { type: number, format: double }
         dailyBudgetUsd: { type: number, format: double, description: "what the agent may spend in a UTC day, jobs still running counted at their cap; absent: only the project's budget" }
