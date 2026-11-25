@@ -123,6 +123,23 @@ func (q *Queries) CreateRegistry(ctx context.Context, arg CreateRegistryParams) 
 	return i, err
 }
 
+const deleteBundledSkills = `-- name: DeleteBundledSkills :exec
+DELETE FROM skills s
+WHERE s.project_id IS NOT DISTINCT FROM $1::uuid AND s.source->>'agent' = $2::text
+  AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.deleted_at IS NULL AND a.project_id IS NOT DISTINCT FROM s.project_id AND a.skills ? s.name)
+`
+
+type DeleteBundledSkillsParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Agent     string      `json:"agent"`
+}
+
+// The skills an agent package brought into a scope, once no agent there carries them any more.
+func (q *Queries) DeleteBundledSkills(ctx context.Context, arg DeleteBundledSkillsParams) error {
+	_, err := q.db.Exec(ctx, deleteBundledSkills, arg.ProjectID, arg.Agent)
+	return err
+}
+
 const deleteInstallation = `-- name: DeleteInstallation :execrows
 DELETE FROM installations WHERE id = $1
 `
@@ -141,6 +158,18 @@ DELETE FROM marketplace_registries WHERE id = $1 AND NOT builtin
 
 func (q *Queries) DeleteRegistry(ctx context.Context, id pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteRegistry, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteSkill = `-- name: DeleteSkill :execrows
+DELETE FROM skills WHERE id = $1
+`
+
+func (q *Queries) DeleteSkill(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSkill, id)
 	if err != nil {
 		return 0, err
 	}
@@ -365,6 +394,32 @@ func (q *Queries) GetRegistry(ctx context.Context, id pgtype.UUID) (MarketplaceR
 		&i.FetchError,
 		&i.CreatedBy,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSkillIn = `-- name: GetSkillIn :one
+SELECT id, project_id, name, version, description, files, source, created_at, updated_at FROM skills WHERE project_id IS NOT DISTINCT FROM $1::uuid AND name = $2
+`
+
+type GetSkillInParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Name      string      `json:"name"`
+}
+
+func (q *Queries) GetSkillIn(ctx context.Context, arg GetSkillInParams) (Skill, error) {
+	row := q.db.QueryRow(ctx, getSkillIn, arg.ProjectID, arg.Name)
+	var i Skill
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Version,
+		&i.Description,
+		&i.Files,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -625,6 +680,41 @@ func (q *Queries) ListSkillNamesVisibleIn(ctx context.Context, projectID pgtype.
 	return items, nil
 }
 
+const listSkillsVisibleIn = `-- name: ListSkillsVisibleIn :many
+SELECT id, project_id, name, version, description, files, source, created_at, updated_at FROM skills WHERE project_id = $1 OR project_id IS NULL ORDER BY name, project_id IS NULL
+`
+
+// The skills a project's agents may carry: the project's own and the workspace's.
+func (q *Queries) ListSkillsVisibleIn(ctx context.Context, projectID pgtype.UUID) ([]Skill, error) {
+	rows, err := q.db.Query(ctx, listSkillsVisibleIn, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Skill
+	for rows.Next() {
+		var i Skill
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Version,
+			&i.Description,
+			&i.Files,
+			&i.Source,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setRegistryFetchError = `-- name: SetRegistryFetchError :exec
 UPDATE marketplace_registries SET fetch_error = $1 WHERE id = $2
 `
@@ -651,6 +741,49 @@ type SetRegistryFetchedParams struct {
 func (q *Queries) SetRegistryFetched(ctx context.Context, arg SetRegistryFetchedParams) error {
 	_, err := q.db.Exec(ctx, setRegistryFetched, arg.FetchError, arg.ID)
 	return err
+}
+
+const skillsNamed = `-- name: SkillsNamed :many
+SELECT DISTINCT ON (name) id, project_id, name, version, description, files, source, created_at, updated_at FROM skills
+WHERE name = ANY($1::text[]) AND (project_id = $2 OR project_id IS NULL)
+ORDER BY name, project_id IS NULL
+`
+
+type SkillsNamedParams struct {
+	Names     []string    `json:"names"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+// The skills of these names an agent of a project carries: the project's own before the
+// workspace's of the same name.
+func (q *Queries) SkillsNamed(ctx context.Context, arg SkillsNamedParams) ([]Skill, error) {
+	rows, err := q.db.Query(ctx, skillsNamed, arg.Names, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Skill
+	for rows.Next() {
+		var i Skill
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Version,
+			&i.Description,
+			&i.Files,
+			&i.Source,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const unlistItems = `-- name: UnlistItems :exec
@@ -699,4 +832,45 @@ func (q *Queries) UpsertItem(ctx context.Context, arg UpsertItemParams) error {
 		arg.Files,
 	)
 	return err
+}
+
+const upsertSkill = `-- name: UpsertSkill :one
+INSERT INTO skills (project_id, name, version, description, files, source)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (project_id, name) DO UPDATE
+SET version = EXCLUDED.version, description = EXCLUDED.description, files = EXCLUDED.files, source = EXCLUDED.source, updated_at = now()
+RETURNING id, project_id, name, version, description, files, source, created_at, updated_at
+`
+
+type UpsertSkillParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	Name        string      `json:"name"`
+	Version     string      `json:"version"`
+	Description string      `json:"description"`
+	Files       []byte      `json:"files"`
+	Source      []byte      `json:"source"`
+}
+
+func (q *Queries) UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill, error) {
+	row := q.db.QueryRow(ctx, upsertSkill,
+		arg.ProjectID,
+		arg.Name,
+		arg.Version,
+		arg.Description,
+		arg.Files,
+		arg.Source,
+	)
+	var i Skill
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Version,
+		&i.Description,
+		&i.Files,
+		&i.Source,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

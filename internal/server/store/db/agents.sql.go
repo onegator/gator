@@ -1198,8 +1198,8 @@ const updateAgent = `-- name: UpdateAgent :one
 UPDATE agents
 SET handle = $1, display_name = $2, description = $3,
     avatar = $4, role_key = $5, instructions = $6, tier = $7,
-    policy = $8, status = $9, updated_at = now()
-WHERE id = $10
+    policy = $8, status = $9, tools = $10, skills = $11, updated_at = now()
+WHERE id = $12
 RETURNING id, project_id, handle, display_name, description, avatar, role_key, instructions, tier, policy, tools, skills, status, source, created_by, created_at, updated_at, deleted_at
 `
 
@@ -1213,6 +1213,8 @@ type UpdateAgentParams struct {
 	Tier         string      `json:"tier"`
 	Policy       []byte      `json:"policy"`
 	Status       string      `json:"status"`
+	Tools        []byte      `json:"tools"`
+	Skills       []byte      `json:"skills"`
 	ID           pgtype.UUID `json:"id"`
 }
 
@@ -1227,6 +1229,8 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		arg.Tier,
 		arg.Policy,
 		arg.Status,
+		arg.Tools,
+		arg.Skills,
 		arg.ID,
 	)
 	var i Agent

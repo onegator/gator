@@ -135,9 +135,17 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 		return failed("mcp config: " + err.Error())
 	}
 	defer cleanup()
+	skills, cleanSkills, err := skillsDir(b.MCPDir, spec.Skills)
+	if err != nil {
+		return failed("skills: " + err.Error())
+	}
+	defer cleanSkills()
 	args := []string{"-p", prompt, "--output-format", "stream-json", "--verbose"}
-	args = append(args, permissionArgs(spec.Access, mcpNames(spec.MCP))...)
+	args = append(args, permissionArgs(spec.Access, mcpNames(spec.MCP), skills != "")...)
 	args = append(args, "--strict-mcp-config", "--mcp-config", mcp)
+	if skills != "" {
+		args = append(args, "--plugin-dir", skills)
+	}
 	if spec.SessionID != "" {
 		args = append(args, "--resume", spec.SessionID)
 	}

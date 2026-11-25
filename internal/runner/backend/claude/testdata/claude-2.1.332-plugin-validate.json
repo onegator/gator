@@ -1,0 +1,48 @@
+{
+  "success": true,
+  "strict": false,
+  "target": "$PLUGIN_DIR/.claude-plugin/plugin.json",
+  "manifest": {
+    "file": "$PLUGIN_DIR/.claude-plugin/plugin.json",
+    "type": "plugin",
+    "errors": [],
+    "warnings": [],
+    "notes": [],
+    "gatingHooks": [],
+    "wasm": [],
+    "modules": []
+  },
+  "contents": [],
+  "provides": {
+    "modules": [],
+    "hooks": [],
+    "mcpServers": [],
+    "lspServers": [],
+    "monitors": [],
+    "skills": [
+      "gator-skills:go-testing"
+    ],
+    "commands": [],
+    "agents": [],
+    "outputStyles": [],
+    "themes": [],
+    "workflows": [],
+    "bin": []
+  },
+  "hosts": {
+    "named": [],
+    "unread": [
+      {
+        "kind": "skills",
+        "name": "gator-skills:go-testing",
+        "reason": "process"
+      }
+    ],
+    "declared": {
+      "plugin": false,
+      "servers": []
+    }
+  },
+  "advice": [],
+  "_recorded": "claude 2.1.332: `claude plugin validate $PLUGIN_DIR --json` on the directory skillsDir writes (the directory-submission findings left out)"
+}

@@ -56,11 +56,12 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 	}
 	q := db.New(pool)
 	catalog := NewCatalog(q, deps.Fetcher, deps.Kinds, deps.Limits)
+	skills := SkillInstaller{}
 	tx := func(ctx context.Context, fn func(q *db.Queries) error) error { return store.InTx(ctx, pool, fn) }
 	return &Module{
 		Catalog: catalog,
 		Installations: NewInstallations(q, catalog, deps.Roles, deps.Capabilities, tx,
-			AgentInstaller{}),
+			NewAgentInstaller(skills), skills),
 	}
 }
 

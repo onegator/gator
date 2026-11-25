@@ -1800,6 +1800,14 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/skills:
+    get:
+      operationId: listProjectSkills
+      description: "The skills the project's agents may carry: the project's own and the workspace's (an agent carries a skill by naming it in skills)."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SkillInfo" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
 components:
   parameters:
     installationId: { name: installationId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -3169,8 +3177,8 @@ components:
         instructions: { type: string, description: "its own prompt; empty means its role's" }
         tier: { type: string, enum: [chat, work], description: "chat reads and answers with no tools that write; work changes code on a gator/ branch, where a person allowed agents on the task" }
         policy: { $ref: "#/components/schemas/AgentPolicy" }
-        tools: { type: array, items: { type: string }, description: "MCP servers and plugins (phase 4)" }
-        skills: { type: array, items: { type: string }, description: "phase 4" }
+        tools: { type: array, items: { type: string }, description: "the remote MCP servers it may call through Gator's proxy: a server's name, or server/tool" }
+        skills: { type: array, items: { type: string }, description: "the skills it carries, by name; a job of it gets them in its lease" }
         status: { type: string, enum: [active, paused], description: "a paused agent refuses turns and says so" }
         source: { type: object, additionalProperties: true, description: "{kind: builtin | custom | marketplace, …}" }
         builtin: { type: boolean, description: "one of every project's defaults: paused, never deleted" }
@@ -3210,6 +3218,8 @@ components:
         tier: { type: string, enum: [chat, work] }
         policy: { $ref: "#/components/schemas/AgentPolicy" }
         status: { type: string, enum: [active, paused] }
+        skills: { type: array, items: { type: string }, description: "the skills it carries, by name: the project's own skill of that name before the workspace's" }
+        tools: { type: array, items: { type: string }, description: "the remote MCP servers it may call through Gator's proxy: a server's name (every tool its allowlist holds) or server/tool" }
     AgentProfile:
       type: object
       required: [agent, stats]
@@ -3488,3 +3498,15 @@ components:
         error: { type: string }
         code: { type: string, description: "permissions_not_accepted | conflict" }
         permissions: { type: array, items: { type: string }, description: "with permissions_not_accepted: what is still to accept" }
+    SkillInfo:
+      type: object
+      description: "A skill: a folder in the Agent Skills format (SKILL.md, scripts/, references/, assets/). A job of an agent that carries it gets it whole; Claude Code loads it by itself, other backends read it through skill_read."
+      required: [id, name, version, description, files, source]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: every project's" }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        files: { type: array, items: { type: string } }
+        source: { type: object, additionalProperties: true, description: "{kind: marketplace, registry, package, version, agent?}: agent is the agent package that brought it" }

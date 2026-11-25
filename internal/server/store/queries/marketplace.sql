@@ -108,3 +108,33 @@ RETURNING *;
 
 -- name: ListSkillNamesVisibleIn :many
 SELECT name FROM skills WHERE project_id = sqlc.arg(project_id) OR project_id IS NULL;
+
+-- name: GetSkillIn :one
+SELECT * FROM skills WHERE project_id IS NOT DISTINCT FROM sqlc.narg(project_id)::uuid AND name = sqlc.arg(name);
+
+-- name: UpsertSkill :one
+INSERT INTO skills (project_id, name, version, description, files, source)
+VALUES (sqlc.narg(project_id), sqlc.arg(name), sqlc.arg(version), sqlc.arg(description), sqlc.arg(files), sqlc.arg(source))
+ON CONFLICT (project_id, name) DO UPDATE
+SET version = EXCLUDED.version, description = EXCLUDED.description, files = EXCLUDED.files, source = EXCLUDED.source, updated_at = now()
+RETURNING *;
+
+-- name: DeleteSkill :execrows
+DELETE FROM skills WHERE id = $1;
+
+-- name: DeleteBundledSkills :exec
+-- The skills an agent package brought into a scope, once no agent there carries them any more.
+DELETE FROM skills s
+WHERE s.project_id IS NOT DISTINCT FROM sqlc.narg(project_id)::uuid AND s.source->>'agent' = sqlc.arg(agent)::text
+  AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.deleted_at IS NULL AND a.project_id IS NOT DISTINCT FROM s.project_id AND a.skills ? s.name);
+
+-- name: ListSkillsVisibleIn :many
+-- The skills a project's agents may carry: the project's own and the workspace's.
+SELECT * FROM skills WHERE project_id = sqlc.arg(project_id) OR project_id IS NULL ORDER BY name, project_id IS NULL;
+
+-- name: SkillsNamed :many
+-- The skills of these names an agent of a project carries: the project's own before the
+-- workspace's of the same name.
+SELECT DISTINCT ON (name) * FROM skills
+WHERE name = ANY(sqlc.arg(names)::text[]) AND (project_id = sqlc.arg(project_id) OR project_id IS NULL)
+ORDER BY name, project_id IS NULL;

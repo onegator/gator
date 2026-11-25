@@ -140,3 +140,28 @@ func (s *Server) withProjectState(r *http.Request, p auth.Principal, project pgt
 		*missing = &state.Missing
 	}
 }
+
+// ListProjectSkills answers the skills the project's agents may carry.
+func (s *Server) ListProjectSkills(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	if _, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer); !ok {
+		return
+	}
+	rows, err := db.New(s.Pool).ListSkillsVisibleIn(r.Context(), fromUUID(projectId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mapAll(rows, toSkill))
+}
+
+func toSkill(sk db.Skill) gen.SkillInfo {
+	out := gen.SkillInfo{Id: toUUID(sk.ID), ProjectId: toUUIDPtr(sk.ProjectID), Name: sk.Name, Version: sk.Version,
+		Description: sk.Description, Files: []string{}, Source: map[string]any{}}
+	var files marketplace.Files
+	_ = json.Unmarshal(sk.Files, &files)
+	for _, f := range files {
+		out.Files = append(out.Files, f.Path)
+	}
+	_ = json.Unmarshal(sk.Source, &out.Source)
+	return out
+}

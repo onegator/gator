@@ -17,6 +17,12 @@ const (
 	Say            Command = "say"
 	ThreadShow     Command = "thread show"
 	TaskCreate     Command = "task create"
+	// SkillRead reads a skill the job's agent carries; for backends that do not load skills by
+	// themselves (phase 4).
+	SkillRead Command = "skill read"
+	// MCPProxy reaches the remote MCP servers the job's agent was given, through Gator's proxy,
+	// with the tools the server's allowlist and the agent's grant both hold (phase 4).
+	MCPProxy Command = "mcp proxy"
 )
 
 // Set is a set of commands.
@@ -43,8 +49,9 @@ const (
 // is not what anyone asked it for — so it talks, looks things up and proposes. A summary is a cheap
 // model reading a transcript with no identity at all.
 var (
-	phase = Of(TaskShow, TaskBlocked, Ask, ArtifactPut, ProductPropose, CatalogueShow, Knowledge, Say, ThreadShow, TaskCreate)
-	reply = Of(Say, ThreadShow, TaskCreate, Knowledge, CatalogueShow, ProductPropose)
+	phase = Of(TaskShow, TaskBlocked, Ask, ArtifactPut, ProductPropose, CatalogueShow, Knowledge, Say, ThreadShow, TaskCreate,
+		SkillRead, MCPProxy)
+	reply = Of(Say, ThreadShow, TaskCreate, Knowledge, CatalogueShow, ProductPropose, SkillRead, MCPProxy)
 )
 
 // For is what a job of kind may call; anything unknown may call nothing.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -58,6 +59,9 @@ type Draft struct {
 type Patch struct {
 	Handle, DisplayName, Description, Avatar, Instructions, Tier, Status, RoleKey *string
 	Policy                                                                        *Policy
+	// Skills are the skills it carries, by name; Tools the remote MCP servers it may call
+	// through Gator's proxy, a server's name or server/tool.
+	Skills, Tools *[]string
 }
 
 // Stats is an agent's record over a window.
@@ -150,7 +154,7 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 		return db.Agent{}, fmt.Errorf("%w: a built-in agent keeps its handle and its role; make one of your own for another", ErrInvalid)
 	}
 	next := db.UpdateAgentParams{ID: a.ID, Handle: a.Handle, DisplayName: a.DisplayName, Description: a.Description, Avatar: a.Avatar,
-		RoleKey: a.RoleKey, Instructions: a.Instructions, Tier: a.Tier, Policy: a.Policy, Status: a.Status}
+		RoleKey: a.RoleKey, Instructions: a.Instructions, Tier: a.Tier, Policy: a.Policy, Status: a.Status, Tools: a.Tools, Skills: a.Skills}
 	set := func(dst *string, src *string) {
 		if src != nil {
 			*dst = strings.TrimSpace(*src)
@@ -171,6 +175,16 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 	}
 	if in.Policy != nil {
 		if next.Policy, err = policyJSON(in.Policy); err != nil {
+			return db.Agent{}, err
+		}
+	}
+	if in.Skills != nil {
+		if next.Skills, err = namesJSON(*in.Skills, skillPattern, "a skill is named with a–z, 0–9 and '-'"); err != nil {
+			return db.Agent{}, err
+		}
+	}
+	if in.Tools != nil {
+		if next.Tools, err = namesJSON(*in.Tools, toolPattern, "a tool is an MCP server's name, or server/tool"); err != nil {
 			return db.Agent{}, err
 		}
 	}
@@ -329,6 +343,26 @@ func validate(handle, name, description, tier, status string) error {
 		return fmt.Errorf("%w: the status is active or paused", ErrInvalid)
 	}
 	return nil
+}
+
+var (
+	skillPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	toolPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}(/[A-Za-z0-9_.-]{1,128})?$`)
+)
+
+// namesJSON is a list of names, each checked, once each, as agents.skills and agents.tools keep it.
+func namesJSON(names []string, pattern *regexp.Regexp, rule string) ([]byte, error) {
+	out := []string{}
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if !pattern.MatchString(n) {
+			return nil, fmt.Errorf("%w: %s, not %q", ErrInvalid, rule, n)
+		}
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return json.Marshal(out)
 }
 
 func policyJSON(p *Policy) ([]byte, error) {

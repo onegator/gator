@@ -110,14 +110,21 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	}
 	env = append(env, signing...)
 	servers := e.mcpServers(job)
+	opening := promptFor(job, ws)
+	// Skills go to a backend that loads them by itself; any other is told of them in its prompt
+	// and reads them through Gator's skill_read.
+	skills := skillsOf(job)
+	if len(skills) > 0 && !backend.LoadsSkills(be) {
+		opening += "\n\n" + SkillsPrompt(job.Skills, len(servers) > 0)
+		skills = nil
+	}
 	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
 		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
-			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers}
+			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
 	}
 
 	var usage proto.Usage
 	var last backend.Outcome
-	opening := promptFor(job, ws)
 	prompt, session, tools := opening, "", 0
 	steers, objections := 0, 0
 	for {
