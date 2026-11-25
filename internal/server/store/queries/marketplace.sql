@@ -138,3 +138,6 @@ SELECT * FROM skills WHERE project_id = sqlc.arg(project_id) OR project_id IS NU
 SELECT DISTINCT ON (name) * FROM skills
 WHERE name = ANY(sqlc.arg(names)::text[]) AND (project_id = sqlc.arg(project_id) OR project_id IS NULL)
 ORDER BY name, project_id IS NULL;
+
+-- name: LockProjectConfig :one
+SELECT process_config FROM projects WHERE id = $1 FOR UPDATE;

@@ -715,6 +715,17 @@ func (q *Queries) ListSkillsVisibleIn(ctx context.Context, projectID pgtype.UUID
 	return items, nil
 }
 
+const lockProjectConfig = `-- name: LockProjectConfig :one
+SELECT process_config FROM projects WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockProjectConfig(ctx context.Context, id pgtype.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, lockProjectConfig, id)
+	var process_config []byte
+	err := row.Scan(&process_config)
+	return process_config, err
+}
+
 const setRegistryFetchError = `-- name: SetRegistryFetchError :exec
 UPDATE marketplace_registries SET fetch_error = $1 WHERE id = $2
 `

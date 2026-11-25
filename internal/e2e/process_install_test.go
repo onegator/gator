@@ -1,0 +1,86 @@
+package e2e
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/onegator/gator/internal/server/api/gen"
+)
+
+func (h *harness) processConfig(projectID string) map[string]any {
+	h.t.Helper()
+	var raw []byte
+	if err := h.pool.QueryRow(context.Background(), `SELECT process_config FROM projects WHERE id = $1`, projectID).Scan(&raw); err != nil {
+		h.t.Fatal(err)
+	}
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func phaseNamesOf(t gen.ProjectTemplate) []string {
+	var out []string
+	for _, p := range t.Phases {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+// A process package sets the process of one kind of task, and the prompts of the roles it
+// brings, in a project (or the workspace); the rest of the project's process stays as it was. Its
+// removal puts back what it replaced.
+func TestAProcessPackageSetsAKindsProcessAndGivesItBack(t *testing.T) {
+	h := newHarness(t)
+	h.emptyWorkspaceProcessAfterwards()
+	p := h.oneProject("proc")
+	project := p.Id.String()
+	if _, err := h.pool.Exec(context.Background(), `UPDATE projects SET process_config = $2 WHERE id = $1`, project,
+		`{"roles":{"postmortem":"Our own words."},"autopilot":{"enabled":false}}`); err != nil {
+		t.Fatal(err)
+	}
+	before := h.template(project, "incident")
+	asked := h.accept("process", "incident-postmortem", "")
+	inst := h.install(project, gen.NewInstallation{Kind: "process", Name: "incident-postmortem", AcceptedPermissions: asked})
+
+	after := h.template(project, "incident")
+	if after.Source == nil || *after.Source != "project" || len(after.Phases) != 4 || after.Phases[2].Name != "postmortem" || after.Phases[2].Role == nil || *after.Phases[2].Role != "postmortem" {
+		t.Fatalf("the incident process: %+v", after)
+	}
+	cfg := h.processConfig(project)
+	if cfg["roles"].(map[string]any)["postmortem"] == "Our own words." || cfg["autopilot"] == nil {
+		t.Fatalf("the role's prompt is the package's, the rest the project's: %v", cfg)
+	}
+	var task gen.Task
+	if code := h.do("POST", "/projects/"+project+"/tasks", gen.NewTask{Kind: "incident", Title: "down"}, &task); code != 201 || task.Phase != "implementation" {
+		t.Fatalf("an incident follows it: %d %+v", code, task)
+	}
+
+	if code := h.do("DELETE", "/installations/"+inst.Id.String(), nil, nil); code != 204 {
+		t.Fatalf("remove: %d", code)
+	}
+	back := h.template(project, "incident")
+	if *back.Source != *before.Source || len(back.Phases) != len(before.Phases) {
+		t.Fatalf("what it replaced comes back: %+v", back)
+	}
+	cfg = h.processConfig(project)
+	if cfg["roles"].(map[string]any)["postmortem"] != "Our own words." || cfg["autopilot"] == nil || cfg["templates"] != nil {
+		t.Fatalf("the project's own process is back as it was: %v", cfg)
+	}
+
+	// For the workspace: every project without its own gets it.
+	other := h.oneProject("proc2")
+	var ws gen.Installation
+	if code := h.do("POST", "/workspace/installations", gen.NewInstallation{Kind: "process", Name: "incident-postmortem", AcceptedPermissions: asked}, &ws); code != 201 {
+		t.Fatalf("workspace install: %d", code)
+	}
+	if tpl := h.template(other.Id.String(), "incident"); *tpl.Source != "workspace" || len(phaseNamesOf(tpl)) != 4 {
+		t.Fatalf("the workspace's incident process: %+v", tpl)
+	}
+	if code := h.do("DELETE", "/installations/"+ws.Id.String(), nil, nil); code != 204 {
+		t.Fatalf("remove from the workspace: %d", code)
+	}
+	if tpl := h.template(other.Id.String(), "incident"); *tpl.Source != "default" {
+		t.Fatalf("after: %+v", tpl)
+	}
+}
