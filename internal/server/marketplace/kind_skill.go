@@ -3,6 +3,8 @@ package marketplace
 import (
 	"bytes"
 	"fmt"
+	"path"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -108,15 +110,28 @@ func describeSkill(files Files) (Manifest, error) {
 	if icon, ok := files.Get("assets/icon.png"); ok {
 		m.Icon = icon.Path
 	}
-	if scripts := files.Under("scripts"); len(scripts) > 0 {
-		names := make([]string, 0, len(scripts))
-		for _, s := range scripts {
-			names = append(names, s.Path)
-		}
-		m.Permissions = append(m.Permissions, fmt.Sprintf("skill %s ships scripts an agent may run in its job: %s", sm.Name, strings.Join(names, ", ")))
+	if runnable := runnables(files); len(runnable) > 0 {
+		m.Permissions = append(m.Permissions, fmt.Sprintf("skill %s ships files an agent may run in its job: %s", sm.Name, strings.Join(runnable, ", ")))
 	}
 	if len(sm.Tools) > 0 {
 		m.Permissions = append(m.Permissions, fmt.Sprintf("skill %s asks for tools: %s", sm.Name, strings.Join(sm.Tools, ", ")))
 	}
 	return m, nil
+}
+
+// documents are what a skill carries that no agent runs: its words and its pictures.
+var documents = []string{".md", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+
+// runnables are the files of a skill an agent could run: anything not a document, wherever it
+// lies, and any file that starts like a script.
+func runnables(files Files) []string {
+	var out []string
+	for _, f := range files {
+		ext := strings.ToLower(path.Ext(f.Path))
+		if !slices.Contains(documents, ext) || bytes.HasPrefix(f.Data, []byte("#!")) {
+			out = append(out, f.Path)
+		}
+	}
+	slices.Sort(out)
+	return out
 }

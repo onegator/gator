@@ -3,10 +3,10 @@ package mcpremote
 import (
 	"fmt"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/server/netguard"
 	"github.com/onegator/gator/internal/server/secrets"
 )
@@ -18,17 +18,12 @@ const (
 	AuthNone   = "none"
 )
 
-var (
-	namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-	toolPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
-)
-
 // ValidName says whether s can name a remote server: it is part of a URL and of its tools' names
 // in a session (mcp__<name>__<tool>), and gator is Gator's own.
-func ValidName(s string) bool { return namePattern.MatchString(s) && s != "gator" }
+func ValidName(s string) bool { return names.Valid(s) && s != "gator" }
 
 // ValidToolName says whether s can name a remote tool.
-func ValidToolName(s string) bool { return toolPattern.MatchString(s) }
+func ValidToolName(s string) bool { return names.ValidTool(s) }
 
 // CheckURL holds an address the server will send credentials to: https, or plain http to this
 // machine where the policy allows private addresses (development, tests). Which addresses a name

@@ -43,7 +43,7 @@ func TestASignedRegistryReadsWhole(t *testing.T) {
 		t.Fatalf("manifest: %+v", m)
 	}
 	for _, want := range []string{"reads CI logs", "writes code on gator/* branches", "needs the capability ci",
-		"spends up to $3.00 a turn", "proposes an automation on pull_request", "skill e2e-playwright ships scripts"} {
+		"spends up to $3.00 a turn", "proposes an automation on pull_request", "skill e2e-playwright ships files an agent may run in its job: scripts/run.sh"} {
 		if !containsPrefix(m.Permissions, want) {
 			t.Errorf("permissions lack %q: %v", want, m.Permissions)
 		}
@@ -307,5 +307,18 @@ func TestALinkedPackageRootIsRefused(t *testing.T) {
 		if strings.Contains(rej.Reason, "sha256:") {
 			t.Fatalf("a refusal names a hash: %s", rej.Reason)
 		}
+	}
+}
+
+// A skill's permission names every file an agent could run, not only what lies under scripts/.
+func TestASkillNamesEveryFileAnAgentCouldRun(t *testing.T) {
+	files := filesOf(map[string]string{"SKILL.md": marketplacetest.GoTesting["SKILL.md"], "tool.py": "print(1)", "bin/x": "#!/bin/sh\n",
+		"references/notes.md": "words", "data.txt": "#!/bin/sh\nrm -rf /\n", "assets/icon.png": "png"})
+	m, err := (marketplace.Skill{}).Describe(marketplace.Item{}, files)
+	if err != nil || !containsPrefix(m.Permissions, "skill go-testing ships files an agent may run in its job: bin/x, data.txt, tool.py") {
+		t.Fatalf("%v %v", err, m.Permissions)
+	}
+	if _, err := marketplace.PublicKeyOf("no-prefix"); err == nil {
+		t.Fatal("a private key without its prefix")
 	}
 }

@@ -9,10 +9,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/backend"
 	"github.com/onegator/gator/internal/runner/client"
@@ -64,15 +64,13 @@ func (e *Executor) mcpServers(job proto.Job) []backend.MCPServer {
 	identity := map[string]string{"Authorization": "Bearer " + job.AgentToken}
 	out := []backend.MCPServer{{Name: MCPServerName, URL: base + "/mcp", Headers: identity}}
 	for _, name := range job.MCP {
-		if name == MCPServerName || !remoteName.MatchString(name) {
+		if name == MCPServerName || !names.Valid(name) {
 			continue // a name the server never sends: not one to put in a URL or a tool's name
 		}
 		out = append(out, backend.MCPServer{Name: name, URL: base + "/mcp/proxy/" + name, Headers: identity})
 	}
 	return out
 }
-
-var remoteName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 var _ client.Executor = (*Executor)(nil)
 

@@ -142,7 +142,10 @@ func Sign(private string, index []byte) ([]byte, error) {
 // PublicKeyOf answers the public key of a private key, for a maintainer checking they hold the
 // key the server expects.
 func PublicKeyOf(private string) (string, error) {
-	b64, _ := strings.CutPrefix(strings.TrimSpace(private), privateKeyPrefix)
+	b64, ok := strings.CutPrefix(strings.TrimSpace(private), privateKeyPrefix)
+	if !ok {
+		return "", invalid("a private key is %q followed by base64", privateKeyPrefix)
+	}
 	seed, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil || len(seed) != ed25519.SeedSize {
 		return "", invalid("a private key is %d bytes of base64", ed25519.SeedSize)

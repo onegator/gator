@@ -8,9 +8,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/runner/backend"
 )
 
@@ -26,8 +26,6 @@ const skillsPlugin = "gator-skills"
 
 // LoadsSkills implements backend.SkillLoader.
 func (Backend) LoadsSkills() bool { return true }
-
-var skillName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // skillsDir writes the job's skills as a plugin under dir (the runner's 0700 directory) and
 // answers where it is. A file whose path would leave its skill's folder refuses the whole run:
@@ -55,7 +53,7 @@ func skillsDir(dir string, skills []backend.Skill) (string, func(), error) {
 		return "", nothing, err
 	}
 	for _, sk := range skills {
-		if !skillName.MatchString(sk.Name) {
+		if !names.Valid(sk.Name) {
 			cleanup()
 			return "", nothing, fmt.Errorf("skill %q is not a name", sk.Name)
 		}

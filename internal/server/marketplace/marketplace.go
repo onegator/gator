@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/onegator/gator/internal/names"
 )
 
 // Kinds of package.
@@ -48,10 +50,8 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
-var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-
 // ValidName says whether s can name a package or a registry.
-func ValidName(s string) bool { return namePattern.MatchString(s) }
+func ValidName(s string) bool { return names.Valid(s) }
 
 var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
 

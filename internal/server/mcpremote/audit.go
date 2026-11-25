@@ -86,21 +86,13 @@ func outcomeOf(err error, res *sdk.CallToolResult) string {
 	return OutcomeOK
 }
 
-// audited is an Upstream that writes every call down, whatever became of it.
+// audited is an Upstream that writes every call down, whatever became of it. A tools/list is
+// written down where it is answered (the proxy's auditList), from the cache or not.
 type audited struct {
 	Upstream
 	rec   Recorder
 	grant Grant
 	now   func() time.Time
-}
-
-func (u audited) ListTools(ctx context.Context) ([]*sdk.Tool, error) {
-	start := u.now()
-	tools, err := u.Upstream.ListTools(ctx)
-	b, _ := json.Marshal(tools)
-	u.rec.Record(ctx, Call{Grant: u.grant, Method: "tools/list", Outcome: outcomeOf(err, nil), Err: errText(err), Bytes: len(b),
-		Duration: u.now().Sub(start)})
-	return tools, err
 }
 
 func (u audited) CallTool(ctx context.Context, name string, args json.RawMessage) (*sdk.CallToolResult, error) {

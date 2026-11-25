@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -179,12 +180,12 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 		}
 	}
 	if in.Skills != nil {
-		if next.Skills, err = namesJSON(*in.Skills, skillPattern, "a skill is named with a–z, 0–9 and '-'"); err != nil {
+		if next.Skills, err = namesJSON(*in.Skills, names.Valid, "a skill is named with a–z, 0–9 and '-'"); err != nil {
 			return db.Agent{}, err
 		}
 	}
 	if in.Tools != nil {
-		if next.Tools, err = namesJSON(*in.Tools, toolPattern, "a tool is an MCP server's name, or server/tool"); err != nil {
+		if next.Tools, err = namesJSON(*in.Tools, names.ValidGrant, "a tool is an MCP server's name, or server/tool"); err != nil {
 			return db.Agent{}, err
 		}
 	}
@@ -345,17 +346,12 @@ func validate(handle, name, description, tier, status string) error {
 	return nil
 }
 
-var (
-	skillPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-	toolPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}(/[A-Za-z0-9_.-]{1,128})?$`)
-)
-
 // namesJSON is a list of names, each checked, once each, as agents.skills and agents.tools keep it.
-func namesJSON(names []string, pattern *regexp.Regexp, rule string) ([]byte, error) {
+func namesJSON(list []string, valid func(string) bool, rule string) ([]byte, error) {
 	out := []string{}
-	for _, n := range names {
+	for _, n := range list {
 		n = strings.TrimSpace(n)
-		if !pattern.MatchString(n) {
+		if !valid(n) {
 			return nil, fmt.Errorf("%w: %s, not %q", ErrInvalid, rule, n)
 		}
 		if !slices.Contains(out, n) {
