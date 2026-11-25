@@ -1362,3 +1362,27 @@ func TestSearchHitsCarryTheCallersStanding(t *testing.T) {
 		t.Errorf("viewer: joined %v unread %d", v.Joined, v.Unread)
 	}
 }
+
+// The conversation's detail says how many unread messages mention the caller, as its list does.
+func TestDetailCountsUnreadMentions(t *testing.T) {
+	h := newHarness(t)
+	c := h.crew("mentions")
+	ch := h.channel(c.admin, c.project.Id.String(), "pings", "").Id.String()
+	h.as(c.member, func() { h.do("POST", "/conversations/"+ch+"/read", gen.ReadMarker{Seq: 0}, nil) })
+	h.post(c.admin, ch, gen.NewMessage{Body: ptr("@member look"), Mentions: &[]gen.MemberRef{{Kind: gen.MemberRefKindUser, Id: mustOpenUUID(t, c.memberID)}}})
+	var list []gen.Conversation
+	var detail gen.ConversationDetail
+	h.as(c.member, func() {
+		h.do("GET", "/projects/"+c.project.Id.String()+"/conversations", nil, &list)
+		h.do("GET", "/conversations/"+ch, nil, &detail)
+	})
+	listed := int64(-1)
+	for _, x := range list {
+		if x.Id.String() == ch {
+			listed = x.UnreadMentions
+		}
+	}
+	if listed != 1 || detail.UnreadMentions != listed {
+		t.Errorf("list says %d, detail says %d", listed, detail.UnreadMentions)
+	}
+}

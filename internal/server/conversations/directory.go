@@ -35,8 +35,10 @@ type Detail struct {
 	Conversation db.Conversation
 	Members      []db.ListConversationMembersRow
 	Rights       Rights
-	// Me is the caller's own membership, when they are in it.
-	Me *db.ListConversationMembersRow
+	// Me is the caller's own membership, when they are in it, and UnreadMentions the messages after
+	// what they read that mention them.
+	Me             *db.ListConversationMembersRow
+	UnreadMentions int64
 }
 
 // Listed is one row of a conversation list, with the caller's unread counts.
@@ -292,6 +294,16 @@ func (d *Directory) detail(ctx context.Context, conv db.Conversation, rights Rig
 		for i := range members {
 			if members[i].MemberKind == me.Kind && members[i].MemberID == me.ID {
 				out.Me = &members[i]
+			}
+		}
+		if out.Me != nil {
+			// The same count the conversation list and search give.
+			rows, err := db.New(d.pool).ListMembershipsIn(ctx, db.ListMembershipsInParams{UserID: me.ID, ConversationIds: []pgtype.UUID{conv.ID}})
+			if err != nil {
+				return Detail{}, err
+			}
+			for _, r := range rows {
+				out.UnreadMentions = r.UnreadMentions
 			}
 		}
 	}

@@ -31,7 +31,7 @@ func toConversation(l conversations.Listed) gen.Conversation {
 func toConversationDetail(d conversations.Detail) gen.ConversationDetail {
 	l := conversations.Listed{Conversation: d.Conversation}
 	if d.Me != nil {
-		l.Joined, l.LastReadSeq, l.Notify = true, d.Me.LastReadSeq, d.Me.Notify
+		l.Joined, l.LastReadSeq, l.Notify, l.UnreadMentions = true, d.Me.LastReadSeq, d.Me.Notify, d.UnreadMentions
 		if d.Conversation.LastSeq > d.Me.LastReadSeq {
 			l.Unread = d.Conversation.LastSeq - d.Me.LastReadSeq
 		}
