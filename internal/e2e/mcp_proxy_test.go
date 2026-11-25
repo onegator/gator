@@ -512,3 +512,25 @@ func TestAServerNotConnectedDoesNotTripItsBreaker(t *testing.T) {
 		t.Fatalf("breaker %s, the server was called %d times", srv.Breaker, s.fake.hits.Load()-before)
 	}
 }
+
+// A job reaches only the servers of its own project (and the workspace's): an agent in A given the
+// name of a server B has reaches nothing.
+func TestAJobReachesNoOtherProjectsServer(t *testing.T) {
+	h := newHarness(t)
+	s := h.remoteSetup() // project B, with issues-mcp
+	a := h.oneProject("other")
+	b := "only-in-b"
+	h.do("PUT", "/projects/"+s.project+"/mcp-servers/"+b, gen.McpServerSettings{Url: ptr(s.fake.URL + "/mcp"), Auth: ptr(gen.McpServerSettingsAuthBearer),
+		AllowedTools: &[]string{"search_issues"}, Secrets: &map[string]string{"token": s.secret}}, nil)
+	reviewer := h.agentID(a.Id.String(), "reviewer")
+	h.do("PATCH", "/agents/"+reviewer.String(), gen.AgentPatch{Tools: &[]string{b, "issues-mcp"}}, nil)
+	turn := h.turnOf(h.say(a.Id.String(), h.generalOf(a.Id.String()).Id.String(), "@reviewer look", "reviewer"), a.Id.String(), "reviewer")
+	for _, name := range []string{b, "issues-mcp"} {
+		if _, err := h.proxySession(h.srv.URL+"/mcp/proxy/"+name, map[string]string{"Authorization": "Bearer " + h.identity(*turn.Job, a.Id.String())}); err == nil {
+			t.Fatalf("a job in A reached B's %s", name)
+		}
+	}
+	if n := h.count(`SELECT count(*) FROM mcp_calls WHERE job_id = $1`, *turn.Job); n != 0 {
+		t.Fatalf("calls: %d", n)
+	}
+}

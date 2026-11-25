@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// maxDiffLines bounds what is compared line by line; past it, a diff says only that the texts
-// differ.
-const maxDiffLines = 2000
+// maxDiffCells bounds the comparison table (lines of one text times lines of the other, a few
+// megabytes at most); past it, a diff says only that the texts differ.
+const maxDiffCells = 250_000
 
 // Diff is a unified diff of two texts, line by line: what a person changed of an installed agent's
 // instructions, or what a new version would change. Empty when they are the same.
@@ -16,7 +16,7 @@ func Diff(from, to, fromName, toName string) string {
 		return ""
 	}
 	a, b := lines(from), lines(to)
-	if len(a) > maxDiffLines || len(b) > maxDiffLines {
+	if (len(a)+1)*(len(b)+1) > maxDiffCells {
 		return fmt.Sprintf("--- %s\n+++ %s\n(the texts differ; they are too long to compare line by line)\n", fromName, toName)
 	}
 	// The longest common subsequence, then a walk that writes it out.

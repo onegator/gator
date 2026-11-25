@@ -1,6 +1,9 @@
 package marketplace
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDiffIsLineByLine(t *testing.T) {
 	got := Diff("a\nb\nc\n", "a\nB\nc\nd\n", "old", "new")
@@ -13,5 +16,12 @@ func TestDiffIsLineByLine(t *testing.T) {
 	}
 	if !same(`{"a":1,"b":[2]}`, `{"b": [2], "a": 1}`) || same("x", "y") || !same("x\n", "x") {
 		t.Fatal("same")
+	}
+}
+
+func TestALongDiffIsBounded(t *testing.T) {
+	long := strings.Repeat("line\n", 1000)
+	if d := Diff(long, long+"more\n", "a", "b"); !strings.Contains(d, "too long to compare") {
+		t.Fatal(d)
 	}
 }
