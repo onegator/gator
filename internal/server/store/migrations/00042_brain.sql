@@ -57,7 +57,8 @@ CREATE TABLE brain_entries (
 -- a vector in every read of an entry.
 CREATE INDEX brain_tsv_idx ON brain_entries USING gin (to_tsvector('simple', title || ' ' || content));
 CREATE INDEX brain_scope_idx ON brain_entries (project_id, scope, kind, status);
-CREATE INDEX brain_lineage_idx ON brain_entries (lineage, version);
+-- One version number per lineage: two edits never both become version 3.
+CREATE UNIQUE INDEX brain_lineage_idx ON brain_entries (lineage, version);
 CREATE INDEX brain_user_idx ON brain_entries (user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX brain_task_idx ON brain_entries (source_task_id) WHERE source_task_id IS NOT NULL;
 -- One version number per entry, as product_context had per (project, kind, title). Conventions

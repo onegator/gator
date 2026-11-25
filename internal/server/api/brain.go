@@ -47,6 +47,8 @@ func (s *Server) failBrain(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not found", "not_found")
 	case errors.Is(err, brain.ErrForbidden):
 		writeError(w, http.StatusForbidden, "you may not write that here", "forbidden")
+	case errors.Is(err, brain.ErrConflict):
+		writeError(w, http.StatusConflict, "somebody changed this entry at the same moment; read it again and retry", "conflict")
 	case brain.IsInvalid(err):
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid")
 	default:

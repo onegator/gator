@@ -35,26 +35,39 @@ SELECT * FROM brain_entries WHERE lineage = $1 ORDER BY version DESC LIMIT 1;
 SELECT * FROM brain_entries WHERE lineage = $1 ORDER BY version DESC;
 
 -- name: SetBrainStatus :one
+-- Approving keeps when an entry was first approved and by whom, so its history does not move, and
+-- makes it true again (an entry archived and approved again holds from then on).
 UPDATE brain_entries SET status = sqlc.arg(status),
-    approved_by = CASE WHEN sqlc.arg(status)::text = 'approved' THEN sqlc.narg(approved_by)::uuid ELSE approved_by END,
-    approved_at = CASE WHEN sqlc.arg(status)::text = 'approved' THEN now() ELSE approved_at END,
-    valid_from  = CASE WHEN sqlc.arg(status)::text = 'approved' THEN now() ELSE valid_from END,
-    valid_until = CASE WHEN sqlc.arg(status)::text IN ('superseded', 'archived') THEN coalesce(valid_until, now()) ELSE valid_until END,
+    approved_by = CASE WHEN sqlc.arg(status)::text = 'approved' THEN coalesce(approved_by, sqlc.narg(approved_by)::uuid) ELSE approved_by END,
+    valid_from  = CASE WHEN sqlc.arg(status)::text = 'approved' AND approved_at IS NULL THEN now() ELSE valid_from END,
+    approved_at = CASE WHEN sqlc.arg(status)::text = 'approved' THEN coalesce(approved_at, now()) ELSE approved_at END,
+    valid_until = CASE WHEN sqlc.arg(status)::text IN ('superseded', 'archived') THEN coalesce(valid_until, now())
+                       WHEN sqlc.arg(status)::text = 'approved' THEN NULL ELSE valid_until END,
     updated_at = now()
 WHERE id = sqlc.arg(id) RETURNING *;
 
 -- name: SupersedeOtherVersions :execrows
--- Once a version is approved, the versions before it stop being true from now on. They stay, so
--- "what did we know in March" has an answer.
-UPDATE brain_entries SET status = 'superseded', valid_until = now(), updated_at = now()
-WHERE lineage = sqlc.arg(lineage) AND id <> sqlc.arg(id) AND status = 'approved';
+-- Once a version is approved, the versions before it stop being true from now on, and the
+-- proposals older than it are stale. They stay, so "what did we know in March" has an answer. A
+-- newer version is never touched.
+UPDATE brain_entries SET status = 'superseded', valid_until = coalesce(valid_until, now()), updated_at = now()
+WHERE lineage = sqlc.arg(lineage) AND version < sqlc.arg(version)::integer AND status IN ('approved', 'proposed');
+
+-- name: NewestApprovedVersion :one
+-- The newest version of a lineage that is approved, 0 for none.
+SELECT coalesce(max(version), 0)::integer FROM brain_entries WHERE lineage = $1 AND status = 'approved';
+
+-- name: LockLineage :exec
+-- Takes every version of a lineage, in order, for one writer at a time: two edits do not both
+-- become the next version, and two approvals do not wait on each other.
+SELECT id FROM brain_entries WHERE lineage = $1 ORDER BY version FOR UPDATE;
 
 -- name: SupersedeBrainEntry :one
 UPDATE brain_entries SET status = 'superseded', valid_until = now(), updated_at = now()
 WHERE id = $1 AND status = 'approved' RETURNING *;
 
 -- name: ArchiveBrainEntries :execrows
-UPDATE brain_entries SET archived_at = now(), updated_at = now()
+UPDATE brain_entries SET archived_at = now(), valid_until = coalesce(valid_until, now()), updated_at = now()
 WHERE id = ANY(sqlc.arg(ids)::uuid[]) AND archived_at IS NULL;
 
 -- name: DeleteBrainEntry :execrows
@@ -71,7 +84,8 @@ WHERE (sqlc.arg(query)::text = '' OR to_tsvector('simple', e.title || ' ' || e.c
   AND (cardinality(sqlc.arg(kinds)::text[]) = 0 OR e.kind = ANY(sqlc.arg(kinds)::text[]))
   AND (cardinality(sqlc.arg(statuses)::text[]) = 0 OR e.status = ANY(sqlc.arg(statuses)::text[]))
   AND (sqlc.narg(project_id)::uuid IS NULL OR e.project_id = sqlc.narg(project_id)::uuid OR e.project_id IS NULL)
-  AND (sqlc.arg(include_archived)::boolean OR e.archived_at IS NULL)
+  -- What held at a moment includes what was folded into a condensate later.
+  AND (sqlc.arg(include_archived)::boolean OR sqlc.narg(at)::timestamptz IS NOT NULL OR e.archived_at IS NULL)
   -- What held at a moment: approved by then, and not yet replaced or archived.
   AND (sqlc.narg(at)::timestamptz IS NULL OR (e.status IN ('approved', 'superseded', 'archived')
        AND e.approved_at <= sqlc.narg(at)::timestamptz AND e.valid_from <= sqlc.narg(at)::timestamptz

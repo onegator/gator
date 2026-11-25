@@ -99,6 +99,8 @@ const (
 var (
 	ErrNotFound  = errors.New("not found")
 	ErrForbidden = errors.New("forbidden")
+	// ErrConflict is somebody else changing the same entry at the same moment: try again.
+	ErrConflict = errors.New("conflict")
 )
 
 // InvalidError is input the Brain refuses, with a sentence a person can act on.

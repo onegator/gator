@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pressly/goose/v3"
@@ -104,6 +105,23 @@ func TestBrainMigrationsRoundTrip(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT supersedes::text FROM brain_entries WHERE id = '00000000-0000-0000-0000-00000000c002'`).Scan(&supersedes); err != nil || supersedes != "00000000-0000-0000-0000-00000000c001" {
 		t.Fatalf("the second version follows the first: %s %v", supersedes, err)
 	}
+	// One version of a lineage is true at a time: the first version of the vision stopped being
+	// true when the second was approved, and the views still show it approved, as before.
+	trueVersions := func(round string) {
+		t.Helper()
+		var many int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT lineage FROM brain_entries WHERE status = 'approved' AND valid_until IS NULL
+			GROUP BY lineage HAVING count(*) > 1) x`).Scan(&many); err != nil || many != 0 {
+			t.Fatalf("%s: %d lineages have more than one true version (%v)", round, many, err)
+		}
+		var status string
+		var until time.Time
+		if err := pool.QueryRow(ctx, `SELECT status, valid_until FROM brain_entries WHERE id = '00000000-0000-0000-0000-00000000c001'`).Scan(&status, &until); err != nil ||
+			status != "superseded" || !until.Equal(time.Date(2026, 2, 2, 10, 0, 0, 0, time.UTC)) {
+			t.Fatalf("%s: the first version: %s until %v (%v)", round, status, until, err)
+		}
+	}
+	trueVersions("first up")
 	// The old tables are kept, as they were.
 	var kept int
 	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM product_context_legacy) + (SELECT count(*) FROM knowledge_entries_legacy)`).Scan(&kept); err != nil || kept != 9 {
@@ -123,6 +141,7 @@ func TestBrainMigrationsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	same("second up")
+	trueVersions("second up")
 
 	// Under the Brain, the old names still write: a new version through the view is the next
 	// version of its lineage, and goes back with everything else.

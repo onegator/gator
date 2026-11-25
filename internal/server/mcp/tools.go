@@ -61,6 +61,8 @@ func plain(err error) error {
 		return errors.New("not found")
 	case errors.Is(err, brain.ErrForbidden):
 		return errors.New("not allowed here")
+	case errors.Is(err, brain.ErrConflict):
+		return errors.New("somebody changed this entry at the same moment; try again")
 	case brain.IsInvalid(err), errors.As(err, new(refusal)):
 		return err
 	}

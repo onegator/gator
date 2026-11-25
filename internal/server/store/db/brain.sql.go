@@ -65,7 +65,7 @@ func (q *Queries) ActiveTasksOf(ctx context.Context, arg ActiveTasksOfParams) ([
 }
 
 const archiveBrainEntries = `-- name: ArchiveBrainEntries :execrows
-UPDATE brain_entries SET archived_at = now(), updated_at = now()
+UPDATE brain_entries SET archived_at = now(), valid_until = coalesce(valid_until, now()), updated_at = now()
 WHERE id = ANY($1::uuid[]) AND archived_at IS NULL
 `
 
@@ -1282,6 +1282,17 @@ func (q *Queries) LiveEntriesOfKind(ctx context.Context, arg LiveEntriesOfKindPa
 	return items, nil
 }
 
+const lockLineage = `-- name: LockLineage :exec
+SELECT id FROM brain_entries WHERE lineage = $1 ORDER BY version FOR UPDATE
+`
+
+// Takes every version of a lineage, in order, for one writer at a time: two edits do not both
+// become the next version, and two approvals do not wait on each other.
+func (q *Queries) LockLineage(ctx context.Context, lineage pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockLineage, lineage)
+	return err
+}
+
 const messageAtSeq = `-- name: MessageAtSeq :one
 SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE conversation_id = $1 AND seq = $2
 `
@@ -1334,6 +1345,18 @@ type NarrowLineageVisibilityParams struct {
 func (q *Queries) NarrowLineageVisibility(ctx context.Context, arg NarrowLineageVisibilityParams) error {
 	_, err := q.db.Exec(ctx, narrowLineageVisibility, arg.Visibility, arg.Lineage)
 	return err
+}
+
+const newestApprovedVersion = `-- name: NewestApprovedVersion :one
+SELECT coalesce(max(version), 0)::integer FROM brain_entries WHERE lineage = $1 AND status = 'approved'
+`
+
+// The newest version of a lineage that is approved, 0 for none.
+func (q *Queries) NewestApprovedVersion(ctx context.Context, lineage pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, newestApprovedVersion, lineage)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const peopleActiveSince = `-- name: PeopleActiveSince :many
@@ -1419,7 +1442,8 @@ WHERE ($1::text = '' OR to_tsvector('simple', e.title || ' ' || e.content) @@ we
   AND (cardinality($3::text[]) = 0 OR e.kind = ANY($3::text[]))
   AND (cardinality($4::text[]) = 0 OR e.status = ANY($4::text[]))
   AND ($5::uuid IS NULL OR e.project_id = $5::uuid OR e.project_id IS NULL)
-  AND ($6::boolean OR e.archived_at IS NULL)
+  -- What held at a moment includes what was folded into a condensate later.
+  AND ($6::boolean OR $7::timestamptz IS NOT NULL OR e.archived_at IS NULL)
   -- What held at a moment: approved by then, and not yet replaced or archived.
   AND ($7::timestamptz IS NULL OR (e.status IN ('approved', 'superseded', 'archived')
        AND e.approved_at <= $7::timestamptz AND e.valid_from <= $7::timestamptz
@@ -1520,10 +1544,11 @@ func (q *Queries) SearchBrain(ctx context.Context, arg SearchBrainParams) ([]Sea
 
 const setBrainStatus = `-- name: SetBrainStatus :one
 UPDATE brain_entries SET status = $1,
-    approved_by = CASE WHEN $1::text = 'approved' THEN $2::uuid ELSE approved_by END,
-    approved_at = CASE WHEN $1::text = 'approved' THEN now() ELSE approved_at END,
-    valid_from  = CASE WHEN $1::text = 'approved' THEN now() ELSE valid_from END,
-    valid_until = CASE WHEN $1::text IN ('superseded', 'archived') THEN coalesce(valid_until, now()) ELSE valid_until END,
+    approved_by = CASE WHEN $1::text = 'approved' THEN coalesce(approved_by, $2::uuid) ELSE approved_by END,
+    valid_from  = CASE WHEN $1::text = 'approved' AND approved_at IS NULL THEN now() ELSE valid_from END,
+    approved_at = CASE WHEN $1::text = 'approved' THEN coalesce(approved_at, now()) ELSE approved_at END,
+    valid_until = CASE WHEN $1::text IN ('superseded', 'archived') THEN coalesce(valid_until, now())
+                       WHEN $1::text = 'approved' THEN NULL ELSE valid_until END,
     updated_at = now()
 WHERE id = $3 RETURNING id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at
 `
@@ -1534,6 +1559,8 @@ type SetBrainStatusParams struct {
 	ID         pgtype.UUID `json:"id"`
 }
 
+// Approving keeps when an entry was first approved and by whom, so its history does not move, and
+// makes it true again (an entry archived and approved again holds from then on).
 func (q *Queries) SetBrainStatus(ctx context.Context, arg SetBrainStatusParams) (BrainEntry, error) {
 	row := q.db.QueryRow(ctx, setBrainStatus, arg.Status, arg.ApprovedBy, arg.ID)
 	var i BrainEntry
@@ -1698,19 +1725,20 @@ func (q *Queries) SupersedeBrainEntry(ctx context.Context, id pgtype.UUID) (Brai
 }
 
 const supersedeOtherVersions = `-- name: SupersedeOtherVersions :execrows
-UPDATE brain_entries SET status = 'superseded', valid_until = now(), updated_at = now()
-WHERE lineage = $1 AND id <> $2 AND status = 'approved'
+UPDATE brain_entries SET status = 'superseded', valid_until = coalesce(valid_until, now()), updated_at = now()
+WHERE lineage = $1 AND version < $2::integer AND status IN ('approved', 'proposed')
 `
 
 type SupersedeOtherVersionsParams struct {
 	Lineage pgtype.UUID `json:"lineage"`
-	ID      pgtype.UUID `json:"id"`
+	Version int32       `json:"version"`
 }
 
-// Once a version is approved, the versions before it stop being true from now on. They stay, so
-// "what did we know in March" has an answer.
+// Once a version is approved, the versions before it stop being true from now on, and the
+// proposals older than it are stale. They stay, so "what did we know in March" has an answer. A
+// newer version is never touched.
 func (q *Queries) SupersedeOtherVersions(ctx context.Context, arg SupersedeOtherVersionsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, supersedeOtherVersions, arg.Lineage, arg.ID)
+	result, err := q.db.Exec(ctx, supersedeOtherVersions, arg.Lineage, arg.Version)
 	if err != nil {
 		return 0, err
 	}

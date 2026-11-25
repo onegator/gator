@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -36,6 +37,8 @@ type Store interface {
 	DeleteUserBrain(ctx context.Context, userID pgtype.UUID) (int64, error)
 	StaleBrainEntries(ctx context.Context, arg db.StaleBrainEntriesParams) ([]db.BrainEntry, error)
 	NarrowLineageVisibility(ctx context.Context, arg db.NarrowLineageVisibilityParams) error
+	NewestApprovedVersion(ctx context.Context, lineage pgtype.UUID) (int32, error)
+	LockLineage(ctx context.Context, lineage pgtype.UUID) error
 	targetStore
 }
 
@@ -274,6 +277,18 @@ func (s *Service) decide(ctx context.Context, e db.BrainEntry, verdict string, b
 	}
 	var out db.BrainEntry
 	err := s.tx(ctx, func(st Store) error {
+		if err := st.LockLineage(ctx, e.Lineage); err != nil {
+			return err
+		}
+		if status == StatusApproved {
+			newest, err := st.NewestApprovedVersion(ctx, e.Lineage)
+			if err != nil {
+				return err
+			}
+			if newest > e.Version {
+				return invalid("version %d is approved already; revise that one rather than approve an older one", newest)
+			}
+		}
 		var err error
 		out, err = st.SetBrainStatus(ctx, db.SetBrainStatusParams{ID: e.ID, Status: status, ApprovedBy: by})
 		if err != nil {
@@ -286,7 +301,7 @@ func (s *Service) decide(ctx context.Context, e db.BrainEntry, verdict string, b
 		}
 		return emit(ctx, st, "brain."+status, out)
 	})
-	return out, err
+	return out, conflict(err)
 }
 
 // Detail is one entry as a person reads it: every version, what it links to, where it was used.
@@ -455,22 +470,31 @@ func (s *Service) put(ctx context.Context, tx Tx, d Draft, by Author, status str
 		}
 		return emit(ctx, st, "brain."+status, out)
 	})
-	return out, err
+	return out, conflict(err)
 }
 
 // previous is the version d follows, if any.
 func (s *Service) previous(ctx context.Context, st Store, d Draft, lineage pgtype.UUID) (db.BrainEntry, bool, error) {
 	var prev db.BrainEntry
-	var err error
-	switch {
-	case lineage.Valid:
-		prev, err = st.LatestBrainVersion(ctx, lineage)
-	case d.Topic == "":
-		prev, err = st.LatestBrainVersionByTitle(ctx, db.LatestBrainVersionByTitleParams{Scope: d.Scope, ProjectID: d.Project,
+	if !lineage.Valid {
+		if d.Topic != "" {
+			return prev, false, nil // a convention is not versioned by its title
+		}
+		byTitle, err := st.LatestBrainVersionByTitle(ctx, db.LatestBrainVersionByTitleParams{Scope: d.Scope, ProjectID: d.Project,
 			ComponentKey: optional(d.Component), UserID: d.User, AgentID: d.Agent, Kind: d.Kind, Title: d.Title})
-	default:
-		return prev, false, nil
+		if errors.Is(err, pgx.ErrNoRows) {
+			return prev, false, nil // two writers of a first version meet at the unique title index
+		}
+		if err != nil {
+			return prev, false, err
+		}
+		lineage = byTitle.Lineage
 	}
+	// The lineage is this writer's until it commits; the newest version is read under that lock.
+	if err := st.LockLineage(ctx, lineage); err != nil {
+		return prev, false, err
+	}
+	prev, err := st.LatestBrainVersion(ctx, lineage)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return prev, false, nil
 	}
@@ -488,7 +512,7 @@ func run(ctx context.Context, st Store, e db.BrainEntry, effects []Effect) error
 
 // supersedeEarlier: an approved version is the true one from now on.
 func supersedeEarlier(ctx context.Context, st Store, e db.BrainEntry) error {
-	_, err := st.SupersedeOtherVersions(ctx, db.SupersedeOtherVersionsParams{Lineage: e.Lineage, ID: e.ID})
+	_, err := st.SupersedeOtherVersions(ctx, db.SupersedeOtherVersionsParams{Lineage: e.Lineage, Version: e.Version})
 	return err
 }
 
@@ -639,6 +663,16 @@ func optional(s string) *string {
 func notFound(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
+	}
+	return err
+}
+
+// conflict is err as a writer is told it: two writers of the same entry at once (a version taken,
+// a lock waited on in a circle) is ErrConflict, to try again.
+func conflict(err error) error {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && (pg.Code == "23505" || pg.Code == "40P01" || pg.Code == "40001") {
+		return ErrConflict
 	}
 	return err
 }

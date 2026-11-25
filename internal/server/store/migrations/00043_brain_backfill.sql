@@ -43,6 +43,16 @@ SELECT p.id, 'project', p.project_id, gator_brain_kind(p.kind), p.title, p.conte
 FROM product_context p
 ORDER BY p.project_id, p.kind, p.title, p.version;
 
+-- The product context read the newest approved version of each entry and left the older ones
+-- approved; in the Brain one version of a lineage is true at a time. The older ones stopped being
+-- true when the next version came; the views show them approved, as before, and the down step
+-- gives them back as they were.
+UPDATE brain_entries b SET status = 'superseded',
+    valid_until = (SELECT coalesce(n.approved_at, n.created_at) FROM brain_entries n
+                   WHERE n.lineage = b.lineage AND n.version > b.version ORDER BY n.version LIMIT 1)
+WHERE b.status = 'approved' AND b.scope = 'project'
+  AND EXISTS (SELECT 1 FROM brain_entries n WHERE n.lineage = b.lineage AND n.version > b.version AND n.status = 'approved');
+
 INSERT INTO brain_entries (id, scope, project_id, kind, topic, title, content, visibility, status, lineage, version,
     valid_from, source, position, created_by_kind, created_at, updated_at)
 SELECT k.id, CASE WHEN k.project_id IS NULL THEN 'workspace' ELSE 'project' END, k.project_id, 'convention', k.scope,
@@ -98,8 +108,17 @@ BEGIN
             coalesce(NEW.approved_at, NEW.created_at), gator_legacy_source(NEW.source_task_id, 'product_context'),
             NEW.source_task_id, NEW.condensed_from, NEW.archived_at, NEW.created_by_kind, NEW.created_by,
             NEW.approved_by, NEW.approved_at, NEW.created_at, NEW.created_at);
+        -- One version of a lineage is true at a time, however it was written.
+        IF NEW.status = 'approved' THEN
+            UPDATE brain_entries b SET status = 'superseded', valid_until = coalesce(b.valid_until, now())
+            WHERE b.lineage = (SELECT lineage FROM brain_entries WHERE id = NEW.id)
+              AND b.version < NEW.version AND b.status = 'approved';
+        END IF;
         RETURN NEW;
     END IF;
+    -- An UPDATE through the view changes the row and nothing else: no event, no approval effect
+    -- (archiving what a condensate replaces, superseding what it contradicts). It is the old
+    -- table's door for SQL; the API decides through brain.Service.
     UPDATE brain_entries SET project_id = NEW.project_id, kind = brain_kind, title = NEW.title, content = NEW.content,
         version = NEW.version,
         -- The view shows a replaced version as approved; writing that back changes nothing.
