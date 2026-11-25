@@ -77,6 +77,9 @@ type Config struct {
 	// Brain takes what plugins propose to it (brain.propose). Optional: without it the method
 	// answers that the Brain is not there.
 	Brain BrainProposer
+	// Connectors finish connections of other targets that come back to /connect/callback (a
+	// remote MCP server's OAuth), by target.
+	Connectors map[string]Connector
 }
 
 // BrainProposer stores a plugin's proposal in its project's Brain. brain.PluginProposals is one.

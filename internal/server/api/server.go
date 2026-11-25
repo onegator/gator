@@ -30,6 +30,8 @@ import (
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/limits"
+	"github.com/onegator/gator/internal/server/marketplace"
+	"github.com/onegator/gator/internal/server/mcpremote"
 	"github.com/onegator/gator/internal/server/plugins"
 	"github.com/onegator/gator/internal/server/process"
 	"github.com/onegator/gator/internal/server/quality"
@@ -77,6 +79,12 @@ type Server struct {
 	Brain *brain.Module
 	// MCP serves the gator-brain MCP server at /mcp, for jobs' and people's tokens; nil: no /mcp.
 	MCP http.Handler
+	// Marketplace is where agents, skills, integrations and processes come from; nil: its
+	// endpoints answer 503.
+	Marketplace *marketplace.Module
+	// Remote is the remote MCP servers agents reach through Gator's proxy (/mcp/proxy/<name>);
+	// nil: no proxy, and their endpoints answer 503.
+	Remote *mcpremote.Module
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -121,6 +129,11 @@ func (s *Server) Router() http.Handler {
 		// Streamable HTTP: POST carries the calls; the server is stateless, so GET and DELETE
 		// answer 405 from the SDK itself.
 		r.With(auth.RequireAuth).Handle(auth.MCPPath, s.MCP)
+	}
+	if s.Remote != nil {
+		// A job reaches the remote servers its agent was given here, with its own token; the
+		// servers' credentials stay on this side.
+		r.With(auth.RequireAuth).Handle(mcpremote.PathPrefix+"*", s.Remote.Proxy)
 	}
 	r.Route("/api/v1", func(r chi.Router) {
 		r.With(auth.RequireAuth).Get("/ws", s.websocket)

@@ -16,6 +16,9 @@ var readOnlyTools = []string{"Read", "Grep", "Glob", "WebFetch"}
 // cannot.
 var writingTools = []string{"Edit", "Write", "NotebookEdit"}
 
+// skillTool is Claude Code's tool that reads a skill when it applies.
+const skillTool = "Skill"
+
 // Supports implements backend.Limited: Claude Code keeps read-only and no-tools sessions with the
 // flags below.
 func (Backend) Supports(backend.Access) bool { return true }
@@ -26,9 +29,11 @@ func (Backend) Supports(backend.Access) bool { return true }
 // tools, Bash limited to the named commands, and the writing tools denied. No tools is dontAsk
 // with an empty --tools: no built-in tool at all.
 //
-// The MCP servers named (Gator's) are allowed whole in a read-only session: their tools are the
-// job's own identity, held to its kind by the server.
-func permissionArgs(a backend.Access, mcp []string) []string {
+// The MCP servers named (Gator's, and the remote ones the agent was given through Gator's proxy)
+// are allowed whole in a read-only session: their tools are the job's own identity, held to its
+// kind and its agent's grant by the server. A session with skills keeps the Skill tool, which
+// reads a skill; its scripts still run only where Bash may.
+func permissionArgs(a backend.Access, mcp []string, skills bool) []string {
 	if a.NoTools {
 		return []string{"--permission-mode", "dontAsk", "--tools", "", "--disallowedTools", strings.Join(writingTools, ",")}
 	}
@@ -37,6 +42,9 @@ func permissionArgs(a backend.Access, mcp []string) []string {
 	}
 	tools := append([]string{}, readOnlyTools...)
 	allowed := append([]string{}, readOnlyTools...)
+	if skills {
+		tools, allowed = append(tools, skillTool), append(allowed, skillTool)
+	}
 	for _, name := range mcp {
 		allowed = append(allowed, "mcp__"+name)
 	}

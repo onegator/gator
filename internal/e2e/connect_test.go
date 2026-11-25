@@ -63,17 +63,20 @@ func (f *fakeProvider) client(provider string) (plugins.OAuthClient, bool) {
 	return plugins.OAuthClient{ID: "echo-client", Secret: "echo-client-secret"}, true
 }
 
-// httpClient sends every request to the fake, whatever host it names.
+// httpClient sends requests for auth.echo.test to the fake; anything else goes where it says.
 func (f *fakeProvider) httpClient() *http.Client {
-	c := f.Client()
+	c := *f.Client() // a copy: the fake's own client stays as it is for the next caller
 	inner := c.Transport
 	target, _ := url.Parse(f.URL)
 	c.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "auth.echo.test" {
+			return http.DefaultTransport.RoundTrip(r)
+		}
 		r = r.Clone(r.Context())
 		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
 		return inner.RoundTrip(r)
 	})
-	return c
+	return &c
 }
 
 type roundTripper func(*http.Request) (*http.Response, error)
@@ -92,6 +95,11 @@ func (f *fakeProvider) token(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(v)
+	}
+	if r.URL.Path == "/.well-known/oauth-authorization-server" {
+		reply(200, map[string]any{"issuer": "https://auth.echo.test", "authorization_endpoint": "https://auth.echo.test/authorize",
+			"token_endpoint": "https://auth.echo.test/token", "code_challenge_methods_supported": []string{"S256"}})
+		return
 	}
 	if r.URL.Path != "/token" || r.Form.Get("client_id") != "echo-client" || r.Form.Get("client_secret") != "echo-client-secret" {
 		reply(401, map[string]any{"error": "invalid_client"})
@@ -211,9 +219,9 @@ func TestConnectingAPluginStoresAndRenewsItsToken(t *testing.T) {
 	if code := h.do("POST", path, gen.PluginConnectRequest{ReturnTo: ptr("gator://plugins")}, &start); code != 200 {
 		t.Fatalf("connect: %d", code)
 	}
-	u, err := url.Parse(start.Url)
-	if err != nil || u.Host != "auth.echo.test" || u.Path != "/authorize" {
-		t.Fatalf("authorize url: %s", start.Url)
+	u, cookie := h.browse(start.Url)
+	if u.Host != "auth.echo.test" || u.Path != "/authorize" {
+		t.Fatalf("authorize url: %s", u)
 	}
 	q := u.Query()
 	if q.Get("client_id") != "echo-client" || q.Get("scope") != "read write" || q.Get("code_challenge_method") != "S256" ||
@@ -221,23 +229,23 @@ func TestConnectingAPluginStoresAndRenewsItsToken(t *testing.T) {
 		t.Fatalf("authorize query: %v", q)
 	}
 	h.oauth.authorize("good-code", q.Get("code_challenge"))
+	query := "code=good-code&state=" + url.QueryEscape(q.Get("state"))
 
-	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	callback := func(query string) *http.Response {
-		res, err := noRedirect.Get(h.srv.URL + "/connect/callback?" + query)
-		if err != nil {
-			t.Fatal(err)
-		}
-		res.Body.Close()
-		return res
+	// A browser that did not start the connection — somebody handed the provider's link on — is
+	// refused, and the state is still there for the one that did.
+	if res := h.callback(query, nil); res.StatusCode != 400 {
+		t.Fatalf("a callback without the start's cookie: %d", res.StatusCode)
 	}
-	res := callback("code=good-code&state=" + url.QueryEscape(q.Get("state")))
+	if res := h.callback(query, &http.Cookie{Name: "gator_connect", Value: "another-state"}); res.StatusCode != 400 {
+		t.Fatalf("a callback with another connection's cookie: %d", res.StatusCode)
+	}
+	res := h.callback(query, cookie)
 	loc, _ := url.Parse(res.Header.Get("Location"))
 	if res.StatusCode != 302 || loc.Scheme != "gator" || loc.Query().Get("status") != "connected" || loc.Query().Get("plugin") != "echo" || loc.Query().Get("project") != p.id {
 		t.Fatalf("callback: %d %s", res.StatusCode, res.Header.Get("Location"))
 	}
 	// The state is spent.
-	if res := callback("code=good-code&state=" + url.QueryEscape(q.Get("state"))); res.StatusCode != 400 {
+	if res := h.callback(query, cookie); res.StatusCode != 400 {
 		t.Fatalf("a replayed callback: %d", res.StatusCode)
 	}
 
@@ -272,10 +280,30 @@ func TestConnectingAPluginStoresAndRenewsItsToken(t *testing.T) {
 	if code := h.do("POST", path, nil, &start); code != 200 {
 		t.Fatalf("connect without a body: %d", code)
 	}
-	u, _ = url.Parse(start.Url)
-	res = callback("error=access_denied&error_description=The+user+said+no&state=" + url.QueryEscape(u.Query().Get("state")))
+	u, cookie = h.browse(start.Url)
+	res = h.callback("error=access_denied&error_description=The+user+said+no&state="+url.QueryEscape(u.Query().Get("state")), cookie)
 	if res.StatusCode != 400 {
 		t.Fatalf("a refusal: %d", res.StatusCode)
+	}
+
+	// A state that expired is refused at both doors, and a browser signed in to Gator as somebody
+	// else cannot carry another person's connection.
+	h.do("POST", path, nil, &start)
+	u, cookie = h.browse(start.Url)
+	stranger := h.person()
+	req, _ := http.NewRequest("GET", h.srv.URL+"/connect/start?state="+url.QueryEscape(u.Query().Get("state")), nil)
+	req.Header.Set("Authorization", "Bearer "+stranger)
+	if res, err := noRedirect.Do(req); err != nil || res.StatusCode != 403 {
+		t.Fatalf("another person's browser: %v %d", err, res.StatusCode)
+	}
+	if _, err := h.pool.Exec(context.Background(), `UPDATE plugin_connect_states SET expires_at = now() - interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+	if res := h.callback("code=x&state="+url.QueryEscape(u.Query().Get("state")), cookie); res.StatusCode != 400 {
+		t.Fatalf("an expired state: %d", res.StatusCode)
+	}
+	if res, _ := noRedirect.Get(h.srv.URL + "/connect/start?state=" + url.QueryEscape(u.Query().Get("state"))); res.StatusCode != 400 {
+		t.Fatalf("an expired start: %d", res.StatusCode)
 	}
 }
 
@@ -345,3 +373,48 @@ func TestATrackerImportsAndFollowsItsIssues(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// browse follows a connection's start link as the person's browser does: Gator sets its cookie and
+// sends the browser to the provider. It answers the provider's address and the cookie the browser
+// now holds.
+func (h *harness) browse(start string) (*url.URL, *http.Cookie) {
+	h.t.Helper()
+	u, err := url.Parse(start)
+	if err != nil || u.Path != "/connect/start" {
+		h.t.Fatalf("a connection starts at Gator: %s", start)
+	}
+	res, err := noRedirect.Get(h.srv.URL + u.RequestURI())
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusFound {
+		h.t.Fatalf("start: %d", res.StatusCode)
+	}
+	var cookie *http.Cookie
+	for _, c := range res.Cookies() {
+		if c.Name == "gator_connect" {
+			cookie = c
+		}
+	}
+	provider, _ := url.Parse(res.Header.Get("Location"))
+	if cookie == nil || !cookie.HttpOnly {
+		h.t.Fatalf("the start ties the browser: %+v", res.Cookies())
+	}
+	return provider, cookie
+}
+
+// callback comes back from the provider, with the browser's cookie (or none).
+func (h *harness) callback(query string, cookie *http.Cookie) *http.Response {
+	h.t.Helper()
+	req, _ := http.NewRequest("GET", h.srv.URL+"/connect/callback?"+query, nil)
+	if cookie != nil {
+		req.AddCookie(&http.Cookie{Name: cookie.Name, Value: cookie.Value})
+	}
+	res, err := noRedirect.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	res.Body.Close()
+	return res
+}

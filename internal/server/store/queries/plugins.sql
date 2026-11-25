@@ -105,8 +105,12 @@ WHERE pp.token_expires_at IS NOT NULL AND pp.token_expires_at < sqlc.arg(before)
 ORDER BY pp.token_expires_at LIMIT 50;
 
 -- name: InsertPluginConnectState :exec
-INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7);
+INSERT INTO plugin_connect_states (hash, project_id, plugin_name, user_id, verifier, return_to, expires_at, target, authorize_url)
+VALUES (sqlc.arg(hash), sqlc.arg(project_id), sqlc.arg(plugin_name), sqlc.narg(user_id), sqlc.arg(verifier), sqlc.arg(return_to),
+        sqlc.arg(expires_at), sqlc.arg(target), sqlc.arg(authorize_url));
+
+-- name: GetPluginConnectState :one
+SELECT * FROM plugin_connect_states WHERE hash = $1 AND expires_at > now();
 
 -- name: TakePluginConnectState :one
 -- Single use: the row goes as it is read, so a replayed callback finds nothing.
@@ -127,3 +131,13 @@ FROM project_plugins pp JOIN plugins p ON p.id = pp.plugin_id JOIN projects pr O
 WHERE NOT pp.enabled AND pp.disabled_reason IS NOT NULL AND pr.archived_at IS NULL
   AND (sqlc.narg(project_id)::uuid IS NULL OR pp.project_id = sqlc.narg(project_id)::uuid)
 ORDER BY pp.updated_at;
+
+-- name: CountProjectPluginsOf :one
+SELECT count(*)::int FROM project_plugins WHERE plugin_id = $1;
+
+-- name: DeletePlugin :execrows
+-- A plugin no project has set up; one a project has keeps its row (and its calls, which are a record).
+DELETE FROM plugins p WHERE p.id = $1 AND NOT EXISTS (SELECT 1 FROM project_plugins pp WHERE pp.plugin_id = p.id);
+
+-- name: GetPluginByID :one
+SELECT * FROM plugins WHERE id = $1;

@@ -81,3 +81,16 @@ func TestRedaction(t *testing.T) {
 		t.Fatalf("non-secret dropped: %s", out)
 	}
 }
+
+func TestValuesShapedLikeCredentialsAreMasked(t *testing.T) {
+	in := `{"q":"Authorization: Bearer abcdefghijklmnop","n":["sk-ant-abcdefghijklmnopqrst","xoxb-1234567890-abc"],"ok":"just words"}`
+	out := string(RedactValues([]byte(in)))
+	for _, leak := range []string{"abcdefghijklmnop", "sk-ant-", "xoxb-"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("%s leaked: %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, "just words") {
+		t.Fatal(out)
+	}
+}

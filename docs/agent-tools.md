@@ -94,12 +94,28 @@ command line); a read-only `chat` session may call its tools (`mcp__gator`).
 | `catalogue_show(component?)` | `catalogue show` | yes |
 | `thread_read(conversation_id?, limit?)` | `thread show` | yes |
 | `conversation_post(body)` | `say` | yes |
+| `skill_read(name, path?)` | — | yes |
 | `task_show()`, `task_blocked(reason)`, `ask(question)` | the same | no |
 
 A token reaches the same tools over MCP as over `/agent` (both ask `internal/server/jobscope`); a
 summary job has none. Every call is in `agent_calls`, as `mcp <tool>`. An entry the agent relies on
 is cited as `[brain:<id>]`: the package of every job carries those tags, and what a job's final
 message cites of what it was handed or looked up is recorded in `brain_citations`.
+
+`skill_read` reads a skill the job's own agent carries (its `SKILL.md`, or one of its files): the
+way a backend that does not load skills by itself follows them; Claude Code gets them as a plugin
+directory instead.
+
+## Remote MCP servers, through the proxy
+
+An agent given a remote MCP server (`agents.tools`: the server's name, or `server/tool`) has it in
+every session of its jobs, as `mcp__<server>__<tool>`, at `POST /mcp/proxy/<server>` with the job's own
+token — never the server's credential, which stays in gator-server. The proxy lets through only a
+running job of a kind that may (a phase job or a reply; a summary gets nothing) whose agent was given
+the server, offers only the tools the server's allowlist holds (narrowed by `server/tool` entries;
+for a `chat` job, only those the server marks read-only), writes every list and call to `mcp_calls`
+(arguments with secrets masked), hands back what the server said inside the untrusted fence, and
+stops calling a server that keeps failing for a while.
 
 A person connects their own client with their token and reads what they read in the app:
 `claude mcp add --transport http gator https://<server>/mcp --header "Authorization: Bearer gtr_user_…"`.

@@ -131,7 +131,7 @@ RETURNING *;
 UPDATE agents
 SET handle = sqlc.arg(handle), display_name = sqlc.arg(display_name), description = sqlc.arg(description),
     avatar = sqlc.arg(avatar), role_key = sqlc.narg(role_key), instructions = sqlc.arg(instructions), tier = sqlc.arg(tier),
-    policy = sqlc.arg(policy), status = sqlc.arg(status), updated_at = now()
+    policy = sqlc.arg(policy), status = sqlc.arg(status), tools = sqlc.arg(tools), skills = sqlc.arg(skills), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
 

@@ -79,6 +79,21 @@ zajmowany przed startem), więc fazy 3–5 przesunęły się o kolejną. Faza 3 
 (`00044_brain_curation.sql`: dokąd curator przeczytał każdą rozmowę), więc embeddingi mają 00045, a
 fazy 4–5 przesunęły się o jeszcze jedną.
 
+Faza 4 zmieściła się w dwóch zaplanowanych numerach: `00046_marketplace.sql` (rejestry, cache
+paczek, instalacje, skille) i `00047_mcp_servers.sql` (serwery MCP, `mcp_calls` i `target` w
+`plugin_connect_states` dla OAuth serwerów MCP). 00045 wciąż czeka na embeddingi; kto ją napisze,
+uruchamia `goose` z `allow-missing` na bazach, które mają już 00046 (goose odrzuca brakującą
+migrację starszą niż ostatnia wykonana).
+
+Serwery MCP rejestru Gatora (`gator-marketplace/integrations`) mają adresy i narzędzia „na dziś”, do
+sprawdzenia z żywymi usługami przed publikacją: Sentry (`https://mcp.sentry.dev/mcp`), Atlassian
+(`https://mcp.atlassian.com/v2/mcp`; v1 jest wycofywane), Notion (`https://mcp.notion.com/mcp`), Figma
+(`https://mcp.figma.com/mcp`), Slack (`https://mcp.slack.com/mcp`) — czy każdy publikuje metadata
+RFC 9728/8414 na swoim hoście i rejestrację RFC 7591 (inaczej potrzebna aplikacja operatora z
+`GATOR_<PROVIDER>_OAUTH_HOSTS`) i jak nazywają się ich narzędzia; Datadog
+(`https://mcp.datadoghq.com/api/unstable/mcp-server/mcp`) jest eksperymentalny (klucze API i aplikacji w
+dwóch nagłówkach, adres zależny od regionu), a Grafana jest samodzielnie hostowana (adres ustawia admin).
+
 Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
 
 ## Co celowo NIE wchodzi

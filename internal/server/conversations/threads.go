@@ -70,7 +70,16 @@ func (t *Threads) ForTask(ctx context.Context, task db.Task) (db.Conversation, e
 		}
 	}
 	var conv db.Conversation
-	err := store.InTx(ctx, t.pool, func(q *db.Queries) error {
+	err := store.InTxRetry(ctx, t.pool, func(q *db.Queries) error {
+		// The project and the task first, then the channel and its card: a project being deleted
+		// takes them in that order, and a transaction holding the channel while it waited for the
+		// project would deadlock with it.
+		if err := q.KeyShareProject(ctx, task.ProjectID); err != nil {
+			return err
+		}
+		if err := q.KeyShareTask(ctx, task.ID); err != nil {
+			return err
+		}
 		var root pgtype.UUID
 		if channel.ID.Valid {
 			card, _, err := writeCard(ctx, q, channel, TaskCard(task))
@@ -155,7 +164,7 @@ func (t *Threads) Under(ctx context.Context, msg db.Message) (db.Conversation, e
 // open creates the thread under msg, or answers the one a concurrent request just created.
 func (t *Threads) open(ctx context.Context, conv db.Conversation, msg db.Message, by Author) (db.Conversation, error) {
 	var thread db.Conversation
-	err := store.InTx(ctx, t.pool, func(q *db.Queries) error {
+	err := store.InTxRetry(ctx, t.pool, func(q *db.Queries) error {
 		var err error
 		thread, err = q.CreateConversation(ctx, db.CreateConversationParams{
 			ProjectID: conv.ProjectID, Kind: KindThread, Visibility: conv.Visibility, ParentMessageID: msg.ID,

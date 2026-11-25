@@ -99,7 +99,7 @@ func (s *Server) UpdateAgent(w http.ResponseWriter, r *http.Request, agentId gen
 		return
 	}
 	patch := agents.Patch{Handle: in.Handle, DisplayName: in.DisplayName, Description: in.Description, Avatar: in.Avatar,
-		Instructions: in.Instructions, RoleKey: in.RoleKey, Policy: fromAgentPolicy(in.Policy)}
+		Instructions: in.Instructions, RoleKey: in.RoleKey, Policy: fromAgentPolicy(in.Policy), Skills: in.Skills, Tools: in.Tools}
 	if in.Tier != nil {
 		patch.Tier = new(string(*in.Tier))
 	}

@@ -297,6 +297,34 @@ pasted token (callback: `GATOR_PUBLIC_URL/connect/callback`). Others are install
 `POST /hooks/<project-slug>/<plugin>`. The contract and a Go SDK live in the public package
 `plugin/`; the protocol is in [docs/plugins.md](docs/plugins.md).
 
+## Marketplace
+
+Agents, skills, remote MCP servers, native plugins, processes and knowledge packs come from
+registries (`internal/server/marketplace`): git repositories (or directories) whose `index.json` names
+every package with its version and the sha256 of its files, signed with Ed25519 in `index.json.sig`.
+Gator's own is built in (`GATOR_MARKETPLACE_URL`, default
+[onegator/gator-marketplace](https://github.com/onegator/gator-marketplace), verified against
+`GATOR_MARKETPLACE_PUBLIC_KEY`) and fetched at start; a workspace admin adds the company's own
+(`POST /api/v1/registries`). A bad signature takes nothing; a package that does not match its
+checksum, carries a link or an unsafe path, breaks the size limits, or is a published version whose
+files changed, is turned away. Installing (`POST /api/v1/projects/{id}/installations`, or
+`/workspace/installations`) needs every permission the version asks for accepted; an agent is in the
+project's agents at once. Nothing updates by itself: a newer version is offered
+(`GET /installations/{id}/update`) and applied by a person (`PATCH /installations/{id}`), accepting
+what it adds and saying what becomes of what they changed. `gator-server marketplace
+checksum|index|keygen|sign|verify` is what a registry's maintainer runs.
+
+A job's lease carries its agent's skills (Claude Code loads them with `--plugin-dir` from the
+runner's own directory; other backends read them through `skill_read`) and names the remote MCP
+servers it was given. The runner reaches each through Gator's proxy, `POST /mcp/proxy/<name>`, with the
+job's own token: the server's credentials never leave gator-server — a token, or OAuth the way the
+MCP spec has it (the server's metadata, its authorization server's, a client registered for it alone,
+PKCE), connected through `/connect/start` and `/connect/callback` in the browser that started it.
+Every call is written to `mcp_calls` (arguments masked), tools outside the allowlist (and, for chat,
+outside the read-only tools allowed for chat) are refused, answers come back bounded and fenced as
+untrusted, and a server that keeps failing is not called for a while. The server's own requests reach
+no private address (`netguard`) unless `GATOR_OUTBOUND_ALLOW_PRIVATE=1`.
+
 ## License
 
 [MIT](LICENSE).

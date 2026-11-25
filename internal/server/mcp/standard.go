@@ -28,7 +28,7 @@ type Deps struct {
 // Standard is the gator-brain server with every tool and resource Gator has.
 func Standard(d Deps) *Server {
 	var from origins = noOrigin{}
-	tools := slices.Concat(CatalogueTools(d.Queries, d.Roles, d.Queries), TaskTools(d.Tasks))
+	tools := slices.Concat(CatalogueTools(d.Queries, d.Roles, d.Queries), TaskTools(d.Tasks), SkillTools(d.Queries))
 	if d.Talk != nil {
 		from = d.Talk
 		tools = append(tools, ConversationTools(d.Talk)...)

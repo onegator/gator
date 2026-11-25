@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/proto"
 	"github.com/onegator/gator/internal/runner/backend"
 	"github.com/onegator/gator/internal/runner/client"
@@ -52,12 +53,23 @@ const MCPServerName = "gator"
 // mcpServers are the MCP servers the agent reaches: Gator's, at /mcp, with the job's own identity
 // — the Brain and the agent surface, held by the server to what the job's kind may call. None
 // without an identity, so a summary (and a job of an older server) has none.
+//
+// The remote MCP servers the job's agent was given are reached through Gator's proxy, at
+// /mcp/proxy/<name>, with the same identity: the job never holds a remote server's credential.
 func (e *Executor) mcpServers(job proto.Job) []backend.MCPServer {
 	if job.AgentToken == "" || e.ServerURL == "" {
 		return nil
 	}
-	return []backend.MCPServer{{Name: MCPServerName, URL: strings.TrimRight(e.ServerURL, "/") + "/mcp",
-		Headers: map[string]string{"Authorization": "Bearer " + job.AgentToken}}}
+	base := strings.TrimRight(e.ServerURL, "/")
+	identity := map[string]string{"Authorization": "Bearer " + job.AgentToken}
+	out := []backend.MCPServer{{Name: MCPServerName, URL: base + "/mcp", Headers: identity}}
+	for _, name := range job.MCP {
+		if name == MCPServerName || !names.Valid(name) {
+			continue // a name the server never sends: not one to put in a URL or a tool's name
+		}
+		out = append(out, backend.MCPServer{Name: name, URL: base + "/mcp/proxy/" + name, Headers: identity})
+	}
+	return out
 }
 
 var _ client.Executor = (*Executor)(nil)
@@ -110,14 +122,21 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	}
 	env = append(env, signing...)
 	servers := e.mcpServers(job)
+	opening := promptFor(job, ws)
+	// Skills go to a backend that loads them by itself; any other is told of them in its prompt
+	// and reads them through Gator's skill_read.
+	skills := skillsOf(job)
+	if len(skills) > 0 && !backend.LoadsSkills(be) {
+		opening += "\n\n" + SkillsPrompt(job.Skills, len(servers) > 0)
+		skills = nil
+	}
 	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
 		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
-			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers}
+			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
 	}
 
 	var usage proto.Usage
 	var last backend.Outcome
-	opening := promptFor(job, ws)
 	prompt, session, tools := opening, "", 0
 	steers, objections := 0, 0
 	for {

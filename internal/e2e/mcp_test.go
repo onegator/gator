@@ -183,9 +183,9 @@ func TestMCPToolsFollowTheJobsScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reply := []string{"brain_cite", "brain_get", "brain_propose", "brain_search", "catalogue_show", "conversation_post", "thread_read"}
+	reply := []string{"brain_cite", "brain_get", "brain_propose", "brain_search", "catalogue_show", "conversation_post", "skill_read", "thread_read"}
 	all := []string{"ask", "brain_cite", "brain_get", "brain_propose", "brain_search", "catalogue_show", "conversation_post",
-		"task_blocked", "task_show", "thread_read"}
+		"skill_read", "task_blocked", "task_show", "thread_read"}
 	cases := []struct {
 		name, job string
 		tools     []string

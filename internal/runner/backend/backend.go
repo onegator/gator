@@ -28,6 +28,36 @@ type Spec struct {
 	// MCP are the MCP servers the session reaches besides the runner's own configuration: Gator's
 	// (the Brain and the agent surface), with the job's own identity.
 	MCP []MCPServer
+	// Skills are the skills the job's agent carries, for a backend that loads skills by itself
+	// (SkillLoader). Any other backend is told of them in its prompt instead.
+	Skills []Skill
+}
+
+// Skill is one skill of the job's agent: an Agent Skills folder (SKILL.md, scripts/,
+// references/, assets/), whole.
+type Skill struct {
+	Name        string
+	Description string
+	Files       []SkillFile
+}
+
+// SkillFile is one file of a skill, at its path inside the skill's folder.
+type SkillFile struct {
+	Path string
+	Data []byte
+}
+
+// SkillLoader is a backend that reads skills by itself: Claude Code, from a plugin directory the
+// runner writes outside the worktree. A backend that is not gets the skills' names and
+// descriptions in its prompt, and reads one through Gator's skill_read tool.
+type SkillLoader interface {
+	LoadsSkills() bool
+}
+
+// LoadsSkills says whether b reads skills by itself.
+func LoadsSkills(b Backend) bool {
+	l, ok := b.(SkillLoader)
+	return ok && l.LoadsSkills()
 }
 
 // MCPServer is one remote MCP server, over Streamable HTTP.

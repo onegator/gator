@@ -442,6 +442,8 @@ func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.J
 		if j.AgentID.Valid {
 			if a, err := q.GetAgent(ctx, j.AgentID); err == nil {
 				pj.Agent = &proto.Agent{Handle: a.Handle, DisplayName: a.DisplayName}
+				pj.Skills = s.skills(ctx, q, j, a)
+				pj.MCP = s.proxied(ctx, q, j, a)
 			}
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/onegator/gator/internal/names"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/store/db"
 )
@@ -58,6 +60,9 @@ type Draft struct {
 type Patch struct {
 	Handle, DisplayName, Description, Avatar, Instructions, Tier, Status, RoleKey *string
 	Policy                                                                        *Policy
+	// Skills are the skills it carries, by name; Tools the remote MCP servers it may call
+	// through Gator's proxy, a server's name or server/tool.
+	Skills, Tools *[]string
 }
 
 // Stats is an agent's record over a window.
@@ -150,7 +155,7 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 		return db.Agent{}, fmt.Errorf("%w: a built-in agent keeps its handle and its role; make one of your own for another", ErrInvalid)
 	}
 	next := db.UpdateAgentParams{ID: a.ID, Handle: a.Handle, DisplayName: a.DisplayName, Description: a.Description, Avatar: a.Avatar,
-		RoleKey: a.RoleKey, Instructions: a.Instructions, Tier: a.Tier, Policy: a.Policy, Status: a.Status}
+		RoleKey: a.RoleKey, Instructions: a.Instructions, Tier: a.Tier, Policy: a.Policy, Status: a.Status, Tools: a.Tools, Skills: a.Skills}
 	set := func(dst *string, src *string) {
 		if src != nil {
 			*dst = strings.TrimSpace(*src)
@@ -171,6 +176,16 @@ func (d *Directory) Update(ctx context.Context, p auth.Principal, id pgtype.UUID
 	}
 	if in.Policy != nil {
 		if next.Policy, err = policyJSON(in.Policy); err != nil {
+			return db.Agent{}, err
+		}
+	}
+	if in.Skills != nil {
+		if next.Skills, err = namesJSON(*in.Skills, names.Valid, "a skill is named with a–z, 0–9 and '-'"); err != nil {
+			return db.Agent{}, err
+		}
+	}
+	if in.Tools != nil {
+		if next.Tools, err = namesJSON(*in.Tools, names.ValidGrant, "a tool is an MCP server's name, or server/tool"); err != nil {
 			return db.Agent{}, err
 		}
 	}
@@ -195,8 +210,11 @@ func (d *Directory) Delete(ctx context.Context, p auth.Principal, id pgtype.UUID
 	if err := d.canManage(ctx, p, a.ProjectID); err != nil {
 		return err
 	}
-	if sourceOf(a) == SourceBuiltin {
+	switch sourceOf(a) {
+	case SourceBuiltin:
 		return fmt.Errorf("%w: a built-in agent is not deleted; pause it", ErrConflict)
+	case SourceMarketplace:
+		return fmt.Errorf("%w: @%s came from the marketplace; remove its installation instead", ErrConflict, a.Handle)
 	}
 	active, err := d.store.CountActiveTurnsOfAgent(ctx, a.ID)
 	if err != nil {
@@ -306,6 +324,12 @@ func (d *Directory) require(ctx context.Context, p auth.Principal, project pgtyp
 	return nil
 }
 
+// Check holds an agent made another way — installed from the marketplace — to the rules Create
+// holds people's to.
+func Check(handle, name, description, tier string) error {
+	return validate(handle, name, description, tier, StatusActive)
+}
+
 func validate(handle, name, description, tier, status string) error {
 	switch {
 	case !handlePattern.MatchString(handle):
@@ -320,6 +344,21 @@ func validate(handle, name, description, tier, status string) error {
 		return fmt.Errorf("%w: the status is active or paused", ErrInvalid)
 	}
 	return nil
+}
+
+// namesJSON is a list of names, each checked, once each, as agents.skills and agents.tools keep it.
+func namesJSON(list []string, valid func(string) bool, rule string) ([]byte, error) {
+	out := []string{}
+	for _, n := range list {
+		n = strings.TrimSpace(n)
+		if !valid(n) {
+			return nil, fmt.Errorf("%w: %s, not %q", ErrInvalid, rule, n)
+		}
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return json.Marshal(out)
 }
 
 func policyJSON(p *Policy) ([]byte, error) {

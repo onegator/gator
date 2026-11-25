@@ -262,6 +262,28 @@ type Job struct {
 	Tier  string `json:"tier,omitempty"`
 	Agent *Agent `json:"agent,omitempty"`
 	Turn  *Turn  `json:"turn,omitempty"`
+	// Skills are the skills the job's agent carries, each an Agent Skills folder, whole. Additive
+	// in v3: a runner that does not know them runs the job without.
+	Skills []Skill `json:"skills,omitempty"`
+	// MCP are the remote MCP servers the job's agent may reach, by name. The runner reaches each
+	// at <server>/mcp/proxy/<name> with the job's own token, and only there: no credential of a
+	// remote server is in a job, ever. Additive in v3.
+	MCP []string `json:"mcp,omitempty"`
+}
+
+// Skill is one skill of a job's agent: its SKILL.md and whatever else the folder holds
+// (scripts/, references/, assets/). Its scripts are run only by the agent, in the job, with the
+// job's own rights.
+type Skill struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Files       []SkillFile `json:"files"`
+}
+
+// SkillFile is one file of a skill, at its path inside the skill's folder.
+type SkillFile struct {
+	Path string `json:"path"`
+	Data []byte `json:"data"`
 }
 
 // KindOrPhase is the job's kind; a job that names none is a phase job.

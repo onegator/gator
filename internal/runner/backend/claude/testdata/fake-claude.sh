@@ -10,6 +10,9 @@
 #   FAKE_CLAUDE_READ     try to read this file; write what happened to FAKE_CLAUDE_READ.out
 #   FAKE_CLAUDE_MCP      copy the file --mcp-config names here (or the JSON itself), with its mode
 #   FAKE_CLAUDE_SUBST    a sed script applied to the fixture (an id or a number known only at run time)
+#   FAKE_CLAUDE_PLUGIN   list the files of the directory --plugin-dir names here, with their modes
+#   FAKE_CLAUDE_DUMP     write everything this run can see of the job here: its environment, its arguments, and
+#                        every file of the working directory and of the runner's directories it was pointed at
 if [ -n "$FAKE_CLAUDE_ENV" ]; then env > "$FAKE_CLAUDE_ENV"; fi
 if [ -n "$FAKE_CLAUDE_READ" ]; then
 	if cat "$FAKE_CLAUDE_READ" > "$FAKE_CLAUDE_READ.out" 2>&1; then echo "read" >> "$FAKE_CLAUDE_READ.out"; else echo "denied" >> "$FAKE_CLAUDE_READ.out"; fi
@@ -23,6 +26,29 @@ if [ -n "$FAKE_CLAUDE_MCP" ]; then
 		fi
 		prev="$a"
 	done
+fi
+if [ -n "$FAKE_CLAUDE_PLUGIN" ]; then
+	prev=""
+	for a in "$@"; do
+		if [ "$prev" = "--plugin-dir" ]; then
+			(cd "$a" && find . -type f | sort | while read -r f; do printf '%s %s\n' "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$f"; done) > "$FAKE_CLAUDE_PLUGIN"
+		fi
+		prev="$a"
+	done
+fi
+if [ -n "$FAKE_CLAUDE_DUMP" ]; then
+	{
+		env
+		printf '%s\n' "$@"
+		prev=""
+		for a in "$@"; do
+			if [ "$prev" = "--mcp-config" ] && [ -f "$a" ]; then find "$(dirname "$a")" -type f -exec cat {} + 2>/dev/null; fi
+			if [ "$prev" = "--plugin-dir" ]; then find "$a" -type f -exec cat {} + 2>/dev/null; fi
+			prev="$a"
+		done
+		find . -type f -not -path './.git/*' -exec cat {} + 2>/dev/null
+		find . -path './.git/*' -type f -name config -exec cat {} + 2>/dev/null
+	} > "$FAKE_CLAUDE_DUMP"
 fi
 if [ -n "$FAKE_CLAUDE_ARGS" ]; then
 	for a in "$@"; do printf '%s\n' "$a" >> "$FAKE_CLAUDE_ARGS"; done

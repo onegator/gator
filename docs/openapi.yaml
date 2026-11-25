@@ -1675,8 +1675,278 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AgentTurn" } } } } }
         "404": { $ref: "#/components/responses/Error" }
+  /registries:
+    get:
+      operationId: listRegistries
+      description: "Where the marketplace comes from: Gator's own registry (GATOR_MARKETPLACE_URL) first, then the company's. Anyone signed in."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Registry" } } } } }
+    post:
+      operationId: addRegistry
+      description: "Add a company's own registry: a git repository (or a directory on the server) with index.json and, when it has a key, index.json.sig. Workspace admins only."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewRegistry" } } }
+      responses:
+        "201": { description: added, content: { application/json: { schema: { $ref: "#/components/schemas/Registry" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /registries/{registryId}:
+    delete:
+      operationId: deleteRegistry
+      description: "Remove a registry nothing is installed from. Gator's own stays (409). Workspace admins only."
+      parameters: [ { $ref: "#/components/parameters/registryId" } ]
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /registries/{registryId}/fetch:
+    post:
+      operationId: fetchRegistry
+      description: >
+        Fetch a registry and cache every package that verifies: the index's signature (when the registry has a key) first,
+        then each package's files against its checksum and the server's limits. A bad signature takes nothing (400); a
+        package that fails, or a version already published with other files, is turned away on its own and listed under
+        rejected. Nothing installed changes. Workspace admins only.
+      parameters: [ { $ref: "#/components/parameters/registryId" } ]
+      responses:
+        "200": { description: fetched, content: { application/json: { schema: { $ref: "#/components/schemas/RegistryFetch" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /marketplace:
+    get:
+      operationId: listMarketplace
+      description: "The catalogue of every registry, each package at its newest version. With projectId, what that project has installed of each (and whether an update waits) and what it lacks to run it."
+      parameters:
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [agent, skill, integration, process, knowledge] } }
+        - { name: q, in: query, required: false, description: "words in the name, display name or description", schema: { type: string } }
+        - { name: phase, in: query, required: false, description: "a phase of the life of software: idea, discovery, planning, implementation, verification, release, monitoring", schema: { type: string } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/MarketplaceItem" } } } } }
+  /marketplace/{kind}/{name}:
+    get:
+      operationId: getMarketplacePackage
+      description: "One package: its manifest (README, example prompt, permissions, requirements), every version offered and its files."
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [agent, skill, integration, process, knowledge] } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: registryId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: version, in: query, required: false, description: "default: the newest", schema: { type: string } }
+        - { name: projectId, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/MarketplaceDetail" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/installations:
+    get:
+      operationId: listProjectInstallations
+      description: "What the project installed from the marketplace, with the version, the permissions accepted and whether an update waits."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Installation" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: installIntoProject
+      description: >
+        Install a package into the project, for its admins. acceptedPermissions must hold every permission the
+        package's version asks for (its manifest's permissions, line for line); otherwise nothing is installed and 409
+        names what is still to accept. An agent's handle is the package's suggestion unless handle says another; one
+        taken where people would see it is 409 too. An installed agent is in the project's agents (and @autocomplete)
+        at once.
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInstallation" } } }
+      responses:
+        "201": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, or already installed, or the handle is taken", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+  /installations/{installationId}/update:
+    get:
+      operationId: previewInstallationUpdate
+      description: "What updating would do, changing nothing: the permissions the version adds and drops, and what a person changed here that it would touch, as diffs. The \"Update\" chip's sheet."
+      parameters:
+        - { $ref: "#/components/parameters/installationId" }
+        - { name: version, in: query, required: false, schema: { type: string } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/UpdatePreview" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /workspace/installations:
+    get:
+      operationId: listWorkspaceInstallations
+      description: "What the workspace installed for every project: workspace agents, skills, native plugins."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Installation" } } } } }
+    post:
+      operationId: installIntoWorkspace
+      description: "Install a package for the whole workspace (an agent every project sees, a skill, a native plugin, a process for every project). Workspace admins only; the same acceptance as a project's."
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NewInstallation" } } }
+      responses:
+        "201": { description: installed, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, or already installed", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+  /installations/{installationId}:
+    get:
+      operationId: getInstallation
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateInstallation
+      description: >
+        Bring an installation to another version (default: the newest its registry offers). Nothing ever updates by
+        itself. A version that asks for permissions never accepted needs them in acceptedPermissions (409
+        permissions_not_accepted otherwise, naming them). A part a person changed since installing (an agent's
+        instructions, a skill's SKILL.md, a process's template) blocks the update (409 local_changes, with diffs)
+        until resolve says keep_local (the new version, their changes kept) or take_theirs (the new version whole).
+        An agent keeps its handle; a remote server its allowlist and, at the same address, its credentials. For the
+        project's admins, or workspace admins.
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/InstallationUpdate" } } }
+      responses:
+        "200": { description: updated, content: { application/json: { schema: { $ref: "#/components/schemas/Installation" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "permissions not accepted, local changes, or that version is installed already", content: { application/json: { schema: { $ref: "#/components/schemas/InstallRefusal" } } } }
+    delete:
+      operationId: removeInstallation
+      description: "Uninstall: an agent is put away (its turns stay), a skill, an MCP server or a process goes. For the project's admins, or workspace admins."
+      parameters: [ { $ref: "#/components/parameters/installationId" } ]
+      responses:
+        "204": { description: removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/skills:
+    get:
+      operationId: listProjectSkills
+      description: "The skills the project's agents may carry: the project's own and the workspace's (an agent carries a skill by naming it in skills)."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/SkillInfo" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers:
+    get:
+      operationId: listProjectMcpServers
+      description: "The remote MCP servers the project's agents may be given: its own, and the workspace's it does not shadow. Never a secret, only which are set."
+      parameters: [ { $ref: "#/components/parameters/projectId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpServer" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}:
+    get:
+      operationId: getProjectMcpServer
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putProjectMcpServer
+      description: >
+        Change the project's own server, or make one (url and auth then required; bearer or none — OAuth comes with its
+        package): its address, the tools agents may call, whether it is on, and its credentials (secrets: {token: …};
+        an empty value removes one). A new address drops the old one's credentials. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpServerSettings" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/tools:
+    get:
+      operationId: listProjectMcpServerTools
+      description: "Ask the server, with its credentials, which tools it has: which agents may call, which it marks read-only (the only ones chat agents get). For the project's admins."
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpTool" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/calls:
+    get:
+      operationId: listProjectMcpServerCalls
+      description: "Every call the project's jobs made through the proxy to this server (the project's own, or the workspace's it reaches), newest first: method, tool, arguments (secrets masked by name and by shape), outcome, time. For the project's admins."
+      parameters:
+        - { $ref: "#/components/parameters/projectId" }
+        - { $ref: "#/components/parameters/serverName" }
+        - { $ref: "#/components/parameters/listLimit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpCall" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{projectId}/mcp-servers/{serverName}/connect:
+    post:
+      operationId: connectProjectMcpServer
+      description: >
+        Start connecting a server that signs in with OAuth, as the MCP authorization spec says: Gator reads the
+        server's protected resource metadata (RFC 9728) and its authorization server's metadata (RFC 8414) —
+        which must be the authorization server its package declared — registers a client of its own there
+        (RFC 7591, kept encrypted with the server) and answers the sign-in address, with PKCE, for the person's
+        browser. A provider app of this server (GATOR_<PROVIDER>_CLIENT_ID) is used instead only at the hosts
+        its operator listed (GATOR_<PROVIDER>_OAUTH_HOSTS). The browser comes back to /connect/callback; the
+        token stays on the server, renewed before it expires. Needs GATOR_PUBLIC_URL. For the project's admins.
+      parameters: [ { $ref: "#/components/parameters/projectId" }, { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectRequest" } } }
+      responses:
+        "200": { description: started, content: { application/json: { schema: { $ref: "#/components/schemas/PluginConnectStart" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /workspace/mcp-servers:
+    get:
+      operationId: listWorkspaceMcpServers
+      description: "The workspace's own remote MCP servers, which every project's agents may be given."
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpServer" } } } } }
+  /workspace/mcp-servers/{serverName}/calls:
+    get:
+      operationId: listWorkspaceMcpServerCalls
+      description: "Every call any project's jobs made through the proxy to this workspace server, newest first. Workspace admins only."
+      parameters:
+        - { $ref: "#/components/parameters/serverName" }
+        - { $ref: "#/components/parameters/listLimit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpCall" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /workspace/mcp-servers/{serverName}:
+    put:
+      operationId: putWorkspaceMcpServer
+      description: "Change (or make) a workspace server, as a project's. Workspace admins only."
+      parameters: [ { $ref: "#/components/parameters/serverName" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/McpServerSettings" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/McpServer" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   parameters:
+    serverName: { name: serverName, in: path, required: true, schema: { type: string } }
+    installationId: { name: installationId, in: path, required: true, schema: { type: string, format: uuid } }
+    registryId: { name: registryId, in: path, required: true, schema: { type: string, format: uuid } }
     projectId: { name: projectId, in: path, required: true, schema: { type: string, format: uuid } }
     taskId: { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
     jobId: { name: jobId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -2658,7 +2928,7 @@ components:
       type: object
       required: [url]
       properties:
-        url: { type: string, description: "the provider's sign-in page; open it in a browser" }
+        url: { type: string, description: "where the person's browser starts: Gator's /connect/start, which ties the connection to that browser and sends it on to the provider's sign-in page; a callback from any other browser is refused" }
     PluginImport:
       type: object
       required: [created, existing]
@@ -3042,8 +3312,8 @@ components:
         instructions: { type: string, description: "its own prompt; empty means its role's" }
         tier: { type: string, enum: [chat, work], description: "chat reads and answers with no tools that write; work changes code on a gator/ branch, where a person allowed agents on the task" }
         policy: { $ref: "#/components/schemas/AgentPolicy" }
-        tools: { type: array, items: { type: string }, description: "MCP servers and plugins (phase 4)" }
-        skills: { type: array, items: { type: string }, description: "phase 4" }
+        tools: { type: array, items: { type: string }, description: "the remote MCP servers it may call through Gator's proxy: a server's name, or server/tool" }
+        skills: { type: array, items: { type: string }, description: "the skills it carries, by name; a job of it gets them in its lease" }
         status: { type: string, enum: [active, paused], description: "a paused agent refuses turns and says so" }
         source: { type: object, additionalProperties: true, description: "{kind: builtin | custom | marketplace, …}" }
         builtin: { type: boolean, description: "one of every project's defaults: paused, never deleted" }
@@ -3083,6 +3353,8 @@ components:
         tier: { type: string, enum: [chat, work] }
         policy: { $ref: "#/components/schemas/AgentPolicy" }
         status: { type: string, enum: [active, paused] }
+        skills: { type: array, items: { type: string }, description: "the skills it carries, by name: the project's own skill of that name before the workspace's" }
+        tools: { type: array, items: { type: string }, description: "the remote MCP servers it may call through Gator's proxy: a server's name (every tool its allowlist holds) or server/tool" }
     AgentProfile:
       type: object
       required: [agent, stats]
@@ -3220,3 +3492,244 @@ components:
       properties:
         message: { $ref: "#/components/schemas/Message" }
         conversation: { $ref: "#/components/schemas/Conversation" }
+    Registry:
+      type: object
+      required: [id, name, signed, builtin, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string, description: "workspace admins only; a credential in it is never shown" }
+        publicKey: { type: string, description: "the keys its index is signed with (ed25519:<base64>, comma-separated)" }
+        signed: { type: boolean, description: "false: an unsigned registry, whose packages only their checksums vouch for" }
+        builtin: { type: boolean, description: "Gator's own; it follows the server's configuration" }
+        fetchedAt: { type: string, format: date-time }
+        fetchError: { type: string, description: "workspace admins only: why the last fetch failed or what it turned away; empty when all was well" }
+        createdAt: { type: string, format: date-time }
+    NewRegistry:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string, description: "lowercase letters, digits and dashes" }
+        url: { type: string, description: "a git repository (https or ssh), or file:// a directory on the server (signed registries only)" }
+        publicKey: { type: string, description: "ed25519:<base64>; empty: an unsigned registry, which must be fetched over https or ssh and is shown as untrusted" }
+    RegistryFetch:
+      type: object
+      required: [registry, fetched, rejected]
+      properties:
+        registry: { $ref: "#/components/schemas/Registry" }
+        fetched: { type: array, items: { $ref: "#/components/schemas/PackageRef" } }
+        rejected: { type: array, items: { $ref: "#/components/schemas/RejectedPackage" } }
+    PackageRef:
+      type: object
+      required: [kind, name, version]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+    RejectedPackage:
+      type: object
+      required: [kind, name, version, reason]
+      properties:
+        kind: { type: string }
+        name: { type: string }
+        version: { type: string }
+        reason: { type: string }
+    PackageManifest:
+      type: object
+      description: "What a package says about itself, the same for every kind."
+      required: [kind, name, version, displayName, description, permissions, requires]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        displayName: { type: string }
+        description: { type: string }
+        phases: { type: array, items: { type: string } }
+        icon: { type: string, description: "a file of the package (assets/icon.png) or an SF Symbol" }
+        examplePrompt: { type: string }
+        readme: { type: string, description: "only in a package's details" }
+        permissions: { type: array, items: { type: string }, description: "what installing it lets it do, one line each; installing accepts exactly these" }
+        requires: { $ref: "#/components/schemas/PackageRequires" }
+        detail: { type: object, additionalProperties: true, description: "the kind's own manifest (agent.yaml, SKILL.md frontmatter, integration.yaml, process.yaml, pack.json), only in a package's details" }
+    PackageRequires:
+      type: object
+      properties:
+        capabilities: { type: array, items: { type: string }, description: "plugin capabilities: vcs, ci, deploy, monitoring, tracker …" }
+        mcp: { type: array, items: { type: string }, description: "remote MCP servers by name" }
+        skills: { type: array, items: { type: string }, description: "skills it uses and does not bring" }
+    MarketplaceItem:
+      type: object
+      required: [registryId, registryName, trusted, manifest, checksum, versions]
+      properties:
+        registryId: { type: string, format: uuid }
+        registryName: { type: string }
+        trusted: { type: boolean, description: "false: from an unsigned registry, which nothing but its checksums vouches for; show it as untrusted" }
+        manifest: { $ref: "#/components/schemas/PackageManifest" }
+        checksum: { type: string }
+        versions: { type: array, items: { type: string }, description: "every version offered, newest first" }
+        installed: { $ref: "#/components/schemas/InstalledRef" }
+        missing: { type: array, items: { type: string }, description: "with projectId: what the project lacks to run it (capabilities, MCP servers, skills)" }
+    InstalledRef:
+      type: object
+      description: "What a project (or the workspace) has installed of a package, and whether a newer version waits for a person."
+      required: [installationId, version, updateAvailable]
+      properties:
+        installationId: { type: string, format: uuid }
+        version: { type: string }
+        updateAvailable: { type: boolean }
+        workspace: { type: boolean, description: "installed for the whole workspace rather than this project" }
+    MarketplaceDetail:
+      type: object
+      required: [registryId, registryName, trusted, manifest, checksum, files, versions]
+      properties:
+        registryId: { type: string, format: uuid }
+        registryName: { type: string }
+        trusted: { type: boolean, description: "false: from an unsigned registry" }
+        manifest: { $ref: "#/components/schemas/PackageManifest" }
+        checksum: { type: string }
+        files: { type: array, items: { type: string }, description: "the package's files, by path" }
+        versions: { type: array, items: { $ref: "#/components/schemas/PackageVersion" } }
+        installed: { $ref: "#/components/schemas/InstalledRef" }
+        missing: { type: array, items: { type: string } }
+    PackageVersion:
+      type: object
+      required: [version, checksum, listed, permissions]
+      properties:
+        version: { type: string }
+        checksum: { type: string }
+        listed: { type: boolean, description: "false: the registry no longer offers it; it stays where it is installed" }
+        permissions: { type: array, items: { type: string } }
+    NewInstallation:
+      type: object
+      description: "Exactly the package the person looked at: a name two registries offer, a version published since, or the same version with other files is not what they accepted, and is refused (409)."
+      required: [kind, name, registryId, version, checksum, acceptedPermissions]
+      properties:
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        registryId: { type: string, format: uuid }
+        checksum: { type: string, description: "the version's checksum, as the details showed it" }
+        acceptedPermissions: { type: array, items: { type: string }, description: "the permissions the person ticked, as the package words them" }
+        handle: { type: string, description: "an agent's handle, when the suggested one is taken" }
+    Installation:
+      type: object
+      required: [id, registryId, kind, name, version, checksum, acceptedPermissions, installedBy, installedAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: installed for the workspace" }
+        registryId: { type: string, format: uuid }
+        kind: { type: string, enum: [agent, skill, integration, process, knowledge] }
+        name: { type: string }
+        version: { type: string }
+        checksum: { type: string }
+        targetId: { type: string, format: uuid, description: "what it made: the agent, skill, MCP server, plugin or knowledge pack" }
+        acceptedPermissions: { type: array, items: { type: string } }
+        installedBy: { type: string, format: uuid }
+        installedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        updateAvailable: { type: string, description: "the newest version offered, when it is newer than this one" }
+        missing: { type: array, items: { type: string }, description: "what the project lacks to run it" }
+        agent: { $ref: "#/components/schemas/Agent" }
+    InstallRefusal:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, description: "permissions_not_accepted | conflict" }
+        permissions: { type: array, items: { type: string }, description: "with permissions_not_accepted: what is still to accept" }
+        localChanges: { type: array, items: { $ref: "#/components/schemas/LocalChange" }, description: "with local_changes: what a person changed, and what the new version would" }
+    SkillInfo:
+      type: object
+      description: "A skill: a folder in the Agent Skills format (SKILL.md, scripts/, references/, assets/). A job of an agent that carries it gets it whole; Claude Code loads it by itself, other backends read it through skill_read."
+      required: [id, name, version, description, files, source]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: every project's" }
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        files: { type: array, items: { type: string } }
+        source: { type: object, additionalProperties: true, description: "{kind: marketplace, registry, package, version, agent?}: agent is the agent package that brought it" }
+    McpServer:
+      type: object
+      description: "A remote MCP server agents reach through Gator's proxy (/mcp/proxy/<name>, with a job's own token); its credentials never leave the server."
+      required: [id, name, displayName, url, auth, allowedTools, readOnlyTools, enabled, connected, secretsSet, breaker, workspace, source, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid, description: "absent: the workspace's" }
+        name: { type: string, description: "what agents' tools are named after: mcp__<name>__<tool>" }
+        displayName: { type: string }
+        url: { type: string }
+        auth: { type: string, enum: [oauth, bearer, none] }
+        allowedTools: { type: array, items: { type: string }, description: "the tools agents may call; the rest are off until an admin switches them on" }
+        readOnlyTools: { type: array, items: { type: string }, description: "of those, the ones chat agents (and any job of a chat agent) may call: read-only as the admin or the package said when allowing them, not as the server says live" }
+        enabled: { type: boolean }
+        connected: { type: boolean, description: "it has what it needs to be called: a token, or nothing at all" }
+        secretsSet: { type: array, items: { type: string }, description: "which credentials are set, never their values" }
+        breaker: { type: string, enum: [closed, open, half-open], description: "open: it failed too often lately, and is not called for a while" }
+        workspace: { type: boolean }
+        source: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    McpServerSettings:
+      type: object
+      description: fields left out stay as they are
+      properties:
+        displayName: { type: string }
+        url: { type: string, description: "https, or http to localhost" }
+        auth: { type: string, enum: [bearer, none], description: "only when making a server" }
+        allowedTools: { type: array, items: { type: string } }
+        readOnlyTools: { type: array, items: { type: string }, description: "the allowed tools chat agents may call; left out while allowedTools changes, what the server marks read-only at that moment" }
+        enabled: { type: boolean }
+        secrets: { type: object, additionalProperties: { type: string }, description: "credentials, e.g. {token: …}; an empty value removes one" }
+    McpTool:
+      type: object
+      required: [name, description, readOnly, allowed, chat]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        readOnly: { type: boolean, description: "the server marks it read-only, now" }
+        allowed: { type: boolean }
+        chat: { type: boolean, description: "chat agents may call it: allowed, and in readOnlyTools" }
+    McpCall:
+      type: object
+      required: [id, method, tool, outcome, resultBytes, durationMs, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        jobId: { type: string, format: uuid }
+        agentId: { type: string, format: uuid }
+        method: { type: string, description: "tools/list or tools/call" }
+        tool: { type: string }
+        payload: { type: object, additionalProperties: true, description: "the arguments, anything that looks like a secret masked" }
+        outcome: { type: string, enum: [ok, error, denied, open], description: "denied: the allowlist refused it; open: the breaker did" }
+        error: { type: string }
+        resultBytes: { type: integer }
+        durationMs: { type: integer }
+        createdAt: { type: string, format: date-time }
+    InstallationUpdate:
+      type: object
+      required: [version, checksum]
+      properties:
+        version: { type: string, description: "the version previewed, in the installation's registry" }
+        checksum: { type: string, description: "its checksum, as the preview showed it" }
+        acceptedPermissions: { type: array, items: { type: string }, description: "accepted now; with what was accepted before, every permission of the new version" }
+        resolve: { type: string, enum: [keep_local, take_theirs], description: "what becomes of what a person changed since installing" }
+        downgrade: { type: boolean, description: "a version older than the one installed is refused (400) unless this says so" }
+    UpdatePreview:
+      type: object
+      required: [from, to, checksum, addedPermissions, removedPermissions, needsAcceptance, localChanges]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        checksum: { type: string, description: "the checksum of the version previewed, to name in the update" }
+        addedPermissions: { type: array, items: { type: string }, description: "asked for by the new version and never accepted: to accept again" }
+        removedPermissions: { type: array, items: { type: string } }
+        needsAcceptance: { type: boolean }
+        localChanges: { type: array, items: { $ref: "#/components/schemas/LocalChange" } }
+    LocalChange:
+      type: object
+      required: [part, local, incoming]
+      properties:
+        part: { type: string, description: "instructions, SKILL.md, template" }
+        local: { type: string, description: "a unified diff: what was installed → what it is now" }
+        incoming: { type: string, description: "a unified diff: what was installed → what the new version has" }
