@@ -1324,6 +1324,27 @@ paths:
         "204": { description: taken back }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /conversations/{conversationId}/queue:
+    get:
+      operationId: listConversationQueue
+      description: |
+        The conversation's queue: messages people queued while an agent answered, oldest first.
+        When the turn ends the first of them starts the next turn; each can be edited (PATCH
+        /messages/{id}), deleted, or sent at once as a steer. For whoever may read the conversation.
+      parameters: [ { $ref: "#/components/parameters/conversationId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Message" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /messages/{messageId}/steer:
+    post:
+      operationId: sendQueuedMessageNow
+      description: '"Send now as a steer": its author takes a queued message out of the queue and it steers the running turn (or starts a turn, when none runs any more). 409 when it is no longer queued.'
+      parameters: [ { $ref: "#/components/parameters/messageId" } ]
+      responses:
+        "200": { description: sent, content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /runtime-requests:
     get:
       operationId: listWaitingRuntimeRequests
@@ -3841,6 +3862,15 @@ components:
         clientId: { type: string, maxLength: 200, description: "the sender's idempotency key, unique per sender in the conversation" }
         mentions: { type: array, items: { $ref: "#/components/schemas/MemberRef" } }
         attachments: { type: array, items: { type: string, format: uuid }, description: "files the sender uploaded into this conversation (POST /attachments) and has not sent yet" }
+        intent:
+          type: string
+          enum: [steer, queued]
+          description: |
+            While an agent answers in the conversation: steer (the default) corrects the running turn,
+            queued waits for its end and then starts the next turn (the composer's "Steer" and "Queue";
+            ⌘⏎ swaps them). A message that starts with / is always queued while a turn runs. Without a
+            turn running it is an ordinary message. Steering a backend without activeSteering
+            (Job.capabilities) interrupts and resumes the turn.
     MessagePatch:
       type: object
       required: [body]
@@ -3851,6 +3881,10 @@ components:
       required: [id, conversationId, seq, authorKind, kind, body, replyCount, status, origin, createdAt, mentions, reactions, attachments]
       properties:
         id: { type: string, format: uuid }
+        inputIntent:
+          type: string
+          enum: [turn_start, steer, queued, promoted_to_steer]
+          description: "what a person wrote it for while an agent answered: a steer, queued for after the turn (shown above the composer, GET /conversations/{id}/queue), the start of the next turn once dequeued, or sent at once as a steer; absent for a message written with no turn running"
         conversationId: { type: string, format: uuid }
         seq: { type: integer, format: int64 }
         authorKind: { type: string, enum: [user, agent, system, plugin, external] }

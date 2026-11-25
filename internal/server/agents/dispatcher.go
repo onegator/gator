@@ -50,17 +50,31 @@ func NewDispatcher(store dispatchStore, guards Guard, turns turnStarter, interce
 	return &Dispatcher{store: store, guards: guards, turns: turns, interceptors: interceptors}
 }
 
-// Events are the outbox events the dispatcher reads.
-func (*Dispatcher) Events() []string { return []string{conversations.EventMessagePosted} }
+// Events are the outbox events the dispatcher reads: a message posted, and a queued message that
+// leaves its queue (it asks then, as if just posted).
+func (*Dispatcher) Events() []string {
+	return []string{conversations.EventMessagePosted, conversations.EventMessageDequeued}
+}
 
 // Handle implements conversations.Handler.
 func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	var p struct {
-		MessageID string `json:"messageId"`
+		MessageID string   `json:"messageId"`
+		Agents    []string `json:"agents"`
 	}
 	var id pgtype.UUID
 	if json.Unmarshal(e.Payload, &p) != nil || id.Scan(p.MessageID) != nil {
 		return nil
+	}
+	// A queued message also asks the agents it was queued for.
+	var queuedFor []pgtype.UUID
+	if e.Type == conversations.EventMessageDequeued {
+		for _, s := range p.Agents {
+			var a pgtype.UUID
+			if a.Scan(s) == nil && a.Valid {
+				queuedFor = append(queuedFor, a)
+			}
+		}
 	}
 	msg, err := d.store.GetMessage(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -79,7 +93,7 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 	if !conv.ProjectID.Valid {
 		return nil // agents are a project's
 	}
-	asked, err := d.asked(ctx, msg, conv)
+	asked, err := d.asked(ctx, msg, conv, queuedFor)
 	if err != nil {
 		return err
 	}
@@ -120,18 +134,20 @@ func (d *Dispatcher) Handle(ctx context.Context, e db.EventsAfterRow) error {
 }
 
 // asks says whether a message can ask an agent anything: words a person, an agent or somebody
-// outside on a bridge wrote, still there. Cards, Gator's own lines and plugins do not call agents;
-// what an outside author asks is answered in chat (GrantFor), never with work.
+// outside on a bridge wrote, still there, and not waiting in a queue for the turn running to end.
+// Cards, Gator's own lines and plugins do not call agents; what an outside author asks is answered
+// in chat (GrantFor), never with work.
 func asks(m db.Message) bool {
-	return !m.DeletedAt.Valid && m.Kind == "text" && m.Status == conversations.StatusFinal &&
+	queued := m.InputIntent != nil && *m.InputIntent == conversations.IntentQueued
+	return !m.DeletedAt.Valid && !queued && m.Kind == "text" && m.Status == conversations.StatusFinal &&
 		(m.AuthorKind == conversations.AuthorUser || m.AuthorKind == conversations.AuthorAgent ||
 			m.AuthorKind == conversations.AuthorExternal)
 }
 
-// asked are the agents a message asks: those it mentions and, for a person's message in a DM,
-// the agents in that DM. An agent's own words ask only whom they mention.
-func (d *Dispatcher) asked(ctx context.Context, msg db.Message, conv db.Conversation) ([]db.Agent, error) {
-	var ids []pgtype.UUID
+// asked are the agents a message asks: those it was queued for (also), those it mentions and, for
+// a person's message in a DM, the agents in that DM. An agent's own words ask only whom they mention.
+func (d *Dispatcher) asked(ctx context.Context, msg db.Message, conv db.Conversation, also []pgtype.UUID) ([]db.Agent, error) {
+	ids := append([]pgtype.UUID(nil), also...)
 	mentions, err := d.store.ListMentionsOfMessages(ctx, []pgtype.UUID{msg.ID})
 	if err != nil {
 		return nil, err

@@ -12,7 +12,7 @@ import (
 )
 
 const searchMessages = `-- name: SearchMessages :many
-SELECT m.id, m.conversation_id, m.seq, m.author_kind, m.author_id, m.kind, m.body, m.card_type, m.card, m.card_key, m.reply_count, m.status, m.origin, m.client_id, m.edited_at, m.deleted_at, m.created_at
+SELECT m.id, m.conversation_id, m.seq, m.author_kind, m.author_id, m.kind, m.body, m.card_type, m.card, m.card_key, m.reply_count, m.status, m.origin, m.client_id, m.edited_at, m.deleted_at, m.created_at, m.input_intent
 FROM messages m
 JOIN conversations c ON c.id = m.conversation_id
 LEFT JOIN messages pm ON pm.id = c.parent_message_id
@@ -82,6 +82,7 @@ func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) 
 			&i.Message.EditedAt,
 			&i.Message.DeletedAt,
 			&i.Message.CreatedAt,
+			&i.Message.InputIntent,
 		); err != nil {
 			return nil, err
 		}

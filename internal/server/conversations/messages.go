@@ -64,6 +64,10 @@ type Draft struct {
 	// left out rather than told about it.
 	Mentions    []Member
 	Attachments []pgtype.UUID
+	// Intent is what a person means a message for while an agent answers in the conversation:
+	// IntentSteer (the default: a correction of the turn) or IntentQueued (the next thing to do
+	// once it ends). With no turn running there is nothing to steer or wait for, and it is ignored.
+	Intent string
 	// Within runs in the post's own transaction once the message is written, before anyone hears
 	// of it: what belongs to the message (the review comments it carries) is there with it, or the
 	// message is not. An error from it fails the post.
@@ -156,9 +160,13 @@ func (m *Messages) Post(ctx context.Context, p auth.Principal, conversation pgty
 				return err
 			}
 		}
+		intent, err := intentOf(ctx, q, conv, author, d)
+		if err != nil {
+			return err
+		}
 		if msg, err = q.InsertMessage(ctx, db.InsertMessageParams{
 			ConversationID: conv.ID, Seq: seq, AuthorKind: author.Kind, AuthorID: author.ID, Kind: messageText,
-			Body: d.Body, ClientID: optional(d.ClientID), Origin: []byte(emptyOrigin), Status: messageFinal,
+			Body: d.Body, ClientID: optional(d.ClientID), Origin: []byte(emptyOrigin), Status: messageFinal, InputIntent: intent,
 		}); err != nil {
 			return err
 		}
@@ -191,6 +199,8 @@ func (m *Messages) Post(ctx context.Context, p auth.Principal, conversation pgty
 
 func (d Draft) validate() error {
 	switch {
+	case d.Intent != "" && d.Intent != IntentSteer && d.Intent != IntentQueued:
+		return invalid("intent is steer or queued")
 	case d.Body == "" && len(d.Attachments) == 0:
 		return invalid("a message needs a body or a file")
 	case utf8.RuneCountInString(d.Body) > maxBodyRunes:

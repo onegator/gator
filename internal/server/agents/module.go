@@ -110,6 +110,8 @@ func (m *Module) Consumer(hub *events.Hub, log *slog.Logger, poll time.Duration)
 	c.On(m.Dispatcher, m.Dispatcher.Events()...)
 	c.On(m.Summaries.Handler(), "job.finished")
 	c.On(m.Tracker, m.Tracker.Events()...)
+	// After the tracker ended the turn: the next queued message there starts the next one.
+	c.On(QueueRunner{pool: m.pool}, "job.finished")
 	return c
 }
 

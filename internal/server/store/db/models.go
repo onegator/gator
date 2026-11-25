@@ -595,6 +595,7 @@ type Message struct {
 	EditedAt       pgtype.Timestamptz `json:"edited_at"`
 	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	InputIntent    *string            `json:"input_intent"`
 }
 
 type MessageAttachment struct {
