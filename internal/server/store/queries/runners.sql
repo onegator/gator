@@ -41,12 +41,12 @@ SELECT * FROM runners WHERE id = $1;
 
 -- name: CreateJob :one
 INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement,
-                  agent_id, turn_id, tier, kind)
+                  agent_id, turn_id, tier, kind, payer_id, waiting_reason)
 -- An empty placement is local, which is what every job was before it had one; an empty tier is
 -- work and an empty kind a phase job, which is what every job was before agents had turns.
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF(sqlc.arg(placement)::text, ''), 'local'),
         sqlc.narg(agent_id), sqlc.narg(turn_id), COALESCE(NULLIF(sqlc.arg(tier)::text, ''), 'work'),
-        COALESCE(NULLIF(sqlc.arg(kind)::text, ''), 'phase'))
+        COALESCE(NULLIF(sqlc.arg(kind)::text, ''), 'phase'), sqlc.narg(payer_id), sqlc.arg(waiting_reason))
 RETURNING *;
 
 -- name: TaskWorkBranch :one
@@ -64,37 +64,58 @@ SELECT * FROM jobs WHERE id = $1 FOR UPDATE;
 -- name: ListJobsByTask :many
 SELECT * FROM jobs WHERE task_id = $1 ORDER BY created_at;
 
--- name: LeaseJobs :many
--- Hands up to `slots` queued jobs to a runner. SKIP LOCKED lets concurrent runners lease
--- disjoint jobs without waiting on each other.
+-- name: LeaseCandidates :many
+-- The queued jobs a runner could be handed, oldest first, locked until the lease's transaction
+-- ends. SKIP LOCKED lets concurrent runners consider disjoint jobs without waiting on each other.
+-- Whose login each runs on is decided in Go (runners.Credentials); a job that waits for a login
+-- goes after those that do not, so a queue of them cannot hold the rest back.
 --
 -- Placement must match. A local job someone started goes to a machine of theirs or to a shared
 -- one (no owner), never to another person's Mac, which is logged in as somebody else. A job the
 -- autopilot queued has no person behind it and takes any local runner. A runner started for one
 -- job (only_job) takes that job and nothing else.
+SELECT j.* FROM jobs j
+WHERE j.status = 'queued'
+  AND j.backend = ANY(sqlc.arg(backends)::text[])
+  AND (cardinality(sqlc.arg(projects)::uuid[]) = 0 OR j.project_id = ANY(sqlc.arg(projects)::uuid[]))
+  AND j.placement = sqlc.arg(placement)::text
+  AND (sqlc.narg(only_job)::uuid IS NULL OR j.id = sqlc.narg(only_job)::uuid)
+  AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
+       OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
+  -- A person's own login goes only to their own machine or a shared runner, whoever queued the
+  -- job: the autopilot's work, a summary or an automation's job paid by Bob never reaches Ann's
+  -- Mac, whose agent could read it. A payer with no login for the backend brings none.
+  AND (sqlc.narg(owner)::uuid IS NULL OR j.payer_id IS NULL OR j.payer_id = sqlc.narg(owner)::uuid
+       OR NOT EXISTS (SELECT 1 FROM user_credentials c WHERE c.user_id = j.payer_id AND c.backend = j.backend))
+  -- A runner older than protocol v3 runs every job as a phase; it gets only those.
+  AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
+  -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
+  -- with no tools: a runner would refuse it anywhere else.
+  AND (j.tier <> 'chat' OR j.backend = ANY(sqlc.arg(read_only)::text[]))
+  AND (j.kind <> 'summary' OR j.backend = ANY(sqlc.arg(no_tools)::text[]))
+ORDER BY (j.waiting_reason <> ''), j.created_at
+LIMIT sqlc.arg(slots)
+FOR UPDATE OF j SKIP LOCKED;
+
+-- name: LeaseJob :one
+-- Hands one candidate to a runner, with the login it runs on.
 UPDATE jobs
 SET status = 'leased', runner_id = sqlc.arg(runner_id), lease_expires_at = sqlc.arg(lease_until),
-    attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
-WHERE id IN (
-    SELECT j.id FROM jobs j
-    WHERE j.status = 'queued'
-      AND j.backend = ANY(sqlc.arg(backends)::text[])
-      AND (cardinality(sqlc.arg(projects)::uuid[]) = 0 OR j.project_id = ANY(sqlc.arg(projects)::uuid[]))
-      AND j.placement = sqlc.arg(placement)::text
-      AND (sqlc.narg(only_job)::uuid IS NULL OR j.id = sqlc.narg(only_job)::uuid)
-      AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
-           OR sqlc.narg(owner)::uuid IS NULL OR j.created_by = sqlc.narg(owner)::uuid)
-      -- A runner older than protocol v3 runs every job as a phase; it gets only those.
-      AND (NOT sqlc.arg(phase_only)::boolean OR j.kind = 'phase')
-      -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
-      -- with no tools: a runner would refuse it anywhere else.
-      AND (j.tier <> 'chat' OR j.backend = ANY(sqlc.arg(read_only)::text[]))
-      AND (j.kind <> 'summary' OR j.backend = ANY(sqlc.arg(no_tools)::text[]))
-    ORDER BY j.created_at
-    LIMIT sqlc.arg(slots)
-    FOR UPDATE SKIP LOCKED
-)
+    attempts = attempts + 1, updated_at = now(), unassignable_since = NULL, waiting_reason = '',
+    credential_id = sqlc.narg(credential_id), credential_kind = sqlc.arg(credential_kind),
+    credential_version = sqlc.arg(credential_version),
+    credential_exclusive = sqlc.arg(credential_exclusive)
+WHERE id = sqlc.arg(id) AND status = 'queued'
 RETURNING *;
+
+-- name: LockLeases :exec
+-- Leases are handed out one transaction at a time, so a login one job at a time may hold is never
+-- handed to two runners at once. It is taken by every lease, not only those that turn out to choose
+-- such a login: which login a job runs on is known only after its row is locked, and the lock must
+-- come before the rows. Saving, removing or refusing a login takes it first too, so a login and the
+-- jobs waiting for it are always locked in one order (lock, jobs, login) and never deadlock. A lease
+-- is a handful of rows; the wait is short.
+SELECT pg_advisory_xact_lock(7413020250);
 
 -- name: ExtendLeases :execrows
 UPDATE jobs SET lease_expires_at = sqlc.arg(lease_until), updated_at = now()
@@ -132,16 +153,18 @@ WHERE status IN ('leased', 'running', 'stalled') AND lease_expires_at < sqlc.arg
 RETURNING id, task_id, status;
 
 -- name: MarkUnassignableJobs :many
--- A queued job no connected runner can take. Matching mirrors LeaseJobs and the session's own
+-- A queued job no connected runner can take. Matching mirrors LeaseCandidates and the session's own
 -- filter: the backend must be offered, the project allowed, and the backend's login must work,
 -- because a runner with an expired login is online and still takes nothing. Jobs already marked
 -- are skipped, so the event fires once per episode rather than on every sweep. Placement and
--- ownership match as in LeaseJobs. A cloud job a provisioner will start a runner for is left
+-- ownership match as in LeaseCandidates. A cloud job a provisioner will start a runner for is left
 -- alone (skip_cloud): nobody is missing, the runner is on its way.
 UPDATE jobs SET unassignable_since = now(), updated_at = now()
 WHERE id IN (
     SELECT j.id FROM jobs j
     WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < sqlc.arg(before)
+      -- A job waiting for its payer's login already says why it waits.
+      AND j.waiting_reason = ''
       AND NOT (sqlc.arg(skip_cloud)::boolean AND j.placement = 'cloud')
       AND NOT EXISTS (
           SELECT 1 FROM runners r
@@ -155,7 +178,12 @@ WHERE id IN (
             AND (COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(r.capabilities->'projects') = 'array'
                                                   THEN r.capabilities->'projects' END), 0) = 0
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
-            AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+            -- The runner's own login matters only to a job that does not bring its payer's.
+            AND (COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+                 OR (r.capabilities->'payer_logins' @> to_jsonb(j.backend) AND j.payer_id IS NOT NULL
+                     AND (r.owner_id IS NULL OR r.owner_id = j.payer_id) AND EXISTS (
+                     SELECT 1 FROM user_credentials c
+                     WHERE c.user_id = j.payer_id AND c.backend = j.backend AND c.status <> 'error')))
             AND (j.kind = 'phase' OR r.protocol_version >= 3)
       )
     FOR UPDATE SKIP LOCKED
@@ -217,4 +245,13 @@ UPDATE jobs SET objections = objections + 1, updated_at = now() WHERE id = $1 RE
 
 -- name: ListQueuedCloudJobs :many
 -- Cloud jobs waiting for a runner, oldest first: what a provisioner may start machines for.
-SELECT * FROM jobs WHERE status = 'queued' AND placement = 'cloud' ORDER BY created_at LIMIT sqlc.arg(max);
+SELECT * FROM jobs WHERE status = 'queued' AND placement = 'cloud'
+  -- A job waiting for its payer's login gets no machine: it would sit there with nothing to run.
+  AND waiting_reason = ''
+ORDER BY created_at LIMIT sqlc.arg(max);
+
+-- name: ActiveTrustDomains :many
+-- Whose logins the runner's active jobs hold: a payer's id for a job on their own login, '' for a
+-- job on the runner's. Jobs on one runner share a user, so they can read each other's logins.
+SELECT DISTINCT (CASE WHEN credential_kind IN ('', 'runner') OR payer_id IS NULL THEN '' ELSE payer_id::text END)::text AS domain
+FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled');

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +32,9 @@ type Executor struct {
 	CLIPath   string
 	// DenyRead are files the agent must not open — the runner's token file. See agentenv.
 	DenyRead []string
+	// LoginDir holds the directories of the payers' logins jobs run on, one per job, removed when
+	// it ends (and left-overs at start, SweepLogins). Empty: the system's temporary directory.
+	LoginDir string
 }
 
 // agentEnv is what the agent's process gets so gator-cli works inside the job: where Gator is,
@@ -83,6 +87,25 @@ const maxSteers = 20
 // refuses to raise more than a job is allowed. This only bounds a server that has lost count.
 const maxObjections = 5
 
+// PayerLoginBackends implements client.PayerLoginRunner: every backend runs a job's Credential,
+// except one whose configuration would put another login above it.
+func (e *Executor) PayerLoginBackends() []string {
+	var out []string
+	for name, b := range e.Backends {
+		if g, ok := b.(backend.PayerLoginGuard); ok {
+			if why := g.PayerLoginBlocked(); why != "" {
+				if e.Log != nil {
+					e.Log.Warn("this backend takes no job on its payer's login", "backend", name, "why", why)
+				}
+				continue
+			}
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // AuthState implements client.AuthReporter.
 func (e *Executor) AuthState() map[string]string {
 	out := map[string]string{}
@@ -105,6 +128,14 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	if access.NoTools {
 		job.Repo, job.AgentToken = nil, "" // nothing to read and nobody to talk to: an empty directory
 	}
+	// The payer's login, when the job brings one: the agent runs on it and on none of this
+	// runner's, and nothing the job sends carries its values.
+	payer, err := openLogin(job.Credential, e.LoginDir)
+	if err != nil {
+		return proto.Finish{Status: proto.StatusFailed, StopReason: "login: " + err.Error()}
+	}
+	defer payer.close()
+	io = payer.maskIO(io)
 	prepare := e.WS.Prepare
 	if access.ReadOnly {
 		prepare = e.WS.PrepareReadOnly
@@ -120,7 +151,15 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 		_ = ws.Cleanup(context.WithoutCancel(ctx), false)
 		return proto.Finish{Status: proto.StatusFailed, StopReason: "workspace: " + err.Error()}
 	}
-	env = append(env, signing...)
+	env = append(append(env, signing...), payer.Env()...)
+	if iso, ok := be.(backend.ConfigIsolator); ok && payer != nil {
+		dir, err := payer.configDir()
+		if err != nil {
+			_ = ws.Cleanup(context.WithoutCancel(ctx), false)
+			return proto.Finish{Status: proto.StatusFailed, StopReason: "login: " + err.Error()}
+		}
+		env = append(env, iso.ConfigEnv(dir)...)
+	}
 	servers := e.mcpServers(job)
 	opening := promptFor(job, ws)
 	// Skills go to a backend that loads them by itself; any other is told of them in its prompt
@@ -132,7 +171,7 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	}
 	spec := func(prompt, session string, maxTools int, maxCost float64) backend.Spec {
 		return backend.Spec{Dir: ws.Dir, Prompt: prompt, SessionID: session, Model: job.Model, MaxToolCalls: maxTools,
-			MaxCostUSD: maxCost, Env: env, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
+			MaxCostUSD: maxCost, Env: env, PayerLogin: payer != nil, DenyRead: e.DenyRead, Access: access, MCP: servers, Skills: skills}
 	}
 
 	var usage proto.Usage
@@ -249,6 +288,11 @@ func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) prot
 	if err := ws.Cleanup(gctx, keep); err != nil && e.Log != nil {
 		e.Log.Warn("workspace cleanup", "job", job.JobID, "err", err)
 	}
+	// What the agent's CLI rewrote of its login goes back to the server, which keeps it: a
+	// refreshed token replaces the one it was handed.
+	fin.CredentialRefresh = payer.refreshed()
+	fin.CredentialRefused = payer.refused(fin, last.LoginRefused)
+	payer.maskFinish(&fin)
 	return fin
 }
 

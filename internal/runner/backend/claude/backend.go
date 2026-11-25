@@ -39,6 +39,9 @@ type Backend struct {
 	// AllowEnv names variables the agent gets beyond agentenv's allow-list; a trailing *
 	// matches a prefix. The runner's own GATOR_* never pass.
 	AllowEnv []string
+	// ManagedSettings are the administrator's settings files PayerLoginBlocked reads; nil: the
+	// platform's.
+	ManagedSettings []string
 }
 
 // noMCP is the default: a job session gets no MCP servers.
@@ -126,6 +129,11 @@ func keychainState(lookup func() (int, error)) string {
 
 // Run implements backend.Backend.
 func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) backend.Outcome {
+	if spec.PayerLogin {
+		if why := repoBlocked(spec.Dir); why != "" {
+			return failed("this job runs on its payer's login, and " + why + "; it does not run")
+		}
+	}
 	prompt := spec.Prompt
 	if strings.HasPrefix(prompt, "-") { // would be parsed as a flag
 		prompt = "Task: " + prompt
@@ -161,7 +169,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	cmd.Dir = spec.Dir
 	// An allow-list, not a deny-list: the runner's environment holds its token and whatever its
 	// operator exported, and an agent that can run any command can print all of it.
-	cmd.Env = append(agentenv.Filter(os.Environ(), b.AllowEnv), spec.Env...)
+	cmd.Env = backend.AgentEnv(spec, b.AllowEnv)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Stdout goes through our own pipe: a background process that inherits it must not be
 	// able to keep this run alive after claude itself exits.
@@ -277,6 +285,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 		out.Reason = fmt.Sprintf("claude ended without a result (%s)", exitText(waitErr))
 		if t := strings.TrimSpace(stderr.String()); t != "" {
 			out.Reason += ": " + clip(t, 500)
+			out.LoginRefused = backend.LoginRefusal(clip(t, 500))
 		}
 		if p.BadLines > 0 {
 			out.Reason += fmt.Sprintf("; %d unparseable lines", p.BadLines)
@@ -290,6 +299,9 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 		if len(p.Result.Errors) > 0 {
 			out.Reason += ": " + clip(strings.Join(p.Result.Errors, "; "), 500)
 		}
+		// An error result's text is Claude Code's, not the model's: "Invalid API key · Please run
+		// /login" is what it says when the API turns the login down.
+		out.LoginRefused = backend.LoginRefusal(clip(strings.TrimSpace(p.Result.Text+" "+strings.Join(p.Result.Errors, "; ")), 500))
 	default:
 		out.Status = proto.StatusDone
 	}

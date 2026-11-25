@@ -389,6 +389,7 @@ func (d *driver) outcome(runCtx context.Context, s setup, r promptResult, err er
 		out.Interrupted, out.Cause, out.Reason = true, cause, cause.Error()
 	case err != nil:
 		out.Status, out.Reason = proto.StatusFailed, d.agent+": "+clip(err.Error(), 500)
+		out.LoginRefused = backend.LoginRefusal(out.Reason) // the adapter's error, not the agent's words
 	default:
 		d.emit("result", map[string]any{"stop_reason": r.StopReason, "cost_usd": cost})
 		switch r.StopReason {

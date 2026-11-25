@@ -4,8 +4,11 @@ package backend
 
 import (
 	"context"
+	"os"
+	"regexp"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/runner/agentenv"
 )
 
 // Spec describes one agent run.
@@ -19,6 +22,9 @@ type Spec struct {
 	// Env is added to the agent's environment, as KEY=VALUE. It carries the job's own identity
 	// for gator-cli, and the directory that holds it.
 	Env []string
+	// PayerLogin says Env carries the model login of the person who pays for the job: the agent
+	// gets that one and none of the runner's own (agentenv.WithoutLogins).
+	PayerLogin bool
 	// DenyRead are files the agent must not open: the runner's token file. Backends pass them
 	// to agentenv.Command, which enforces it where the platform can.
 	DenyRead []string
@@ -92,6 +98,51 @@ type Outcome struct {
 	ToolCalls   int
 	Summary     string
 	Usage       proto.Usage
+	// LoginRefused is the CLI's own words, when the CLI itself — not its model — said its login was
+	// turned down: an error result, an RPC error, what it printed on stderr before it died. Never
+	// what the agent wrote, which a task about invalid keys, or a page it read, could fill.
+	LoginRefused string
+}
+
+// refusals are how the CLIs say a login was turned down: an invalid or revoked key, an expired
+// OAuth token, a ChatGPT login whose refresh token was used elsewhere.
+var refusals = regexp.MustCompile(`(?i)invalid (x-)?api[ _-]?key|authentication_error|authentication_failed|authentication required|invalid bearer token|` +
+	`oauth token (has )?(expired|been revoked)|token (has )?(expired|been revoked)|please run /login|not logged in|` +
+	`refresh_token_reused|refresh token (was|has been) (already )?used|could not be refreshed|\b401\b[^\n]{0,40}(unauthori[sz]ed|authentication)`)
+
+// LoginRefusal is text when a CLI's own error says its login was turned down, else "".
+func LoginRefusal(text string) string {
+	if refusals.MatchString(text) {
+		return text
+	}
+	return ""
+}
+
+// AgentEnv is the environment of an agent's process: what it may inherit of the runner's (allow
+// names more than agentenv's list), without the runner's own logins when the job brings its
+// payer's, and the job's own variables last, so they win.
+func AgentEnv(spec Spec, allow []string) []string {
+	base := agentenv.Filter(os.Environ(), allow)
+	if spec.PayerLogin {
+		base = agentenv.WithoutLogins(base)
+	}
+	return append(base, spec.Env...)
+}
+
+// ConfigIsolator is a backend whose CLI keeps its settings, sessions and transcripts in a
+// directory a variable names. A job on its payer's login gets a directory of its own, so what one
+// person's job wrote — a transcript holding tool output, a settings file — is not another's to read
+// or to be steered by.
+type ConfigIsolator interface {
+	ConfigEnv(dir string) []string
+}
+
+// PayerLoginGuard is a backend that can tell when something would put another login above a
+// payer's: a managed setting that supplies a key, a repository's settings that do. Blocked says
+// why, or "" when nothing does.
+type PayerLoginGuard interface {
+	// PayerLoginBlocked looks at the runner's own configuration, once, at start.
+	PayerLoginBlocked() string
 }
 
 // Backend runs an agent CLI.

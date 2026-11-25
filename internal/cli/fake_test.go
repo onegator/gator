@@ -43,6 +43,7 @@ type fakeGator struct {
 	events    map[string][]JobEvent
 	newJobs   []map[string]any
 	pending   map[string]string // login code → S256 challenge
+	secrets   map[string]string // the model logins people saved, by kind
 	redirects map[string]string // login code → redirect_uri
 
 	// Knobs for one test at a time.
@@ -93,6 +94,7 @@ func newFake(t *testing.T) *fakeGator {
 		events:    map[string][]JobEvent{},
 		pending:   map[string]string{},
 		redirects: map[string]string{},
+		secrets:   map[string]string{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -204,6 +206,28 @@ func (f *fakeGator) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case path == "/api/v1/auth/me":
 		writeJSONT(w, 200, Me{Kind: "user", UserID: userID, Name: "Ada Lovelace", WorkspaceRole: "member", Scope: "user"})
+	case path == "/api/v1/me/credentials":
+		out := ModelCredentials{Credentials: []ModelCredential{}, Kinds: []ModelCredentialKind{
+			{Kind: "claude_subscription", Backend: "claude", Label: "Claude subscription", Checkable: true},
+			{Kind: "chatgpt_subscription", Backend: "acp:codex", Label: "ChatGPT subscription", Rotates: true, Multiline: true}}}
+		for k, v := range f.secrets {
+			out.Credentials = append(out.Credentials, ModelCredential{Kind: k, Label: k, Hint: "…" + v[len(v)-4:], Status: "unchecked", CreatedAt: t0, UpdatedAt: t0})
+		}
+		writeJSONT(w, 200, out)
+	case len(parts) == 3 && parts[0] == "me" && parts[1] == "credentials" && r.Method == http.MethodPut:
+		var in struct{ Secret string }
+		_ = json.Unmarshal(body, &in)
+		f.secrets[parts[2]] = in.Secret
+		writeJSONT(w, 200, ModelCredential{Kind: parts[2], Label: "Claude subscription", Hint: "…" + in.Secret[len(in.Secret)-4:], Status: "unchecked", CreatedAt: t0, UpdatedAt: t0})
+	case len(parts) == 4 && parts[0] == "me" && parts[3] == "check":
+		writeJSONT(w, 200, ModelCredential{Kind: parts[2], Label: "Claude subscription", Status: "error", LastError: "Anthropic turned this login down (401)", CreatedAt: t0, UpdatedAt: t0})
+	case len(parts) == 3 && parts[0] == "me" && parts[1] == "credentials" && r.Method == http.MethodDelete:
+		if _, ok := f.secrets[parts[2]]; !ok {
+			problem(w, 404, "no such login")
+			return
+		}
+		delete(f.secrets, parts[2])
+		w.WriteHeader(http.StatusNoContent)
 	case path == "/api/v1/projects" && r.Method == http.MethodGet:
 		writeJSONT(w, 200, f.projects)
 	case path == "/api/v1/projects" && r.Method == http.MethodPost:

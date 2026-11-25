@@ -78,7 +78,11 @@ func NewKey(id string) string {
 func (k *Keyring) CurrentID() string { return k.current }
 
 // Encrypt returns "v1.<keyid>.<base64 nonce+ciphertext>".
-func (k *Keyring) Encrypt(plaintext []byte) (string, error) {
+func (k *Keyring) Encrypt(plaintext []byte) (string, error) { return k.EncryptBound(plaintext, "") }
+
+// EncryptBound is Encrypt bound to where the ciphertext belongs (a row's owner and kind): it
+// decrypts only with the same binding, so a ciphertext copied into another row reads as nothing.
+func (k *Keyring) EncryptBound(plaintext []byte, binding string) (string, error) {
 	gcm, err := k.gcm(k.current)
 	if err != nil {
 		return "", err
@@ -87,12 +91,24 @@ func (k *Keyring) Encrypt(plaintext []byte) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	sealed := gcm.Seal(nonce, nonce, plaintext, []byte(k.current))
+	sealed := gcm.Seal(nonce, nonce, plaintext, aad(k.current, binding))
 	return "v1." + k.current + "." + base64.RawStdEncoding.EncodeToString(sealed), nil
 }
 
+// aad is what a ciphertext is authenticated with besides its key: the key's id and, when bound,
+// the binding. Unbound ciphertexts keep the key id alone, as they always had.
+func aad(keyID, binding string) []byte {
+	if binding == "" {
+		return []byte(keyID)
+	}
+	return []byte(keyID + "\x00" + binding)
+}
+
 // Decrypt reverses Encrypt with whichever key the ciphertext names.
-func (k *Keyring) Decrypt(ciphertext string) ([]byte, error) {
+func (k *Keyring) Decrypt(ciphertext string) ([]byte, error) { return k.DecryptBound(ciphertext, "") }
+
+// DecryptBound reverses EncryptBound with the same binding.
+func (k *Keyring) DecryptBound(ciphertext, binding string) ([]byte, error) {
 	parts := strings.SplitN(ciphertext, ".", 3)
 	if len(parts) != 3 || parts[0] != "v1" {
 		return nil, errors.New("secrets: malformed ciphertext")
@@ -110,7 +126,7 @@ func (k *Keyring) Decrypt(ciphertext string) ([]byte, error) {
 		return nil, errors.New("secrets: ciphertext too short")
 	}
 	nonce, sealed := raw[:gcm.NonceSize()], raw[gcm.NonceSize():]
-	return gcm.Open(nil, nonce, sealed, []byte(keyID))
+	return gcm.Open(nil, nonce, sealed, aad(keyID, binding))
 }
 
 // KeyID reports which key a ciphertext uses.

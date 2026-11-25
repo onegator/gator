@@ -58,6 +58,10 @@ func (f *eventFilter) allow(ctx context.Context, e events.Event) bool {
 	if e.Aggregate == conversations.Aggregate {
 		return f.conv.of(ctx, e.AggregateID).Read
 	}
+	// An event about a person (their model logins) is theirs alone, an admin's included.
+	if e.Aggregate == events.AggregateUser {
+		return f.p.UserID.Valid && uuidString(f.p.UserID) == e.AggregateID
+	}
 	if e.Aggregate == "job" {
 		if conv, ok := f.replyOf(ctx, e.AggregateID); !ok {
 			return false

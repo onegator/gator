@@ -193,24 +193,27 @@ type NewJob struct {
 }
 
 type Job struct {
-	ID          string         `json:"id"`
-	TaskID      string         `json:"taskId"`
-	ProjectID   string         `json:"projectId"`
-	Phase       string         `json:"phase"`
-	Role        string         `json:"role"`
-	Backend     string         `json:"backend"`
-	Model       string         `json:"model,omitempty"`
-	Instruction string         `json:"instruction"`
-	Status      string         `json:"status"`
-	Placement   string         `json:"placement,omitempty"`
-	RunnerID    string         `json:"runnerId,omitempty"`
-	Attempts    int            `json:"attempts"`
-	MaxAttempts int            `json:"maxAttempts"`
-	StopReason  string         `json:"stopReason,omitempty"`
-	Receipt     map[string]any `json:"receipt,omitempty"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	StartedAt   *time.Time     `json:"startedAt,omitempty"`
-	FinishedAt  *time.Time     `json:"finishedAt,omitempty"`
+	ID          string `json:"id"`
+	TaskID      string `json:"taskId"`
+	ProjectID   string `json:"projectId"`
+	Phase       string `json:"phase"`
+	Role        string `json:"role"`
+	Backend     string `json:"backend"`
+	Model       string `json:"model,omitempty"`
+	Instruction string `json:"instruction"`
+	Status      string `json:"status"`
+	Placement   string `json:"placement,omitempty"`
+	RunnerID    string `json:"runnerId,omitempty"`
+	Attempts    int    `json:"attempts"`
+	MaxAttempts int    `json:"maxAttempts"`
+	StopReason  string `json:"stopReason,omitempty"`
+	// WaitingReason says why a queued job is not running: its payer has no model login connected.
+	WaitingReason  string         `json:"waitingReason,omitempty"`
+	CredentialKind string         `json:"credentialKind,omitempty"`
+	Receipt        map[string]any `json:"receipt,omitempty"`
+	CreatedAt      time.Time      `json:"createdAt"`
+	StartedAt      *time.Time     `json:"startedAt,omitempty"`
+	FinishedAt     *time.Time     `json:"finishedAt,omitempty"`
 }
 
 // Finished reports whether the job will produce no more output.

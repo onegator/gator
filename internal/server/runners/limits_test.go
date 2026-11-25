@@ -27,7 +27,7 @@ func TestJobsGoOnlyWhereTheirLimitsHold(t *testing.T) {
 	}
 	lease := func(readOnly, noTools []string) []db.Job {
 		t.Helper()
-		jobs, err := f.q.LeaseJobs(ctx, db.LeaseJobsParams{RunnerID: f.s.runnerID, LeaseUntil: ts(time.Now().Add(time.Minute)),
+		jobs, err := leaseJobs(ctx, f.q, f.s.runnerID, ts(time.Now().Add(time.Minute)), db.LeaseCandidatesParams{
 			Backends: []string{f.backend}, Projects: []pgtype.UUID{f.project}, Slots: 10, Placement: chat.Placement,
 			ReadOnly: readOnly, NoTools: noTools})
 		if err != nil {

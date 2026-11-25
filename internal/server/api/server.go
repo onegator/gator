@@ -32,6 +32,7 @@ import (
 	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/conversations"
+	"github.com/onegator/gator/internal/server/credentials"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/invites"
 	"github.com/onegator/gator/internal/server/limits"
@@ -95,6 +96,8 @@ type Server struct {
 	Bridges *bridges.Service
 	// A2A is agents outside Gator, both ways; nil: their endpoints answer 503.
 	A2A *a2a.Module
+	// Credentials are people's own model logins; nil: their endpoints answer 503.
+	Credentials *credentials.Service
 }
 
 var _ gen.ServerInterface = (*Server)(nil)
@@ -121,6 +124,7 @@ func (s *Server) Router() http.Handler {
 	}
 	r.Use(auth.Authenticate(s.Tokens, s.DevAuth, s.Log))
 	r.Use(auth.AuditWith(db.New(s.Pool), s.Log))
+	r.Use(s.maskJobLogins)
 	r.Route("/auth", func(r chi.Router) {
 		r.Get("/config", s.authConfig)
 		if s.OIDC != nil {

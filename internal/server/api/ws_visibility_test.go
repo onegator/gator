@@ -153,6 +153,11 @@ func TestEventFilterRules(t *testing.T) {
 		{"one-job cloud runner", auth.Principal{Kind: auth.KindRunner, JobID: mustUUID(t, job.Id.String())}, output, false},
 		{"plugin of the project", auth.Principal{Kind: auth.KindPlugin, ProjectID: mustUUID(t, a.Id.String())}, output, true},
 		{"plugin of another project", auth.Principal{Kind: auth.KindPlugin, ProjectID: mustUUID(t, b.Id.String())}, output, false},
+		// A person's model logins are theirs alone, an admin's ears included.
+		{"the person, their login", user(viewerID), loginEvent(viewerID), true},
+		{"somebody else, a person's login", user(strangerID), loginEvent(viewerID), false},
+		{"workspace admin, a person's login", auth.Principal{Kind: auth.KindUser, WorkspaceRole: "admin"}, loginEvent(viewerID), false},
+		{"runner, a person's login", auth.Principal{Kind: auth.KindRunner}, loginEvent(viewerID), false},
 	}
 	for _, c := range cases {
 		if got := newEventFilter(h.api, c.p).allow(ctx, c.e); got != c.want {
@@ -174,4 +179,8 @@ func TestEventFilterRules(t *testing.T) {
 	if f.allow(ctx, created) {
 		t.Fatal("a removed member should stop hearing about the project")
 	}
+}
+
+func loginEvent(user string) events.Event {
+	return events.Event{Type: "credential.refused", Aggregate: events.AggregateUser, AggregateID: user}
 }

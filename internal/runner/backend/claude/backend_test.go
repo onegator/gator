@@ -273,6 +273,28 @@ func TestAgentGetsNeitherTheRunnerTokenNorItsFile(t *testing.T) {
 	}
 }
 
+// A job on its payer's login runs Claude Code with that login and not the runner's: the runner's
+// token and API key are not in its environment, the payer's token is.
+func TestPayersLoginReplacesTheRunnersOwn(t *testing.T) {
+	b, _ := fake(t, "claude-2.1.270-tool-success.ndjson")
+	envFile := filepath.Join(t.TempDir(), "env")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "runner-own-oauth")
+	t.Setenv("ANTHROPIC_API_KEY", "runner-own-key")
+	t.Setenv("FAKE_CLAUDE_ENV", envFile)
+	out, _ := run(t, b, context.Background(), backend.Spec{Prompt: "x", PayerLogin: true,
+		Env: []string{"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-payer"}})
+	if out.Status != proto.StatusDone {
+		t.Fatalf("outcome: %+v", out)
+	}
+	env, _ := os.ReadFile(envFile)
+	if strings.Contains(string(env), "runner-own") {
+		t.Fatalf("the runner's login reached a job on its payer's:\n%s", env)
+	}
+	if !strings.Contains(string(env), "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-payer") {
+		t.Fatalf("the payer's login did not:\n%s", env)
+	}
+}
+
 // Gator's MCP server reaches the session in a file of the job's own (the token never on the
 // command line), beside the runner's own servers, and a read-only session may call its tools.
 // The recording is what such a session streams: the server connected, a brain_search, a citation.
@@ -343,5 +365,58 @@ func TestTheRunnersMCPDirectoryStartsEmptyAndClosed(t *testing.T) {
 	_ = os.WriteFile(file, nil, 0o600)
 	if err := PrepareMCPDir(file); err == nil {
 		t.Fatal("a file is not a directory to use")
+	}
+}
+
+// An administrator's apiKeyHelper, or a key in a settings file's env, would outrank the payer's
+// token: such a runner offers Claude for no job on its payer's login.
+func TestSettingsThatOutrankThePayerBlockPayersLogins(t *testing.T) {
+	dir := t.TempDir()
+	managed := filepath.Join(dir, "managed-settings.json")
+	b := Backend{ManagedSettings: []string{managed}}
+	if why := b.PayerLoginBlocked(); why != "" {
+		t.Fatalf("blocked without settings: %s", why)
+	}
+	_ = os.WriteFile(managed, []byte(`{"permissions":{}}`), 0o600)
+	if why := b.PayerLoginBlocked(); why != "" {
+		t.Fatalf("blocked by harmless settings: %s", why)
+	}
+	_ = os.WriteFile(managed, []byte(`{"apiKeyHelper":"/usr/local/bin/get-key"}`), 0o600)
+	if why := b.PayerLoginBlocked(); !strings.Contains(why, "apiKeyHelper") {
+		t.Fatalf("apiKeyHelper: %q", why)
+	}
+	_ = os.WriteFile(managed, []byte(`{"env":{"ANTHROPIC_API_KEY":"sk-ant-api03-x"}}`), 0o600)
+	if why := b.PayerLoginBlocked(); !strings.Contains(why, "ANTHROPIC_API_KEY") {
+		t.Fatalf("env: %q", why)
+	}
+}
+
+// A repository whose .claude/settings.json would outrank the payer's login does not run a job on it.
+func TestARepositoryThatOutranksThePayerDoesNotRun(t *testing.T) {
+	b, _ := fake(t, "claude-2.1.270-tool-success.ndjson")
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, ".claude"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte(`{"apiKeyHelper":"echo sk-ant-api03-theirs"}`), 0o644)
+	out, _ := run(t, b, context.Background(), backend.Spec{Dir: dir, Prompt: "x", PayerLogin: true})
+	if out.Status != proto.StatusFailed || !strings.Contains(out.Reason, "apiKeyHelper") {
+		t.Fatalf("outcome %+v", out)
+	}
+	if out, _ := run(t, b, context.Background(), backend.Spec{Dir: dir, Prompt: "x"}); out.Status != proto.StatusDone {
+		t.Fatalf("a job on the runner's own login: %+v", out)
+	}
+}
+
+// Claude Code's own error result says the login was turned down; an answer that only talks about
+// an invalid key — a task about one, or words a page put in the agent's mouth — does not.
+func TestOnlyClaudeCodesOwnErrorIsALoginRefusal(t *testing.T) {
+	b, _ := fake(t, "synthetic-invalid-key.ndjson")
+	out, _ := run(t, b, context.Background(), backend.Spec{Prompt: "x"})
+	if out.Status != proto.StatusFailed || !strings.Contains(out.LoginRefused, "Invalid API key") {
+		t.Fatalf("an error result: %+v", out)
+	}
+	b, _ = fake(t, "synthetic-says-invalid-key.ndjson")
+	out, _ = run(t, b, context.Background(), backend.Spec{Prompt: "x"})
+	if out.LoginRefused != "" {
+		t.Fatalf("the agent's answer was taken for a refusal: %+v", out)
 	}
 }

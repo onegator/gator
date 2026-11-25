@@ -38,6 +38,7 @@ pomysły, bo licencja PolyForm Noncommercial wyklucza kopiowanie kodu.
 | 5 | [Otwarcie na zewnątrz](phase-5-external.md) | backend ACP w runnerze, A2A, most do Slacka, komentarze GitHub | 2, 4 | 4 tyg. |
 | 6 | [UI](phase-6-ui.md) | trzy panele, rozmowa z kartami, Brain, Marketplace, opcjonalny klient web | 1 → równolegle | 4 tyg. + web |
 | 7 | [Przegląd zmian i żywe sesje](phase-7-review-and-sessions.md) | diff każdej tury i komentarze na liniach, Claude jako żywa sesja, zgody na narzędzia, załączniki dla agenta | 5, 6 | 5–6 tyg. |
+| 8 | [Własne logowania do modeli](phase-8-user-credentials.md) | job działa na koncie Claude/Codex osoby, która za niego płaci; runner dostaje login w leasie | 2, 5 | 1,5 tyg. |
 
 Szacunki zakładają 1–2 osoby z agentami. Fazy 1 i 6a idą razem, bo rozmowa bez ekranu nie istnieje.
 
@@ -78,6 +79,7 @@ przychodzi jako karta w wątku taska i działa tym samym endpointem co dziś `/t
 | 4 | `00046_marketplace.sql`, `00047_mcp_servers.sql` |
 | 5 | `00048_messaging_bridges.sql`, `00049_external_agents.sql` |
 | 7 | `00050_turn_checkpoints.sql`, `00051_review_comments.sql`, `00052_runtime_requests.sql`, `00053_message_intent.sql`, `00054_job_settling.sql` |
+| 8 | `00055_user_credentials.sql` |
 
 Faza 1 dostała dwie migracje więcej niż w pierwszej wersji planu: backfill `#general` i backfill
 wątków otwartych tasków to osobne kroki (osobne PR-y), więc numery kolejnych faz przesunęły się o 2.
@@ -100,6 +102,12 @@ RFC 9728/8414 na swoim hoście i rejestrację RFC 7591 (inaczej potrzebna aplika
 `GATOR_<PROVIDER>_OAUTH_HOSTS`) i jak nazywają się ich narzędzia; Datadog
 (`https://mcp.datadoghq.com/api/unstable/mcp-server/mcp`) jest eksperymentalny (klucze API i aplikacji w
 dwóch nagłówkach, adres zależny od regionu), a Grafana jest samodzielnie hostowana (adres ustawia admin).
+
+Faza 8 ma jedno wywołanie do sprawdzenia z żywą usługą przed publikacją: czy `GET
+https://api.anthropic.com/v1/models` przyjmuje token subskrypcji Claude (`sk-ant-oat…`, nagłówki
+`Authorization: Bearer` i `anthropic-beta: oauth-2025-04-20`). Do czasu sprawdzenia 401 lub 403 z tego
+endpointu zostawia logowanie jako `unchecked` z notą, a nie odrzucone. Do sprawdzenia też słowa, którymi
+Claude Code i codex-acp mówią o odrzuconym logowaniu (`backend.LoginRefusal`): nagrania są syntetyczne.
 
 Faza 5 zamieniła kolejność swoich dwóch numerów: mosty komunikatorów powstały przed A2A, więc
 `00048_messaging_bridges.sql` (tożsamości z zewnątrz, odwołania rozmów i wiadomości, kody powiązań,

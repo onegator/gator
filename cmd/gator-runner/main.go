@@ -47,27 +47,28 @@ func agentCLI(log *slog.Logger) string {
 	return candidate
 }
 
-// agentDenyRead is the files the agent must not open: the token file this runner read. On a
-// Mac the sandbox enforces it; elsewhere the runner says plainly that it cannot.
+// agentDenyRead is the files the agent must not open: the token file this runner read, and its
+// journal, where a finish waiting to be delivered may hold a payer's refreshed login. On a Mac the
+// sandbox enforces it; elsewhere the runner says plainly that it cannot.
 // GATOR_RUNNER_SANDBOX=0 turns the sandbox off, for a backend that will not run inside one.
-func agentDenyRead(cfg config.Config, log *slog.Logger) []string {
-	if cfg.TokenFile == "" {
+func agentDenyRead(cfg config.Config, log *slog.Logger, journal string) []string {
+	if os.Getenv("GATOR_RUNNER_SANDBOX") == "0" {
+		log.Warn("GATOR_RUNNER_SANDBOX=0: agents can read the token file and the journal")
 		return nil
+	}
+	if cfg.TokenFile == "" {
+		return []string{journal}
 	}
 	if abs, err := filepath.Abs(cfg.TokenFile); err == nil {
 		if work, err := filepath.Abs(cfg.WorkDir); err == nil && strings.HasPrefix(abs, work+string(os.PathSeparator)) {
 			log.Warn("the token file is inside the work directory, where agents work; move it out", "token_file", abs, "workdir", work)
 		}
 	}
-	if os.Getenv("GATOR_RUNNER_SANDBOX") == "0" {
-		log.Warn("GATOR_RUNNER_SANDBOX=0: agents can read the token file")
-		return nil
-	}
 	if !agentenv.Sandboxed() {
 		log.Info("no sandbox on this platform: agents run as this user and could read the token file; see docs/deploy.md",
 			"token_file", cfg.TokenFile)
 	}
-	return []string{cfg.TokenFile}
+	return []string{cfg.TokenFile, journal}
 }
 
 func main() {
@@ -104,7 +105,14 @@ func run(args []string) error {
 			}
 		}
 		log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-		denyRead := agentDenyRead(cfg, log)
+		journal := filepath.Join(cfg.WorkDir, "outbox.json")
+		denyRead := agentDenyRead(cfg, log, journal)
+		// What a crash left of payers' logins goes before any job can read it.
+		if n, err := executor.SweepLogins(cfg.LoginDir); err != nil {
+			log.Warn("removing logins a previous run left", "dir", cfg.LoginDir, "err", err)
+		} else if n > 0 {
+			log.Info("removed logins a previous run left", "dir", cfg.LoginDir, "count", n)
+		}
 		backends, advertised, err := backends(cfg, log)
 		if err != nil {
 			return err
@@ -120,6 +128,7 @@ func run(args []string) error {
 			ServerURL: cfg.ServerURL,
 			CLIPath:   agentCLI(log),
 			DenyRead:  denyRead,
+			LoginDir:  cfg.LoginDir,
 		}
 		for name, state := range ex.AuthState() {
 			log.Info("backend", "name", name, "auth", state)
@@ -128,7 +137,7 @@ func run(args []string) error {
 			ServerURL: cfg.ServerURL, Token: cfg.Token, Name: cfg.Name, Location: cfg.Location, Placement: cfg.Placement, Once: cfg.Once,
 			BinaryVersion: version.Version, Backends: advertised, Projects: cfg.Projects, MaxParallel: cfg.MaxParallel,
 			ReadOnly: keeping(backends, backend.Access{ReadOnly: true}), NoTools: keeping(backends, backend.Access{NoTools: true}),
-			JournalPath: filepath.Join(cfg.WorkDir, "outbox.json"),
+			JournalPath: journal,
 		}, ex, log)
 		log.Info("runner starting", "name", cfg.Name, "location", cfg.Location, "placement", cfg.Placement, "once", cfg.Once,
 			"server", cfg.ServerURL, "proto", proto.Version)

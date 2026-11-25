@@ -13,6 +13,15 @@ info:
     events carry ids and seq, never message bodies; a client reads the messages after its last
     seq. A client sends {"typing":"<conversationId>"} to say it is typing; the others in the
     conversation get a conversation.typing event, which is never stored.
+
+
+    Model logins. On "me" alone, and only the caller's own: credential.saved and credential.removed
+    ({kind}) when the caller saves or removes a login, credential.refused ({kind, job_id}) when a job
+    found it turned down and its provider confirmed it. On job:<id> and the task's topic: job.queued
+    carries waiting_reason when the job waits from the start for its payer's login, job.waiting
+    ({waiting_reason}) when a runner looked at it and it still waits or waits for another reason,
+    and job.leased carries credential_kind (a kind of the payer's, or runner). Everyone hears
+    workspace.runner_logins_changed ({runner_logins, by}).
 servers:
   - url: /api/v1
 paths:
@@ -595,6 +604,109 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/FocusSetting" } } }
       responses:
         "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/FocusSetting" } } } }
+  /me/credentials:
+    get:
+      operationId: listMyCredentials
+      description: >
+        The caller's own model logins (never their values: a kind, a hint of the last four characters, how it stands),
+        the kinds the server knows with how to get each, and whether the workspace lends the runners' own logins to
+        jobs whose payer has none. A job paid for by the caller runs on one of these: Claude jobs on a Claude
+        subscription, else an Anthropic API key; Codex jobs on a ChatGPT subscription, else an OpenAI API key.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentials" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /me/credentials/{kind}:
+    parameters:
+      - { name: kind, in: path, required: true, description: "a kind from GET /me/credentials: claude_subscription, anthropic_api_key, chatgpt_subscription, openai_api_key", schema: { type: string } }
+    put:
+      operationId: putMyCredential
+      description: >
+        Save the caller's login of this kind, replacing the one they had. Its shape is checked (no call to the provider);
+        it starts unchecked. Jobs of the caller that waited for a login are offered to runners again.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentialSecret" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredential" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteMyCredential
+      description: Remove the caller's login of this kind. A job already running on it finishes; the next waits.
+      responses:
+        "204": { description: removed }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /me/credentials/{kind}/check:
+    parameters:
+      - { name: kind, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: checkMyCredential
+      description: >
+        Try the caller's login with one small call to its provider (its list of models). A refusal marks it
+        status error with the reason (a Claude subscription, whose token that endpoint may not take, stays
+        unchecked with the reason instead); 502 when the provider could not tell (nothing changes); 422 for a kind that
+        cannot be checked from the server (a ChatGPT login: checking it would spend its refresh token).
+      responses:
+        "200": { description: checked, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredential" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /me/model-usage:
+    get:
+      operationId: getMyModelUsage
+      description: What the caller's own logins paid for since a moment (default 30 days ago), by kind.
+      parameters:
+        - { name: since, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelUsage" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /users/{userId}/credentials:
+    get:
+      operationId: listUserCredentials
+      description: Which model logins a person has connected, and how they stand; never their values. Workspace admins only.
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ModelCredential" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /workspace/model-usage:
+    get:
+      operationId: getWorkspaceModelUsage
+      description: >
+        What every login paid for since a moment (default 30 days ago), by person and kind; rows without a person ran
+        on the runners' own logins (credentialKind runner). Workspace admins only.
+      parameters:
+        - { name: since, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelUsage" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /workspace/model-credentials:
+    get:
+      operationId: getModelCredentialPolicy
+      description: Whether a job whose payer has no login of their own runs on the runner's own login. People only.
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentialPolicy" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: setModelCredentialPolicy
+      description: >
+        Lend the runners' own logins (their environment, GATOR_CLOUD_RUNNER_ENV) to jobs whose payer has none, or stop.
+        A payer who has a login of their own, even a refused or busy one, never runs on the runner's. Workspace admins only.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentialPolicy" } } }
+      responses:
+        "200": { description: saved, content: { application/json: { schema: { $ref: "#/components/schemas/ModelCredentialPolicy" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /presets:
     get:
       operationId: listProjectPresets
@@ -2323,6 +2435,9 @@ components:
         contextBytes: { type: integer, description: "how much of the prompt was documents this job was handed" }
         contextDocs: { type: integer, description: "how many documents" }
         objections: { type: integer, description: "how many times this turn was sent back to work before it was allowed to end" }
+        payerId: { type: string, format: uuid, description: "the person whose model login pays for the job: who asked for it, else who switched its automation on, else its task's creator" }
+        credentialKind: { type: string, description: "the login it was leased with: a kind of the payer's (claude_subscription, anthropic_api_key, chatgpt_subscription, openai_api_key), or runner for the runner's own; absent until leased" }
+        waitingReason: { type: string, description: "why a queued job is not leased, for want of a login: in words for whoever looks; absent when it is not waiting" }
         createdAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
@@ -2684,6 +2799,71 @@ components:
         title: { type: string }
         scope: { type: string }
         body: { type: string }
+    ModelCredential:
+      type: object
+      description: A person's model login, as the API shows it. Its value never leaves the server except in a job's lease.
+      required: [kind, backend, label, hint, status, lastError, createdAt, updatedAt]
+      properties:
+        kind: { type: string, description: "claude_subscription | anthropic_api_key | chatgpt_subscription | openai_api_key" }
+        backend: { type: string, description: "the runner backend it runs: claude, acp:codex" }
+        label: { type: string, description: "what to call it: Claude subscription" }
+        hint: { type: string, description: "the last four characters, after an ellipsis" }
+        status: { type: string, enum: [unchecked, ok, error], description: "unchecked: well formed, never tried; ok: the last check went through; error: refused, see lastError" }
+        lastError: { type: string, description: "why it was refused, in words for its owner; empty when it was not" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        checkedAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time, description: "when a job was last leased with it" }
+    ModelCredentialKind:
+      type: object
+      required: [kind, backend, label, help, preference, rotates, checkable]
+      properties:
+        kind: { type: string }
+        backend: { type: string }
+        label: { type: string }
+        help: { type: string, description: "how to get one, for the form" }
+        preference: { type: integer, description: "0 is the kind a job of this backend uses first when its payer has several" }
+        rotates: { type: boolean, description: "the CLI rewrites it as it works (a ChatGPT login): one job at a time uses it, and Gator keeps what the job left" }
+        checkable: { type: boolean, description: "POST …/check can try it" }
+        multiline: { type: boolean, description: "the value is a file's contents (auth.json), not one line" }
+    ModelCredentials:
+      type: object
+      required: [credentials, kinds, runnerLogins]
+      properties:
+        credentials: { type: array, items: { $ref: "#/components/schemas/ModelCredential" } }
+        kinds: { type: array, items: { $ref: "#/components/schemas/ModelCredentialKind" } }
+        runnerLogins: { type: boolean, description: "the workspace lends the runners' own logins to jobs whose payer has none" }
+    ModelCredentialSecret:
+      type: object
+      required: [secret]
+      properties:
+        secret: { type: string, description: "the token or key as printed, or the contents of ~/.codex/auth.json" }
+    ModelCredentialPolicy:
+      type: object
+      required: [runnerLogins]
+      properties:
+        runnerLogins: { type: boolean }
+    ModelUsage:
+      type: object
+      required: [since, items]
+      properties:
+        since: { type: string, format: date-time }
+        items: { type: array, items: { $ref: "#/components/schemas/ModelUsageRow" } }
+    ModelUsageRow:
+      type: object
+      required: [credentialKind, jobs, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd, durationMs]
+      properties:
+        userId: { type: string, format: uuid, description: "whose login paid; absent for the runners' own (and in /me/model-usage)" }
+        name: { type: string }
+        email: { type: string }
+        credentialKind: { type: string, description: "a kind of login (claude_subscription, anthropic_api_key, chatgpt_subscription, openai_api_key), or runner for the runners' own" }
+        jobs: { type: integer, format: int64 }
+        inputTokens: { type: integer, format: int64 }
+        outputTokens: { type: integer, format: int64 }
+        cacheReadTokens: { type: integer, format: int64 }
+        cacheWriteTokens: { type: integer, format: int64 }
+        costUsd: { type: number, format: double, description: "list price; on a subscription an estimate, not a bill" }
+        durationMs: { type: integer, format: int64 }
     User:
       type: object
       required: [id, name, email, workspaceRole, createdAt]

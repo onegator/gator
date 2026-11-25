@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # gator-server image. A runner on a Mac or a VPS ships as a binary for launchd or systemd;
 # cloud runners started per job use Dockerfile.runner.
 ARG GO_VERSION=1.27.1
@@ -6,13 +5,14 @@ ARG GO_VERSION=1.27.1
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# Plain RUN steps, no cache mounts: the image builds with the classic builder as well as with
+# BuildKit. The module download is its own layer, so a code change does not repeat it.
+RUN go mod download
 COPY . .
 ARG VERSION=dev
 ARG COMMIT=none
 ARG DATE=unknown
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath \
+RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags "-s -w \
         -X github.com/onegator/gator/internal/version.Version=${VERSION} \
         -X github.com/onegator/gator/internal/version.Commit=${COMMIT} \
@@ -27,12 +27,17 @@ FROM alpine:3 AS server
 # as the server, so the major version is a build argument.
 ARG PG_CLIENT=postgresql17-client
 # git is here for the knowledge registry: packs are fetched with a shallow clone.
+# /var/lib/gator/attachments is the gator user's, so a named volume mounted there starts out
+# writable by it: Docker copies the directory's owner into an empty volume.
 RUN apk add --no-cache ca-certificates tzdata git "${PG_CLIENT}" \
- && adduser -D -H -u 10001 gator
+ && addgroup -g 10001 gator \
+ && adduser -D -H -u 10001 -G gator gator \
+ && mkdir -p /var/lib/gator/attachments && chown -R 10001:10001 /var/lib/gator
 COPY --from=build /out/gator-server /usr/local/bin/gator-server
 # The plugins the server offers by name: switching one on is a click, not a command line.
 COPY --from=build /out/plugins/ /usr/local/lib/gator/plugins/
-USER gator
+# By number: a platform that refuses to run as root can tell from the image alone.
+USER 10001:10001
 ENV GATOR_LISTEN_ADDR=:8080 GATOR_PLUGIN_DIR=/usr/local/lib/gator/plugins
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \

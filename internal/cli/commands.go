@@ -483,6 +483,9 @@ func cmdTaskRun(ctx context.Context, env *Env, args []string) error {
 	if !g.json {
 		where := orDefault(job.Placement, map[bool]string{true: "cloud", false: "local"}[*cloud])
 		fmt.Fprintf(env.Stdout, "Queued job %s for %s (%s, %s).\n", job.ID, job.Phase, job.Role, where)
+		if job.WaitingReason != "" {
+			fmt.Fprintf(env.Stdout, "It waits: %s\nConnect one with gator credentials set KIND.\n", job.WaitingReason)
+		}
 		if !*follow {
 			fmt.Fprintf(env.Stdout, "Watch it with gator task logs %s -f\n", id)
 			return nil

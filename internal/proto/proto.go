@@ -160,6 +160,11 @@ type Capabilities struct {
 	// every backend keeps both, as Claude Code, the only one there was, does.
 	ReadOnly []string `json:"read_only,omitempty"`
 	NoTools  []string `json:"no_tools,omitempty"`
+	// PayerLogins are the backends this runner runs on the Credential a job carries, and then on
+	// none of its own logins. A backend not listed — every one, for a runner from before the field,
+	// or one whose settings would put another login above the payer's — is only ever handed jobs
+	// on the runner's own login. Additive: no protocol version depends on it.
+	PayerLogins []string `json:"payer_logins,omitempty"`
 }
 
 // Registered acknowledges a registration.
@@ -275,6 +280,43 @@ type Job struct {
 	// at <server>/mcp/proxy/<name> with the job's own token, and only there: no credential of a
 	// remote server is in a job, ever. Additive in v3.
 	MCP []string `json:"mcp,omitempty"`
+	// Credential is the model login of the person who pays for the job, only for a runner whose
+	// capabilities list the job's backend in PayerLogins. The runner puts it in
+	// the agent's environment and nowhere else, and then none of its own logins reach the agent.
+	// Nil: the job runs on the runner's own login, as every job did before.
+	Credential *Credential `json:"credential,omitempty"`
+}
+
+// Credential is a login as a job's agent gets it: variables to set and, for a CLI that keeps its
+// login in files, a directory of its own holding them. The runner does not know kinds: what to
+// set comes from the server, which does.
+type Credential struct {
+	// ID names the login, for what the runner sends back of it.
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	// Env are variables set in the agent's environment: CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY.
+	Env map[string]string `json:"env,omitempty"`
+	// Home is a directory made for the job, mode 0700, holding Files at mode 0600, its path set in
+	// the variable Home names (CODEX_HOME), and removed when the job ends.
+	Home *CredentialHome `json:"home,omitempty"`
+	// Redact are the values that must not appear in anything the runner sends: every token the
+	// login holds, including those inside its files.
+	Redact []string `json:"redact,omitempty"`
+}
+
+// CredentialHome is the directory of a login kept in files.
+type CredentialHome struct {
+	Env   string            `json:"env"`
+	Files map[string][]byte `json:"files"`
+	// Refresh are the files the agent's CLI rewrites while it works (a refreshed token). When one
+	// changed, the runner sends it back in the Finish, because the old one may no longer work.
+	Refresh []string `json:"refresh,omitempty"`
+}
+
+// CredentialRefresh is what an agent rewrote of its login: the files of Home.Refresh that changed.
+type CredentialRefresh struct {
+	ID    string            `json:"id"`
+	Files map[string][]byte `json:"files"`
 }
 
 // Skill is one skill of a job's agent: its SKILL.md and whatever else the folder holds
@@ -400,6 +442,12 @@ type Finish struct {
 	// Objections counts the times this turn was sent back to work before it was allowed to
 	// end. A receipt that hides them would make a two-hour job look like a one-hour one.
 	Objections int `json:"objections,omitempty"`
+	// CredentialRefresh is what the agent rewrote of the job's login. The server stores it and
+	// keeps it out of the receipt.
+	CredentialRefresh *CredentialRefresh `json:"credential_refresh,omitempty"`
+	// CredentialRefused says the job's login was refused (expired, revoked), in the backend's words
+	// with the login's values masked. The server marks the login and tells its owner.
+	CredentialRefused string `json:"credential_refused,omitempty"`
 }
 
 // TurnEnding is the runner asking, before it sends a Finish, whether the turn may end. The

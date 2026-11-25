@@ -7,10 +7,12 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/onegator/gator/internal/redact"
 )
 
 // Redacted replaces secret values in logs.
-const Redacted = "[redacted]"
+const Redacted = redact.Redacted
 
 var sensitiveKeys = []string{"secret", "token", "password", "passwd", "api_key", "apikey", "authorization", "cookie", "private_key", "client_secret"}
 

@@ -499,3 +499,45 @@ func TestFlagsAfterArguments(t *testing.T) {
 		t.Errorf("kind=%q json=%v pos=%v", *kind, g.json, pos)
 	}
 }
+
+// A model login is read from stdin, never the command line, and shown back only by its hint.
+func TestCredentialsAreReadFromStdinAndShownMasked(t *testing.T) {
+	f := newFake(t)
+	e, out, errOut := f.env(t)
+	f.signIn(t, e)
+	const token = "sk-ant-oat01-a-token-pasted-on-stdin-wxyz"
+	e.Stdin = strings.NewReader(token + "\n")
+	if code := run(t, e, "credentials", "set", "claude_subscription"); code != 0 {
+		t.Fatalf("set: %d %s", code, errOut)
+	}
+	if f.secrets["claude_subscription"] != token || strings.Contains(out.String(), token) || !strings.Contains(out.String(), "…wxyz") {
+		t.Fatalf("set said %q, server got %q", out, f.secrets["claude_subscription"])
+	}
+	out.Reset()
+	if code := run(t, e, "credentials"); code != 0 {
+		t.Fatalf("list: %d %s", code, errOut)
+	}
+	if !strings.Contains(out.String(), "claude_subscription") || !strings.Contains(out.String(), "not connected") || strings.Contains(out.String(), token) {
+		t.Fatalf("list:\n%s", out)
+	}
+	if code := run(t, e, "credentials", "check", "claude_subscription"); code != exitUserErr || !strings.Contains(errOut.String(), "401") {
+		t.Fatalf("check: %d %s", code, errOut)
+	}
+	if code := run(t, e, "credentials", "remove", "claude_subscription"); code != 0 || len(f.secrets) != 0 {
+		t.Fatalf("remove: %d", code)
+	}
+	if code := run(t, e, "credentials", "remove", "claude_subscription"); code != exitUserErr {
+		t.Fatalf("second remove: %d", code)
+	}
+}
+
+// A login kept as a file is not read at a terminal's hidden prompt, which takes one line.
+func TestAFileLoginIsNotReadAtAPrompt(t *testing.T) {
+	f := newFake(t)
+	e, _, _ := f.env(t)
+	f.signIn(t, e)
+	c := &Client{Base: f.srv.URL, Token: f.token, HTTP: f.srv.Client()}
+	if !multiline(context.Background(), c, "chatgpt_subscription") || multiline(context.Background(), c, "claude_subscription") {
+		t.Fatal("which logins are files")
+	}
+}

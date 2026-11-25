@@ -29,6 +29,7 @@ import (
 	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/conversations"
+	"github.com/onegator/gator/internal/server/credentials"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/knowledge"
@@ -230,7 +231,12 @@ func serve(ctx context.Context) error {
 	if cloud.Provisioner != nil {
 		log.Info("cloud runners start on demand", "provisioner", cloud.Provisioner.Name(), "server_url", cloud.ServerURL)
 	}
+	// People's own model logins: a job runs on its payer's, handed to the runner with the lease.
+	// GATOR_ANTHROPIC_API_URL and GATOR_OPENAI_API_URL move the checks' one call (a proxy, a fake).
+	logins := credentials.New(db.Pool, credentials.Deps{Keys: keyring, Log: log, Kinds: credentials.DefaultKinds(credentials.Endpoints{
+		Anthropic: os.Getenv("GATOR_ANTHROPIC_API_URL"), OpenAI: os.Getenv("GATOR_OPENAI_API_URL"), HTTP: outbound.Client(20 * time.Second)})})
 	runnerMgr := runners.New(db.Pool, svc, hub, log, runners.Config{
+		Credentials:    logins,
 		Autopilot:      os.Getenv("GATOR_AUTOPILOT") != "0",
 		DefaultBackend: os.Getenv("GATOR_DEFAULT_BACKEND"),
 		Preparer:       pluginHost,
@@ -246,6 +252,7 @@ func serve(ctx context.Context) error {
 		CloudServerURL: cloud.ServerURL, CloudEnv: cloud.Env,
 	})
 
+	logins.OnChange(runnerMgr.Offer) // a login connected: the jobs waiting for it are offered again
 	go chat.Consumer(hub, log, 0).Run(ctx)
 	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
 	// within the limits of a chain of delegations and the project's budget.
@@ -314,6 +321,8 @@ func serve(ctx context.Context) error {
 		Bridges: bridge,
 		// Agents outside Gator, both ways.
 		A2A: &a2a.Module{Remote: farAgents, Inbound: a2aIn},
+		// People's own model logins, which they manage and nobody else reads.
+		Credentials: logins,
 		// The Brain and the agent surface as an MCP server, for jobs and for people's own clients.
 		MCP: mcp.Standard(mcp.Deps{Brain: knows, Queries: dbq.New(db.Pool), Roles: auth.Authorizer{Pool: db.Pool},
 			Talk: team.Talk, Tasks: svc, Log: log}),

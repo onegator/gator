@@ -411,38 +411,44 @@ type Installation struct {
 }
 
 type Job struct {
-	ID                pgtype.UUID        `json:"id"`
-	TaskID            pgtype.UUID        `json:"task_id"`
-	ProjectID         pgtype.UUID        `json:"project_id"`
-	Phase             string             `json:"phase"`
-	Role              string             `json:"role"`
-	Backend           string             `json:"backend"`
-	Instruction       string             `json:"instruction"`
-	Status            string             `json:"status"`
-	RunnerID          pgtype.UUID        `json:"runner_id"`
-	Attempts          int32              `json:"attempts"`
-	MaxAttempts       int32              `json:"max_attempts"`
-	LeaseExpiresAt    pgtype.Timestamptz `json:"lease_expires_at"`
-	LastEventAt       pgtype.Timestamptz `json:"last_event_at"`
-	Bounds            []byte             `json:"bounds"`
-	Receipt           []byte             `json:"receipt"`
-	StopReason        *string            `json:"stop_reason"`
-	CreatedByKind     string             `json:"created_by_kind"`
-	CreatedBy         pgtype.UUID        `json:"created_by"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	Model             string             `json:"model"`
-	UnassignableSince pgtype.Timestamptz `json:"unassignable_since"`
-	ContextBytes      int32              `json:"context_bytes"`
-	ContextDocs       int32              `json:"context_docs"`
-	Objections        int32              `json:"objections"`
-	Placement         string             `json:"placement"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	TurnID            pgtype.UUID        `json:"turn_id"`
-	Tier              string             `json:"tier"`
-	Kind              string             `json:"kind"`
+	ID                  pgtype.UUID        `json:"id"`
+	TaskID              pgtype.UUID        `json:"task_id"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	Phase               string             `json:"phase"`
+	Role                string             `json:"role"`
+	Backend             string             `json:"backend"`
+	Instruction         string             `json:"instruction"`
+	Status              string             `json:"status"`
+	RunnerID            pgtype.UUID        `json:"runner_id"`
+	Attempts            int32              `json:"attempts"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	LeaseExpiresAt      pgtype.Timestamptz `json:"lease_expires_at"`
+	LastEventAt         pgtype.Timestamptz `json:"last_event_at"`
+	Bounds              []byte             `json:"bounds"`
+	Receipt             []byte             `json:"receipt"`
+	StopReason          *string            `json:"stop_reason"`
+	CreatedByKind       string             `json:"created_by_kind"`
+	CreatedBy           pgtype.UUID        `json:"created_by"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	StartedAt           pgtype.Timestamptz `json:"started_at"`
+	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	Model               string             `json:"model"`
+	UnassignableSince   pgtype.Timestamptz `json:"unassignable_since"`
+	ContextBytes        int32              `json:"context_bytes"`
+	ContextDocs         int32              `json:"context_docs"`
+	Objections          int32              `json:"objections"`
+	Placement           string             `json:"placement"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	TurnID              pgtype.UUID        `json:"turn_id"`
+	Tier                string             `json:"tier"`
+	Kind                string             `json:"kind"`
+	PayerID             pgtype.UUID        `json:"payer_id"`
+	CredentialID        pgtype.UUID        `json:"credential_id"`
+	CredentialKind      string             `json:"credential_kind"`
+	CredentialVersion   int32              `json:"credential_version"`
+	CredentialExclusive bool               `json:"credential_exclusive"`
+	WaitingReason       string             `json:"waiting_reason"`
 }
 
 type JobContext struct {
@@ -921,6 +927,8 @@ type UsageRecord struct {
 	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
 	IdempotencyKey   *string            `json:"idempotency_key"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	PaidBy           pgtype.UUID        `json:"paid_by"`
+	CredentialKind   string             `json:"credential_kind"`
 }
 
 type User struct {
@@ -930,6 +938,22 @@ type User struct {
 	OidcSubject   *string            `json:"oidc_subject"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	WorkspaceRole string             `json:"workspace_role"`
+}
+
+type UserCredential struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Kind       string             `json:"kind"`
+	Backend    string             `json:"backend"`
+	Secret     string             `json:"secret"`
+	Hint       string             `json:"hint"`
+	Status     string             `json:"status"`
+	LastError  string             `json:"last_error"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	CheckedAt  pgtype.Timestamptz `json:"checked_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	Version    int32              `json:"version"`
 }
 
 type WebhookDelivery struct {
@@ -942,4 +966,5 @@ type WorkspaceSetting struct {
 	ID            bool               `json:"id"`
 	ProcessConfig []byte             `json:"process_config"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	RunnerLogins  bool               `json:"runner_logins"`
 }

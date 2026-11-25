@@ -66,6 +66,25 @@ server too old to know the field refuses it, and `gator` says so instead of runn
 falls back to polling the stored events when the socket cannot be opened, and ends when the job
 does — with a non-zero exit when it did not succeed, so a script can wait on it.
 
+## Your model logins
+
+A job you ask for runs on your own Claude or Codex account, not the runner's. Connect one:
+
+```
+claude setup-token | gator credentials set claude_subscription   # or paste it and press Ctrl-D
+gator credentials set chatgpt_subscription --file ~/.codex/auth.json
+gator credentials set anthropic_api_key                          # sk-ant-api…, on stdin
+gator credentials set openai_api_key                             # sk-…, on stdin
+gator credentials                                               # what you have, masked
+gator credentials check claude_subscription                     # one call to Anthropic
+gator credentials remove openai_api_key
+```
+
+The value is read from stdin or a file, never from the command line, so your shell's history
+does not keep it; Gator shows it back only by its last four characters. A job you start that
+has no login to run on says so (`It waits: …`) and starts once you connect one. See
+[People's own model logins](deploy.md#peoples-own-model-logins) for who pays for which job.
+
 ## Output
 
 Tables for people by default; `--json` on any command prints the API's objects for scripts

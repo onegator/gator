@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activeTrustDomains = `-- name: ActiveTrustDomains :many
+SELECT DISTINCT (CASE WHEN credential_kind IN ('', 'runner') OR payer_id IS NULL THEN '' ELSE payer_id::text END)::text AS domain
+FROM jobs WHERE runner_id = $1 AND status IN ('leased', 'running', 'stalled')
+`
+
+// Whose logins the runner's active jobs hold: a payer's id for a job on their own login, ” for a
+// job on the runner's. Jobs on one runner share a user, so they can read each other's logins.
+func (q *Queries) ActiveTrustDomains(ctx context.Context, runnerID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, activeTrustDomains, runnerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err != nil {
+			return nil, err
+		}
+		items = append(items, domain)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bumpJobObjections = `-- name: BumpJobObjections :one
 UPDATE jobs SET objections = objections + 1, updated_at = now() WHERE id = $1 RETURNING objections
 `
@@ -35,11 +62,11 @@ func (q *Queries) CountActiveJobsForRunner(ctx context.Context, runnerID pgtype.
 
 const createJob = `-- name: CreateJob :one
 INSERT INTO jobs (task_id, project_id, phase, role, backend, instruction, bounds, max_attempts, created_by_kind, created_by, model, placement,
-                  agent_id, turn_id, tier, kind)
+                  agent_id, turn_id, tier, kind, payer_id, waiting_reason)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(NULLIF($12::text, ''), 'local'),
         $13, $14, COALESCE(NULLIF($15::text, ''), 'work'),
-        COALESCE(NULLIF($16::text, ''), 'phase'))
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
+        COALESCE(NULLIF($16::text, ''), 'phase'), $17, $18)
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason
 `
 
 type CreateJobParams struct {
@@ -59,6 +86,8 @@ type CreateJobParams struct {
 	TurnID        pgtype.UUID `json:"turn_id"`
 	Tier          string      `json:"tier"`
 	Kind          string      `json:"kind"`
+	PayerID       pgtype.UUID `json:"payer_id"`
+	WaitingReason string      `json:"waiting_reason"`
 }
 
 // An empty placement is local, which is what every job was before it had one; an empty tier is
@@ -81,6 +110,8 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		arg.TurnID,
 		arg.Tier,
 		arg.Kind,
+		arg.PayerID,
+		arg.WaitingReason,
 	)
 	var i Job
 	err := row.Scan(
@@ -116,6 +147,12 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) (Job, erro
 		&i.TurnID,
 		&i.Tier,
 		&i.Kind,
+		&i.PayerID,
+		&i.CredentialID,
+		&i.CredentialKind,
+		&i.CredentialVersion,
+		&i.CredentialExclusive,
+		&i.WaitingReason,
 	)
 	return i, err
 }
@@ -164,7 +201,7 @@ func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) error {
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE id = $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE id = $1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -203,12 +240,18 @@ func (q *Queries) GetJob(ctx context.Context, id pgtype.UUID) (Job, error) {
 		&i.TurnID,
 		&i.Tier,
 		&i.Kind,
+		&i.PayerID,
+		&i.CredentialID,
+		&i.CredentialKind,
+		&i.CredentialVersion,
+		&i.CredentialExclusive,
+		&i.WaitingReason,
 	)
 	return i, err
 }
 
 const getJobForUpdate = `-- name: GetJobForUpdate :one
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE id = $1 FOR UPDATE
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, error) {
@@ -247,6 +290,12 @@ func (q *Queries) GetJobForUpdate(ctx context.Context, id pgtype.UUID) (Job, err
 		&i.TurnID,
 		&i.Tier,
 		&i.Kind,
+		&i.PayerID,
+		&i.CredentialID,
+		&i.CredentialKind,
+		&i.CredentialVersion,
+		&i.CredentialExclusive,
+		&i.WaitingReason,
 	)
 	return i, err
 }
@@ -332,57 +381,54 @@ func (q *Queries) InsertReceipt(ctx context.Context, arg InsertReceiptParams) er
 	return err
 }
 
-const leaseJobs = `-- name: LeaseJobs :many
-UPDATE jobs
-SET status = 'leased', runner_id = $1, lease_expires_at = $2,
-    attempts = attempts + 1, updated_at = now(), unassignable_since = NULL
-WHERE id IN (
-    SELECT j.id FROM jobs j
-    WHERE j.status = 'queued'
-      AND j.backend = ANY($3::text[])
-      AND (cardinality($4::uuid[]) = 0 OR j.project_id = ANY($4::uuid[]))
-      AND j.placement = $5::text
-      AND ($6::uuid IS NULL OR j.id = $6::uuid)
-      AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
-           OR $7::uuid IS NULL OR j.created_by = $7::uuid)
-      -- A runner older than protocol v3 runs every job as a phase; it gets only those.
-      AND (NOT $8::boolean OR j.kind = 'phase')
-      -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
-      -- with no tools: a runner would refuse it anywhere else.
-      AND (j.tier <> 'chat' OR j.backend = ANY($9::text[]))
-      AND (j.kind <> 'summary' OR j.backend = ANY($10::text[]))
-    ORDER BY j.created_at
-    LIMIT $11
-    FOR UPDATE SKIP LOCKED
-)
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
+const leaseCandidates = `-- name: LeaseCandidates :many
+SELECT j.id, j.task_id, j.project_id, j.phase, j.role, j.backend, j.instruction, j.status, j.runner_id, j.attempts, j.max_attempts, j.lease_expires_at, j.last_event_at, j.bounds, j.receipt, j.stop_reason, j.created_by_kind, j.created_by, j.created_at, j.started_at, j.finished_at, j.updated_at, j.model, j.unassignable_since, j.context_bytes, j.context_docs, j.objections, j.placement, j.agent_id, j.turn_id, j.tier, j.kind, j.payer_id, j.credential_id, j.credential_kind, j.credential_version, j.credential_exclusive, j.waiting_reason FROM jobs j
+WHERE j.status = 'queued'
+  AND j.backend = ANY($1::text[])
+  AND (cardinality($2::uuid[]) = 0 OR j.project_id = ANY($2::uuid[]))
+  AND j.placement = $3::text
+  AND ($4::uuid IS NULL OR j.id = $4::uuid)
+  AND (j.placement = 'cloud' OR j.created_by_kind <> 'user' OR j.created_by IS NULL
+       OR $5::uuid IS NULL OR j.created_by = $5::uuid)
+  -- A person's own login goes only to their own machine or a shared runner, whoever queued the
+  -- job: the autopilot's work, a summary or an automation's job paid by Bob never reaches Ann's
+  -- Mac, whose agent could read it. A payer with no login for the backend brings none.
+  AND ($5::uuid IS NULL OR j.payer_id IS NULL OR j.payer_id = $5::uuid
+       OR NOT EXISTS (SELECT 1 FROM user_credentials c WHERE c.user_id = j.payer_id AND c.backend = j.backend))
+  -- A runner older than protocol v3 runs every job as a phase; it gets only those.
+  AND (NOT $6::boolean OR j.kind = 'phase')
+  -- A chat job goes only to a backend that keeps it read-only, a summary to one that runs it
+  -- with no tools: a runner would refuse it anywhere else.
+  AND (j.tier <> 'chat' OR j.backend = ANY($7::text[]))
+  AND (j.kind <> 'summary' OR j.backend = ANY($8::text[]))
+ORDER BY (j.waiting_reason <> ''), j.created_at
+LIMIT $9
+FOR UPDATE OF j SKIP LOCKED
 `
 
-type LeaseJobsParams struct {
-	RunnerID   pgtype.UUID        `json:"runner_id"`
-	LeaseUntil pgtype.Timestamptz `json:"lease_until"`
-	Backends   []string           `json:"backends"`
-	Projects   []pgtype.UUID      `json:"projects"`
-	Placement  string             `json:"placement"`
-	OnlyJob    pgtype.UUID        `json:"only_job"`
-	Owner      pgtype.UUID        `json:"owner"`
-	PhaseOnly  bool               `json:"phase_only"`
-	ReadOnly   []string           `json:"read_only"`
-	NoTools    []string           `json:"no_tools"`
-	Slots      int32              `json:"slots"`
+type LeaseCandidatesParams struct {
+	Backends  []string      `json:"backends"`
+	Projects  []pgtype.UUID `json:"projects"`
+	Placement string        `json:"placement"`
+	OnlyJob   pgtype.UUID   `json:"only_job"`
+	Owner     pgtype.UUID   `json:"owner"`
+	PhaseOnly bool          `json:"phase_only"`
+	ReadOnly  []string      `json:"read_only"`
+	NoTools   []string      `json:"no_tools"`
+	Slots     int32         `json:"slots"`
 }
 
-// Hands up to `slots` queued jobs to a runner. SKIP LOCKED lets concurrent runners lease
-// disjoint jobs without waiting on each other.
+// The queued jobs a runner could be handed, oldest first, locked until the lease's transaction
+// ends. SKIP LOCKED lets concurrent runners consider disjoint jobs without waiting on each other.
+// Whose login each runs on is decided in Go (runners.Credentials); a job that waits for a login
+// goes after those that do not, so a queue of them cannot hold the rest back.
 //
 // Placement must match. A local job someone started goes to a machine of theirs or to a shared
 // one (no owner), never to another person's Mac, which is logged in as somebody else. A job the
 // autopilot queued has no person behind it and takes any local runner. A runner started for one
 // job (only_job) takes that job and nothing else.
-func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, error) {
-	rows, err := q.db.Query(ctx, leaseJobs,
-		arg.RunnerID,
-		arg.LeaseUntil,
+func (q *Queries) LeaseCandidates(ctx context.Context, arg LeaseCandidatesParams) ([]Job, error) {
+	rows, err := q.db.Query(ctx, leaseCandidates,
 		arg.Backends,
 		arg.Projects,
 		arg.Placement,
@@ -433,6 +479,12 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 			&i.TurnID,
 			&i.Tier,
 			&i.Kind,
+			&i.PayerID,
+			&i.CredentialID,
+			&i.CredentialKind,
+			&i.CredentialVersion,
+			&i.CredentialExclusive,
+			&i.WaitingReason,
 		); err != nil {
 			return nil, err
 		}
@@ -442,6 +494,82 @@ func (q *Queries) LeaseJobs(ctx context.Context, arg LeaseJobsParams) ([]Job, er
 		return nil, err
 	}
 	return items, nil
+}
+
+const leaseJob = `-- name: LeaseJob :one
+UPDATE jobs
+SET status = 'leased', runner_id = $1, lease_expires_at = $2,
+    attempts = attempts + 1, updated_at = now(), unassignable_since = NULL, waiting_reason = '',
+    credential_id = $3, credential_kind = $4,
+    credential_version = $5,
+    credential_exclusive = $6
+WHERE id = $7 AND status = 'queued'
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason
+`
+
+type LeaseJobParams struct {
+	RunnerID            pgtype.UUID        `json:"runner_id"`
+	LeaseUntil          pgtype.Timestamptz `json:"lease_until"`
+	CredentialID        pgtype.UUID        `json:"credential_id"`
+	CredentialKind      string             `json:"credential_kind"`
+	CredentialVersion   int32              `json:"credential_version"`
+	CredentialExclusive bool               `json:"credential_exclusive"`
+	ID                  pgtype.UUID        `json:"id"`
+}
+
+// Hands one candidate to a runner, with the login it runs on.
+func (q *Queries) LeaseJob(ctx context.Context, arg LeaseJobParams) (Job, error) {
+	row := q.db.QueryRow(ctx, leaseJob,
+		arg.RunnerID,
+		arg.LeaseUntil,
+		arg.CredentialID,
+		arg.CredentialKind,
+		arg.CredentialVersion,
+		arg.CredentialExclusive,
+		arg.ID,
+	)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.TaskID,
+		&i.ProjectID,
+		&i.Phase,
+		&i.Role,
+		&i.Backend,
+		&i.Instruction,
+		&i.Status,
+		&i.RunnerID,
+		&i.Attempts,
+		&i.MaxAttempts,
+		&i.LeaseExpiresAt,
+		&i.LastEventAt,
+		&i.Bounds,
+		&i.Receipt,
+		&i.StopReason,
+		&i.CreatedByKind,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.UpdatedAt,
+		&i.Model,
+		&i.UnassignableSince,
+		&i.ContextBytes,
+		&i.ContextDocs,
+		&i.Objections,
+		&i.Placement,
+		&i.AgentID,
+		&i.TurnID,
+		&i.Tier,
+		&i.Kind,
+		&i.PayerID,
+		&i.CredentialID,
+		&i.CredentialKind,
+		&i.CredentialVersion,
+		&i.CredentialExclusive,
+		&i.WaitingReason,
+	)
+	return i, err
 }
 
 const listActiveJobsOnRunners = `-- name: ListActiveJobsOnRunners :many
@@ -606,7 +734,7 @@ func (q *Queries) ListJobEvents(ctx context.Context, arg ListJobEventsParams) ([
 }
 
 const listJobsByTask = `-- name: ListJobsByTask :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE task_id = $1 ORDER BY created_at
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE task_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job, error) {
@@ -651,6 +779,12 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 			&i.TurnID,
 			&i.Tier,
 			&i.Kind,
+			&i.PayerID,
+			&i.CredentialID,
+			&i.CredentialKind,
+			&i.CredentialVersion,
+			&i.CredentialExclusive,
+			&i.WaitingReason,
 		); err != nil {
 			return nil, err
 		}
@@ -663,7 +797,10 @@ func (q *Queries) ListJobsByTask(ctx context.Context, taskID pgtype.UUID) ([]Job
 }
 
 const listQueuedCloudJobs = `-- name: ListQueuedCloudJobs :many
-SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind FROM jobs WHERE status = 'queued' AND placement = 'cloud' ORDER BY created_at LIMIT $1
+SELECT id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason FROM jobs WHERE status = 'queued' AND placement = 'cloud'
+  -- A job waiting for its payer's login gets no machine: it would sit there with nothing to run.
+  AND waiting_reason = ''
+ORDER BY created_at LIMIT $1
 `
 
 // Cloud jobs waiting for a runner, oldest first: what a provisioner may start machines for.
@@ -709,6 +846,12 @@ func (q *Queries) ListQueuedCloudJobs(ctx context.Context, max int32) ([]Job, er
 			&i.TurnID,
 			&i.Tier,
 			&i.Kind,
+			&i.PayerID,
+			&i.CredentialID,
+			&i.CredentialKind,
+			&i.CredentialVersion,
+			&i.CredentialExclusive,
+			&i.WaitingReason,
 		); err != nil {
 			return nil, err
 		}
@@ -790,6 +933,21 @@ func (q *Queries) ListUnassignableTaskIDs(ctx context.Context) ([]pgtype.UUID, e
 	return items, nil
 }
 
+const lockLeases = `-- name: LockLeases :exec
+SELECT pg_advisory_xact_lock(7413020250)
+`
+
+// Leases are handed out one transaction at a time, so a login one job at a time may hold is never
+// handed to two runners at once. It is taken by every lease, not only those that turn out to choose
+// such a login: which login a job runs on is known only after its row is locked, and the lock must
+// come before the rows. Saving, removing or refusing a login takes it first too, so a login and the
+// jobs waiting for it are always locked in one order (lock, jobs, login) and never deadlock. A lease
+// is a handful of rows; the wait is short.
+func (q *Queries) LockLeases(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockLeases)
+	return err
+}
+
 const lockTask = `-- name: LockTask :exec
 SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 `
@@ -804,7 +962,7 @@ const markJobActive = `-- name: MarkJobActive :one
 UPDATE jobs
 SET status = 'running', started_at = COALESCE(started_at, now()), last_event_at = now(), updated_at = now()
 WHERE id = $1 AND runner_id = $2 AND status IN ('leased', 'running', 'stalled')
-RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind
+RETURNING id, task_id, project_id, phase, role, backend, instruction, status, runner_id, attempts, max_attempts, lease_expires_at, last_event_at, bounds, receipt, stop_reason, created_by_kind, created_by, created_at, started_at, finished_at, updated_at, model, unassignable_since, context_bytes, context_docs, objections, placement, agent_id, turn_id, tier, kind, payer_id, credential_id, credential_kind, credential_version, credential_exclusive, waiting_reason
 `
 
 type MarkJobActiveParams struct {
@@ -849,6 +1007,12 @@ func (q *Queries) MarkJobActive(ctx context.Context, arg MarkJobActiveParams) (J
 		&i.TurnID,
 		&i.Tier,
 		&i.Kind,
+		&i.PayerID,
+		&i.CredentialID,
+		&i.CredentialKind,
+		&i.CredentialVersion,
+		&i.CredentialExclusive,
+		&i.WaitingReason,
 	)
 	return i, err
 }
@@ -921,6 +1085,8 @@ UPDATE jobs SET unassignable_since = now(), updated_at = now()
 WHERE id IN (
     SELECT j.id FROM jobs j
     WHERE j.status = 'queued' AND j.unassignable_since IS NULL AND j.created_at < $1
+      -- A job waiting for its payer's login already says why it waits.
+      AND j.waiting_reason = ''
       AND NOT ($2::boolean AND j.placement = 'cloud')
       AND NOT EXISTS (
           SELECT 1 FROM runners r
@@ -934,7 +1100,12 @@ WHERE id IN (
             AND (COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(r.capabilities->'projects') = 'array'
                                                   THEN r.capabilities->'projects' END), 0) = 0
                  OR r.capabilities->'projects' @> to_jsonb(j.project_id::text))
-            AND COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+            -- The runner's own login matters only to a job that does not bring its payer's.
+            AND (COALESCE(r.auth_state->>j.backend, '') NOT IN ('expired', 'missing')
+                 OR (r.capabilities->'payer_logins' @> to_jsonb(j.backend) AND j.payer_id IS NOT NULL
+                     AND (r.owner_id IS NULL OR r.owner_id = j.payer_id) AND EXISTS (
+                     SELECT 1 FROM user_credentials c
+                     WHERE c.user_id = j.payer_id AND c.backend = j.backend AND c.status <> 'error')))
             AND (j.kind = 'phase' OR r.protocol_version >= 3)
       )
     FOR UPDATE SKIP LOCKED
@@ -955,11 +1126,11 @@ type MarkUnassignableJobsRow struct {
 	Placement string      `json:"placement"`
 }
 
-// A queued job no connected runner can take. Matching mirrors LeaseJobs and the session's own
+// A queued job no connected runner can take. Matching mirrors LeaseCandidates and the session's own
 // filter: the backend must be offered, the project allowed, and the backend's login must work,
 // because a runner with an expired login is online and still takes nothing. Jobs already marked
 // are skipped, so the event fires once per episode rather than on every sweep. Placement and
-// ownership match as in LeaseJobs. A cloud job a provisioner will start a runner for is left
+// ownership match as in LeaseCandidates. A cloud job a provisioner will start a runner for is left
 // alone (skip_cloud): nobody is missing, the runner is on its way.
 func (q *Queries) MarkUnassignableJobs(ctx context.Context, arg MarkUnassignableJobsParams) ([]MarkUnassignableJobsRow, error) {
 	rows, err := q.db.Query(ctx, markUnassignableJobs, arg.Before, arg.SkipCloud)

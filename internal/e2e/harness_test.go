@@ -20,6 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/onegator/gator/internal/proto"
@@ -33,6 +34,7 @@ import (
 	"github.com/onegator/gator/internal/server/brain/curator"
 	"github.com/onegator/gator/internal/server/bridges"
 	"github.com/onegator/gator/internal/server/conversations"
+	"github.com/onegator/gator/internal/server/credentials"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/marketplace"
 	"github.com/onegator/gator/internal/server/marketplace/marketplacetest"
@@ -72,6 +74,9 @@ type harness struct {
 	// starter is Gator's own registry for the test: the starter catalogue, in a directory, signed
 	// with a key made for the test.
 	starter *marketplacetest.Registry
+	// logins are people's own model logins, models the provider their checks call.
+	logins *credentials.Service
+	models *fakeModels
 }
 
 const (
@@ -134,8 +139,17 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	hostDone := make(chan struct{})
 	go func() { host.Run(hostCtx); close(hostDone) }()
 	t.Cleanup(func() { stopHost(); <-hostDone })
+	// People's own model logins; their checks call a fake provider. The workspace lends the runners'
+	// own logins, as one that has run jobs before does, so every other test runs as it always did.
+	models := newFakeModels(t)
+	logins := credentials.New(pool, credentials.Deps{Keys: keys, Kinds: credentials.DefaultKinds(credentials.Endpoints{
+		Anthropic: models.srv.URL, OpenAI: models.srv.URL, HTTP: models.srv.Client()})})
+	if err := logins.SetRunnerLogins(ctx, true, pgtype.UUID{}); err != nil {
+		t.Fatal(err)
+	}
 	rcfg := runners.Config{LeaseTTL: testLeaseTTL, OfflineAfter: 20 * time.Second,
-		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations}
+		StallAfter: testStallAfter, Preparer: host, Judge: host, Authors: automations.Authors{}, AgentTokens: auth.Tokens{Pool: pool}, RunnerTokens: auth.Tokens{Pool: pool}, Brain: knows.Citations,
+		Credentials: logins}
 	for _, c := range configure {
 		c(&rcfg)
 	}
@@ -143,6 +157,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	// Conversations and the agents who answer in them, each following the outbox on its own.
 	team := agents.New(pool, agents.Deps{Conversations: chat, Process: svc, Jobs: mgr, Roles: auth.Authorizer{Pool: pool}, Log: slog.Default()})
 	mgr.UseBriefer(team.Briefer)
+	logins.OnChange(mgr.Offer)
 	consumers, stopConsumers := context.WithCancel(context.Background())
 	t.Cleanup(stopConsumers)
 	go chat.Consumer(hub, slog.Default(), 50*time.Millisecond).Run(consumers)
@@ -168,7 +183,8 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 		MCP:         mcp.Standard(mcp.Deps{Brain: knows, Queries: db.New(pool), Roles: auth.Authorizer{Pool: pool}, Talk: team.Talk, Tasks: svc}),
 		Marketplace: market,
 		Remote:      remote,
-		Bridges:     bridge}
+		Bridges:     bridge,
+		Credentials: logins}
 	root := chi.NewRouter()
 	root.Mount("/", s.Router())
 	root.Mount("/hooks", host.Hooks())
@@ -184,7 +200,7 @@ func newHarness(t *testing.T, configure ...func(*runners.Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter}
+	return &harness{t: t, srv: srv, pool: pool, mgr: mgr, hub: hub, svc: svc, plugins: host, quality: scorecards, autos: autos, brain: knows, curator: curate, admin: admin, runner: runner, oauth: oauth, bundled: bundled, market: market, starter: starter, logins: logins, models: models}
 }
 
 // asJob sends a request with one job's own identity, the way gator-cli does from a worktree.

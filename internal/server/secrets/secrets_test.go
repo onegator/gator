@@ -94,3 +94,25 @@ func TestValuesShapedLikeCredentialsAreMasked(t *testing.T) {
 		t.Fatal(out)
 	}
 }
+
+// A bound ciphertext decrypts only with its binding; an unbound one reads as it always did.
+func TestBoundCiphertextsDecryptOnlyWhereTheyBelong(t *testing.T) {
+	k, err := ParseKeyring(NewKey("k1"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := k.EncryptBound([]byte("secret"), "user_credentials:ann:claude_subscription")
+	if p, err := k.DecryptBound(c, "user_credentials:ann:claude_subscription"); err != nil || string(p) != "secret" {
+		t.Fatalf("own binding: %q %v", p, err)
+	}
+	if _, err := k.DecryptBound(c, "user_credentials:bob:claude_subscription"); err == nil {
+		t.Fatal("decrypted in another person's row")
+	}
+	if _, err := k.Decrypt(c); err == nil {
+		t.Fatal("decrypted unbound")
+	}
+	u, _ := k.Encrypt([]byte("plain"))
+	if p, err := k.Decrypt(u); err != nil || string(p) != "plain" {
+		t.Fatalf("unbound: %q %v", p, err)
+	}
+}

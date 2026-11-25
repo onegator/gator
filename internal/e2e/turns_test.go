@@ -156,8 +156,10 @@ func (e *holdingExec) Run(ctx context.Context, job proto.Job, io client.JobIO) p
 	for {
 		select {
 		case m := <-io.Steer:
-			e.steered <- m
+			// What it says goes out before it says it heard: a test that stops it right after
+			// must find these words in the answer.
 			io.Emit("text", map[string]string{"text": "Narrowing it down."})
+			e.steered <- m
 		case <-ctx.Done():
 			return proto.Finish{Status: proto.StatusStopped, StopReason: context.Cause(ctx).Error(),
 				Usage: proto.Usage{Backend: job.Backend, DurationMS: 10}}
@@ -193,6 +195,9 @@ func TestSteerFromTheThreadAndStopFromTheMessage(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the correction never reached the agent")
 	}
+	// The words are in the answer before it is stopped: the stop must keep them, and a stop that
+	// raced their delivery would not be the stop under test.
+	h.settledMessage(*turn.Reply, func(m gen.Message) bool { return strings.Contains(m.Body, "Narrowing it down.") })
 
 	var stopped gen.AgentTurn
 	if code := h.do("POST", "/turns/"+turn.ID+"/stop", nil, &stopped); code != 202 {

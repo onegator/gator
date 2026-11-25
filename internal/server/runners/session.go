@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/onegator/gator/internal/proto"
+	"github.com/onegator/gator/internal/redact"
 	"github.com/onegator/gator/internal/server/auth"
 	"github.com/onegator/gator/internal/server/brain"
 	"github.com/onegator/gator/internal/server/events"
@@ -48,6 +49,44 @@ type session struct {
 
 	dispatchMu sync.Mutex
 	closeOnce  sync.Once
+
+	// masks are the values of the logins this runner's jobs were handed, by job: what its reports
+	// are masked of before they are kept or shown.
+	masksMu sync.Mutex
+	masks   map[[16]byte][]string
+}
+
+// remember keeps the values a job's reports are masked of.
+func (s *session) remember(job pgtype.UUID, values []string) {
+	s.masksMu.Lock()
+	defer s.masksMu.Unlock()
+	if s.masks == nil {
+		s.masks = map[[16]byte][]string{}
+	}
+	s.masks[job.Bytes] = values
+}
+
+// masksOf are the values j's reports are masked of: remembered from its lease, or — after the
+// server restarted, or the job moved here from another connection — read from its login again.
+func (s *session) masksOf(ctx context.Context, j db.Job) []string {
+	if !j.CredentialID.Valid {
+		return nil
+	}
+	s.masksMu.Lock()
+	values, ok := s.masks[j.ID.Bytes]
+	s.masksMu.Unlock()
+	if ok {
+		return values
+	}
+	values = s.m.cfg.Credentials.Sensitive(ctx, j)
+	s.remember(j.ID, values)
+	return values
+}
+
+func (s *session) forget(job pgtype.UUID) {
+	s.masksMu.Lock()
+	defer s.masksMu.Unlock()
+	delete(s.masks, job.Bytes)
 }
 
 func (m *Manager) serve(parent context.Context, c *websocket.Conn, p auth.Principal) {
@@ -365,26 +404,16 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 		return err
 	}
 	var out []proto.Job
-	backends := s.leasable()
-	if free > 0 && len(backends) > 0 {
-		projects := s.projects
-		if projects == nil {
-			projects = []pgtype.UUID{}
-		}
-		jobs, err := q.LeaseJobs(ctx, db.LeaseJobsParams{
-			RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
-			Backends: backends, Projects: projects, Slots: int32(free),
-			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
-			PhaseOnly: s.version < turnsVersion,
-			ReadOnly:  keeping(backends, s.caps.ReadOnly), NoTools: keeping(backends, s.caps.NoTools),
-		})
+	if free > 0 {
+		leased, err := s.lease(ctx, free)
 		if err != nil {
 			return err
 		}
-		for _, j := range jobs {
-			out = append(out, s.handOver(ctx, q, j))
+		for _, l := range leased {
+			out = append(out, s.handOver(ctx, q, l.job, l.credential))
 			_ = s.m.tx(ctx, func(q *db.Queries) error {
-				return s.m.emitJob(ctx, q, "job.leased", j, map[string]any{"runner": s.name, "attempt": j.Attempts})
+				return s.m.emitJob(ctx, q, "job.leased", l.job, map[string]any{"runner": s.name, "attempt": l.job.Attempts,
+					"credential_kind": l.job.CredentialKind})
 			})
 		}
 	}
@@ -396,6 +425,99 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 	}
 	// If this send fails the leases expire and the sweeper returns the jobs to the queue.
 	return s.send(proto.TypeLease, proto.Lease{Jobs: out})
+}
+
+// leasedJob is a job leased to the runner and the payer's login it runs on (nil: the runner's).
+type leasedJob struct {
+	job        db.Job
+	credential *proto.Credential
+}
+
+// candidateSlack is how many queued jobs past its free slots a lease looks at, so that jobs
+// waiting for a login do not keep a runner idle while others it could run sit behind them.
+const candidateSlack = 20
+
+// lease hands the runner up to free jobs, each with the login it runs on, in one transaction that
+// holds the lease lock: a login one job at a time may use is never handed out twice. A job whose
+// payer cannot pay waits and says why; a job on the runner's own login goes only to a runner
+// logged in to its backend, and a job on its payer's only to a runner that says it runs payers'
+// logins.
+func (s *session) lease(ctx context.Context, free int) ([]leasedJob, error) {
+	backends := s.runnable()
+	if len(backends) == 0 {
+		return nil, nil
+	}
+	loggedIn := s.leasable()
+	projects := s.projects
+	if projects == nil {
+		projects = []pgtype.UUID{}
+	}
+	var out []leasedJob
+	err := s.m.tx(ctx, func(q *db.Queries) error {
+		out = out[:0]
+		if err := q.LockLeases(ctx); err != nil {
+			return err
+		}
+		domains, err := q.ActiveTrustDomains(ctx, s.runnerID)
+		if err != nil {
+			return err
+		}
+		jobs, err := q.LeaseCandidates(ctx, db.LeaseCandidatesParams{
+			Backends: backends, Projects: projects, Slots: int32(free + candidateSlack),
+			Placement: s.placementOrLocal(), OnlyJob: s.onlyJob, Owner: s.owner,
+			PhaseOnly: s.version < turnsVersion,
+			ReadOnly:  keeping(backends, s.caps.ReadOnly), NoTools: keeping(backends, s.caps.NoTools),
+		})
+		if err != nil {
+			return err
+		}
+		for _, j := range jobs {
+			if len(out) >= free {
+				break
+			}
+			payerLogins := slices.Contains(s.caps.PayerLogins, j.Backend)
+			choice, err := s.m.cfg.Credentials.Choose(ctx, q, j, payerLogins)
+			if err != nil {
+				return err
+			}
+			switch {
+			case choice.Wait != "":
+				if j.WaitingReason != choice.Wait {
+					if err := q.SetJobWaiting(ctx, db.SetJobWaitingParams{ID: j.ID, WaitingReason: choice.Wait}); err != nil {
+						return err
+					}
+					if err := s.m.emitJob(ctx, q, "job.waiting", j, map[string]any{"waiting_reason": choice.Wait}); err != nil {
+						return err
+					}
+				}
+				continue
+			case choice.Runner():
+				if !slices.Contains(loggedIn, j.Backend) {
+					continue
+				}
+			case s.owner.Valid && j.PayerID != s.owner:
+				continue // a person's login goes to their own machine or a shared runner, never another's
+			case !payerLogins:
+				continue // it would run on this runner's own login
+			}
+			domain := trustDomain(choice, j)
+			if !sharesTrust(domains, domain) {
+				continue // another payer's login is on this runner now; this one waits for its own slot
+			}
+			domains = append(domains, domain)
+			leased, err := q.LeaseJob(ctx, db.LeaseJobParams{ID: j.ID, RunnerID: s.runnerID, LeaseUntil: ts(s.m.now().Add(s.m.cfg.LeaseTTL)),
+				CredentialID: choice.ID, CredentialKind: choice.Kind, CredentialExclusive: choice.Exclusive, CredentialVersion: choice.Version})
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			out = append(out, leasedJob{job: leased, credential: choice.Credential})
+		}
+		return nil
+	})
+	return out, err
 }
 
 // turnsVersion is the protocol that knows a job's kind, tier and agent; a runner below it only
@@ -431,13 +553,16 @@ func (s *session) freeSlots(ctx context.Context, q *db.Queries, requested int) (
 // handOver is a leased job as the runner receives it: the task, the agent's identity and
 // guide, the documents it starts from and the repo it works in. What cannot be found is left
 // out rather than holding the job back.
-func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job) proto.Job {
+func (s *session) handOver(ctx context.Context, q *db.Queries, j db.Job, login *proto.Credential) proto.Job {
 	var b proto.Bounds
 	_ = json.Unmarshal(j.Bounds, &b)
 	pj := proto.Job{
 		JobID: uuidString(j.ID), TaskID: uuidString(j.TaskID), ProjectID: uuidString(j.ProjectID),
 		Phase: j.Phase, Role: j.Role, Backend: j.Backend, Model: j.Model, Instruction: j.Instruction, Bounds: b,
-		Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time,
+		Attempt: int(j.Attempts), LeaseExpiresAt: j.LeaseExpiresAt.Time, Credential: login,
+	}
+	if login != nil {
+		s.remember(j.ID, login.Redact)
 	}
 	if s.version >= turnsVersion {
 		pj.Kind, pj.Tier = j.Kind, j.Tier
@@ -666,10 +791,16 @@ func (s *session) events(ev proto.Events) error {
 		job.Status = "running"
 		_ = s.m.tx(ctx, func(q *db.Queries) error { return s.m.emitJob(ctx, q, typ, job, nil) })
 	}
+	masks := s.masksOf(ctx, job)
 	for _, e := range ev.Events {
 		payload := []byte(e.Payload)
 		if len(payload) == 0 {
 			payload = []byte("{}")
+		}
+		// The runner masks the login's values too; this is the server not trusting that it did.
+		if len(masks) > 0 {
+			payload = []byte(redact.Values(string(payload), masks))
+			e.Payload = payload
 		}
 		at := e.At
 		if at.IsZero() {
@@ -693,10 +824,23 @@ func (s *session) finish(fin proto.Finish) error {
 	if err != nil {
 		return err
 	}
+	if err := s.keepLogin(ctx, job, &fin); err != nil {
+		return err
+	}
 	if terminal(job.Status) {
 		return nil // a resend after reconnect; already recorded
 	}
 	status, reason := verdict(fin)
+	if fin.CredentialRefused != "" && job.CredentialID.Valid {
+		marked, err := s.m.cfg.Credentials.Refused(ctx, job, fin.CredentialRefused)
+		if err != nil {
+			return errRetry
+		}
+		if marked {
+			status, reason = proto.StatusFailed, "the model login of the person who pays for this job was turned down ("+
+				fin.CredentialRefused+"); they can connect it again in Settings → Model logins"
+		}
+	}
 	// Usage first: it is idempotent per job, so a crash before the finish commit loses nothing.
 	if fin.Usage.Reported() {
 		invalid, err := s.recordUsage(ctx, job, fin)
@@ -722,8 +866,43 @@ func (s *session) finish(fin proto.Finish) error {
 			s.m.log.Warn("recording what a job cited from the Brain", "job", uuidString(job.ID), "err", err)
 		}
 	}
+	s.forget(job.ID)
 	if job.Placement == proto.PlacementCloud {
 		s.m.provisionSoon() // the machine that ran it goes now, not on the next sweep
+	}
+	if job.CredentialExclusive {
+		s.m.releaseFreedWaits(ctx) // a login one job at a time may use is free for the next
+	}
+	return nil
+}
+
+// keepLogin stores what the job's agent rewrote of its login, before anything else of the finish
+// — the old one may have stopped working when it was refreshed, so a receipt the server refuses
+// must not lose it — and masks the login's values in what the finish says. What was rewritten is
+// taken out of the finish: it is kept with the login, never in the job's receipt.
+func (s *session) keepLogin(ctx context.Context, job db.Job, fin *proto.Finish) error {
+	masks := s.masksOf(ctx, job)
+	if r := fin.CredentialRefresh; r != nil {
+		if err := s.m.cfg.Credentials.Refreshed(ctx, job, *r); err != nil {
+			s.m.log.Warn("keeping what a job rewrote of its login", "job", uuidString(job.ID), "err", err)
+			return errRetry
+		}
+		fin.CredentialRefresh = nil
+		// The rotated values are masked as well as those the job was leased with.
+		masks = redact.Union(masks, s.m.cfg.Credentials.Sensitive(ctx, job))
+		s.remember(job.ID, masks)
+	}
+	if len(masks) > 0 {
+		fin.Summary = redact.Values(fin.Summary, masks)
+		fin.StopReason = redact.Values(fin.StopReason, masks)
+		fin.CredentialRefused = redact.Values(fin.CredentialRefused, masks)
+		if fin.Digest != nil {
+			for _, l := range [][]string{fin.Digest.Changes, fin.Digest.Decisions, fin.Digest.Rejected, fin.Digest.Left} {
+				for i := range l {
+					l[i] = redact.Values(l[i], masks)
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -755,7 +934,10 @@ func (s *session) recordUsage(ctx context.Context, job db.Job, fin proto.Finish)
 		JobID: job.ID, Phase: job.Phase, Backend: backend, Model: u.Model,
 		InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens,
 		CostUSD: u.CostUSD, CostEstimated: u.CostEstimated, DurationMS: u.DurationMS,
-		IdempotencyKey: "job:" + fin.JobID,
+		IdempotencyKey: "job:" + fin.JobID, CredentialKind: job.CredentialKind,
+	}
+	if job.CredentialKind != "" && job.CredentialKind != RunnerLogin {
+		in.PaidBy = job.PayerID // whose own login paid for it
 	}
 	if !u.StartedAt.IsZero() {
 		in.StartedAt = ts(u.StartedAt)
@@ -856,8 +1038,43 @@ func artifactContent(role string, fin proto.Finish) string {
 	return b.String()
 }
 
-// leasable is the runner's backends minus those it reports as logged out: the job waits for
-// a logged-in backend instead of running on another one.
+// trustDomain is whose login a job holds while it runs: its payer's, or "" for the runner's own.
+func trustDomain(c CredentialChoice, j db.Job) string {
+	if c.Runner() {
+		return ""
+	}
+	return uuidString(j.PayerID)
+}
+
+// sharesTrust says whether a job of domain may run beside the runner's active jobs. The agents of
+// one runner run as one user and can read each other's environment (/proc/<pid>/environ) and
+// files, and no runner isolates its jobs from each other today: so a person's login runs only
+// beside jobs on that same person's login, and the runner's own only beside jobs on the runner's.
+func sharesTrust(active []string, domain string) bool {
+	for _, d := range active {
+		if d != domain {
+			return false
+		}
+	}
+	return true
+}
+
+// runnable is the runner's backends minus those whose command it does not have: a job on its
+// payer's login needs no login of the runner's, but it does need the command.
+func (s *session) runnable() []string {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	out := make([]string, 0, len(s.caps.Backends))
+	for _, b := range s.caps.Backends {
+		if s.auth[b] != "no_cli" {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// leasable is the runner's backends minus those it reports as logged out: a job on the runner's
+// own login waits for a logged-in backend instead of running on another one.
 func (s *session) leasable() []string {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
