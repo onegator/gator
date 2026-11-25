@@ -511,3 +511,50 @@ func TestOutsideWordsArePackedAsUntrusted(t *testing.T) {
 		t.Errorf("the fence can be closed from inside, or the outside name is in the prompt:\n%s", fenced)
 	}
 }
+
+// An agent's answer says which outside message it answers, for the bridge that brought that
+// message in: a code host mirrors only those, as a comment.
+func TestAnAnswerSaysWhatItAnswers(t *testing.T) {
+	w := newWorld(t)
+	p := w.project()
+	github := Bridge{Project: p, Provider: "github"}
+	var task pgtype.UUID
+	if err := w.pool.QueryRow(w.ctx, `INSERT INTO tasks(project_id,kind,title,phase) VALUES($1,'feature','t','planning') RETURNING id`, p).Scan(&task); err != nil {
+		t.Fatal(err)
+	}
+	r, err := w.svc.FindOrCreate(w.ctx, github, plugin.ConversationFindOrCreateParams{ExternalRef: "acme/app#12", Kind: plugin.BridgeTask,
+		TaskID: conversations.UUIDString(task)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, _ := parseUUID(r.ConversationID)
+	asked := w.post(github, conv, "4242", "acme/app#12/comment/77", "@gator reviewer is this safe?", "reviewer")
+	askedID, _ := parseUUID(asked.MessageID)
+	reviewer, err := w.q.GetAgentByHandle(w.ctx, db.GetAgentByHandleParams{Handle: "reviewer", ProjectID: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident, _ := w.q.FindExternalIdentity(w.ctx, db.FindExternalIdentityParams{ProjectID: p, Provider: "github", ExternalID: "4242"})
+	turn, err := w.q.InsertTurn(w.ctx, db.InsertTurnParams{AgentID: reviewer.ID, ProjectID: p, ConversationID: conv, TriggerMessageID: askedID,
+		RequestedByKind: "external", RequestedBy: ident.ID, Tier: "chat", Status: "queued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := w.q.GetConversation(w.ctx, conv)
+	answer, err := conversations.NewVoice(w.pool).Say(w.ctx, c, conversations.Speech{Agent: reviewer.ID, Turn: turn.ID, Body: "Looks safe."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.q.SetTurnReply(w.ctx, db.SetTurnReplyParams{ID: turn.ID, ReplyMessageID: answer.ID}); err != nil {
+		t.Fatal(err)
+	}
+	out, ok, err := w.svc.Outgoing(w.ctx, github, answer.ID)
+	if err != nil || !ok || out.Message.ReplyTo != "acme/app#12/comment/77" || out.Message.AuthorName != "@reviewer" ||
+		out.Conversation.ExternalRef != "acme/app#12" || out.Conversation.TaskID != conversations.UUIDString(task) {
+		t.Fatalf("outgoing %+v %v %v", out, ok, err)
+	}
+	// The question itself came from GitHub: it does not go back there.
+	if _, ok, _ := w.svc.Outgoing(w.ctx, github, askedID); ok {
+		t.Error("echo")
+	}
+}

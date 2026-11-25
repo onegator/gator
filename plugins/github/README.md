@@ -14,13 +14,15 @@ installation tokens and one app-wide webhook, comes later.
 | `issues` edited | the task takes the issue's title and body |
 | `issues` closed | closes the task, unless the task has Gator's pull request: that one says "Closes #n", and the task finishes by its own process (a release may still be ahead) |
 | a task closes | closes its issue as completed, if it is still open |
-| the plugin starts | registers the repository webhook (Issues, Pull requests, Check runs, Pushes), or rewrites the one it made, when the server knows its public address (`GATOR_HOOKS_URL` or `GATOR_PUBLIC_URL`) |
+| the plugin starts | registers the repository webhook (Issues, Pull requests, Check runs, Pushes, Issue comments, Pull request review comments), or rewrites the one it made, when the server knows its public address (`GATOR_HOOKS_URL` or `GATOR_PUBLIC_URL`) |
 | a worker job finishes with commits | opens a pull request from the job's branch with the job's report, `Closes #<issue>` and a `gator:<phase>` label. A retry refreshes the existing pull request. |
 | `pull_request` events | records the pull request on the task (artifact, state for the chip) |
 | `check_run` events | sets `github/<check>` on the gate while the task is in `check_phase` (default Implementation); a failing check blocks the gate, a passing one unblocks it |
 | a task enters `check_phase` | reports the pull request's current check runs |
 | a phase change | moves the `gator:<phase>` label on the issue and the pull request |
 | a task opens in a client | a GitHub tab with links, and chips for the issue and the pull request |
+| a comment (`issue_comment`, `pull_request_review_comment`) with `@gator <agent> …` | asks that agent (several `@gator <agent>` ask several): in the thread of the task the pull request or issue belongs to, else in `#github`, where the answer opens a thread. The commenter is an outside identity of the project (their GitHub id); their words reach the agent as untrusted data, and it answers in chat. Bots' comments and the plugin's own are ignored |
+| that agent's answer is final | comes back as one comment on the same issue or pull request, at most 4000 characters, with the way to the whole thread in Gator; `@` mentions and closing keywords in it are broken so that it pings nobody and closes nothing |
 | `push` to the base branch adding or changing `docs/adr/*.md` | proposes each architecture decision record to the project's Brain as a decision (title from its first heading), once per version of the file; a person approves it |
 
 Deliveries for other repositories are logged and ignored. A bad signature is refused with
@@ -33,11 +35,12 @@ Deliveries for other repositories are logged and ignored. A bad signature is ref
 | `repo` | `owner/name` |
 | `token` (secret) | set by **Connect GitHub**. Or a fine-grained token for this repository. Permissions: **Contents**, **Issues**, **Pull requests** and **Webhooks** read and write; **Checks** and **Metadata** read. Without Checks the plugin cannot read CI results: GitHub answers 403, the plugin is disabled with that reason, and a gate waiting on a check never learns it finished. |
 | `webhook_secret` (secret) | set by **Connect GitHub**; or the secret on a webhook made by hand |
-| `api_url` | default `https://api.github.com` |
+| `api_url` | default `https://api.github.com`; requests go through `netguard` |
 | `base_branch` | default: the repository's default branch |
 | `trigger_label` | only issues with this label become tasks |
 | `label_prefix` | default `gator:` |
 | `check_phase` | default `implementation` |
+| `mention` | the word that asks an agent in a comment: `@gator reviewer …`; default `gator` |
 
 ## Webhook
 
