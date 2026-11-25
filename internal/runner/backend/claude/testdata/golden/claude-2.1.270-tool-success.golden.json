@@ -1,0 +1,32 @@
+{
+  "events": [
+    {"type":"rate_limit","payload":{"resets_at":1789428000,"status":"allowed","type":"five_hour","utilization":{"five_hour":0.18,"seven_day":0.52}}},
+    {"type":"session","payload":{"claude_code_version":"2.1.270","mcp_servers":[],"model":"claude-opus-5[1m]","session_id":"00000000-0000-4000-8000-000000000001"}},
+    {"type":"tool_call","payload":{"id":"toolu_0116LW9n4AN9qZdHc8h4mgpf","input":{"command":"echo gator-fixture","description":"Print fixture string"},"name":"Bash"}},
+    {"type":"tool_result","payload":{"content":"gator-fixture","is_error":false,"tool_use_id":"toolu_0116LW9n4AN9qZdHc8h4mgpf"}},
+    {"type":"text","payload":{"text":"DONE"}},
+    {"type":"result","payload":{"cost_usd":0.26516799999999996,"is_error":false,"num_turns":2,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-opus-5[1m]",
+    "result": {
+      "cost_estimated": true,
+      "cost_usd": 0.26516799999999996,
+      "is_error": false,
+      "subtype": "success",
+      "terminal_reason": "completed",
+      "text_bytes": 4,
+      "tokens": {
+        "Input": 946,
+        "Output": 153,
+        "CacheRead": 39662,
+        "CacheWrite": 24069
+      }
+    },
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "tool_calls": 1,
+    "unknown": 0,
+    "version": "2.1.270"
+  }
+}

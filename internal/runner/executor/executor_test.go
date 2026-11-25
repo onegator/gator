@@ -29,6 +29,9 @@ type scripted struct {
 
 func (s *scripted) Name() string      { return "fake" }
 func (s *scripted) AuthState() string { return "ok" }
+func (s *scripted) Capabilities() proto.BackendCapabilities {
+	return proto.BackendCapabilities{Enforcement: proto.EnforcementNative}
+}
 
 // Supports implements backend.Limited unless a test says the backend keeps no limits.
 func (s *scripted) Supports(backend.Access) bool { return !s.noLimits }

@@ -1219,6 +1219,17 @@ paths:
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/RunnerInfo" } } } } }
   /runners/{runnerId}:
+    get:
+      operationId: getRunner
+      description: |
+        One runner, with what each of its backends can do in a live session
+        (capabilities.perBackend): a client hides Steer, a native Stop and approval cards for a job
+        whose backend cannot carry them out.
+      parameters: [ { $ref: "#/components/parameters/runnerId" } ]
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { $ref: "#/components/schemas/RunnerInfo" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
     delete:
       operationId: forgetRunner
       description: |
@@ -2323,6 +2334,7 @@ components:
         contextBytes: { type: integer, description: "how much of the prompt was documents this job was handed" }
         contextDocs: { type: integer, description: "how many documents" }
         objections: { type: integer, description: "how many times this turn was sent back to work before it was allowed to end" }
+        capabilities: { $ref: "#/components/schemas/BackendCapabilities" }
         createdAt: { type: string, format: date-time }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: string, format: date-time }
@@ -2382,6 +2394,28 @@ components:
         canLogin: { type: boolean, description: "this runner can drive an interactive backend login; when false, asking it to is refused" }
         readOnly: { type: array, items: { type: string }, description: "its backends that keep a chat job read-only; absent from a runner that says nothing (every backend)" }
         noTools: { type: array, items: { type: string }, description: "its backends that run a summary with no tools; absent from a runner that says nothing (every backend)" }
+        perBackend:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/BackendCapabilities" }
+          description: "what each backend can do in a live session (protocol v4); a backend missing here can do none of it"
+    BackendCapabilities:
+      type: object
+      description: |
+        What one backend of a runner can do while a job runs. Every flag false is a backend that
+        restarts to steer, kills to stop and never asks before a tool (a v3 runner, or Claude Code in
+        print mode).
+      required: [activeSteering, steeringInterruptsTool, nativeInterrupt, toolApprovals, approvalsLiveOnly, streamsText, streamsReasoning, attachments, checkpoints, enforcement]
+      properties:
+        activeSteering: { type: boolean, description: "a message reaches the running turn without restarting it; without it Steer interrupts and resumes" }
+        steeringInterruptsTool: { type: boolean, description: "a steer interrupts the tool that is running" }
+        nativeInterrupt: { type: boolean, description: "Stop ends the turn without killing the process (within about 2 s)" }
+        toolApprovals: { type: boolean, description: "the backend asks before a tool the project's approvals policy names, and waits (tool_approval cards)" }
+        approvalsLiveOnly: { type: boolean, description: "an approval still waiting when the process dies is lost (the agent is told no)" }
+        streamsText: { type: boolean }
+        streamsReasoning: { type: boolean }
+        attachments: { type: boolean, description: "takes images as images; without it the agent gets files as paths only" }
+        checkpoints: { type: boolean, description: "the runner checkpoints the worktree after every turn (GET /jobs/{id}/checkpoints)" }
+        enforcement: { type: string, enum: [native, runner, ""], description: "who holds the agent to its tier: the CLI's own flags, or the runner answering its permission requests" }
     RunnerInfo:
       type: object
       required: [id, name, location, placement, status, connected, capabilities, authState, protocolVersion, binaryVersion]

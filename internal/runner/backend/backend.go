@@ -104,6 +104,10 @@ type Backend interface {
 	// fixes, and reporting the first as the second sends a person to log in again on a machine
 	// they were already logged in on.
 	AuthState() string
+	// Capabilities says what the backend can do while a job runs (steer without a restart, stop
+	// without a kill, ask before a tool, take attachments), for the runner to report and the
+	// server to show only the actions a job's backend can carry out.
+	Capabilities() proto.BackendCapabilities
 }
 
 // Limited is a backend that can hold an agent to less than full access. A backend says which

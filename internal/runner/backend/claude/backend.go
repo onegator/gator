@@ -63,6 +63,12 @@ func (b Backend) bin() string {
 	return b.Bin
 }
 
+// Capabilities implements backend.Backend. In print mode every turn is its own process: a steer
+// restarts it with --resume, a stop kills it, and nothing is asked before a tool.
+func (b Backend) Capabilities() proto.BackendCapabilities {
+	return proto.BackendCapabilities{Enforcement: proto.EnforcementNative}
+}
+
 // keychainService is where Claude Code keeps a macOS login.
 const keychainService = "Claude Code-credentials"
 

@@ -1,0 +1,16 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.270","mcp_servers":[],"model":"claude-opus-5[1m]","session_id":"00000000-0000-4000-8000-000000000001"}},
+    {"type":"tool_call","payload":{"id":"toolu_0116LW9n4AN9qZdHc8h4mgpf","input":{"command":"echo gator-fixture","description":"Print fixture string"},"name":"Bash"}},
+    {"type":"tool_call","payload":{"id":"toolu_0116LW9n4AN9qZdHc8h4mgpf","input":{"command":"echo gator-fixture","description":"Print fixture string"},"name":"Bash"}},
+    {"type":"tool_call","payload":{"id":"toolu_0116LW9n4AN9qZdHc8h4mgpf","input":{"command":"echo gator-fixture","description":"Print fixture string"},"name":"Bash"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-opus-5[1m]",
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "tool_calls": 3,
+    "unknown": 0,
+    "version": "2.1.270"
+  }
+}

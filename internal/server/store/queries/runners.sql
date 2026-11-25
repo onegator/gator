@@ -15,6 +15,11 @@ RETURNING *;
 -- name: RunnerHeartbeat :exec
 UPDATE runners SET last_heartbeat_at = now(), auth_state = $2, status = $3, updated_at = now() WHERE id = $1;
 
+-- name: SetRunnerBackendCapabilities :exec
+-- What a runner's backends can do now, when its heartbeat says it changed since the registration.
+UPDATE runners SET capabilities = jsonb_set(capabilities, '{per_backend}', sqlc.arg(per_backend)::jsonb), updated_at = now()
+WHERE id = sqlc.arg(id);
+
 -- name: SetRunnerStatus :exec
 UPDATE runners SET status = sqlc.arg(status), updated_at = now(),
     offline_reason = CASE WHEN sqlc.arg(status)::text = 'offline' THEN sqlc.arg(reason)::text ELSE '' END,

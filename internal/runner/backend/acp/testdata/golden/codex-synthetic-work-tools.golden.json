@@ -1,0 +1,27 @@
+{
+  "events": [
+    {"type":"session","payload":{"agent":"codex-acp 0.0.0-synthetic","backend":"acp:codex","experimental":false,"load_session":true,"mcp_servers":[],"model":"gpt-5","session_id":"019a5f3c-codex-session"}},
+    {"type":"text","payload":{"text":"I'll read the README first."}},
+    {"type":"tool_call","payload":{"id":"call_1","input":{"path":"README.md"},"kind":"read","name":"Read README.md"}},
+    {"type":"permission","payload":{"allowed":true,"kind":"read","reason":"full access","title":"Read README.md","tool_call_id":"call_1"}},
+    {"type":"tool_result","payload":{"content":"# Project\nhello","is_error":false,"tool_use_id":"call_1"}},
+    {"type":"tool_call","payload":{"id":"call_2","input":{"path":"main.go"},"kind":"edit","name":"Edit main.go"}},
+    {"type":"permission","payload":{"allowed":true,"kind":"edit","reason":"full access","title":"Edit main.go","tool_call_id":"call_2"}},
+    {"type":"tool_result","payload":{"content":"[diff main.go]","is_error":false,"tool_use_id":"call_2"}},
+    {"type":"plan","payload":{"entries":[{"content":"Read the README","status":"completed"}]}},
+    {"type":"text","payload":{"text":"Done."}},
+    {"type":"text","payload":{"text":"The answer is 42."}},
+    {"type":"result","payload":{"cost_usd":0.0123,"stop_reason":"end_turn"}}
+  ],
+  "outcome": {
+    "cost_estimated": false,
+    "cost_usd": 0.0123,
+    "input_tokens": 12000,
+    "output_tokens": 400,
+    "reason": "",
+    "session_id": "019a5f3c-codex-session",
+    "status": "done",
+    "summary": "Done.\n\nThe answer is 42.",
+    "tool_calls": 2
+  }
+}

@@ -92,6 +92,15 @@ func (e *Executor) AuthState() map[string]string {
 	return out
 }
 
+// BackendCapabilities implements client.CapabilityReporter.
+func (e *Executor) BackendCapabilities() map[string]proto.BackendCapabilities {
+	out := map[string]proto.BackendCapabilities{}
+	for name, b := range e.Backends {
+		out[name] = b.Capabilities()
+	}
+	return out
+}
+
 // Run implements client.Executor.
 func (e *Executor) Run(ctx context.Context, job proto.Job, io client.JobIO) proto.Finish {
 	be, ok := e.Backends[job.Backend]

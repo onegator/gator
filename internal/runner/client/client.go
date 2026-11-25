@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -47,6 +48,12 @@ type Loginer interface {
 // AuthReporter is implemented by executors that know which backends are logged in.
 type AuthReporter interface {
 	AuthState() map[string]string
+}
+
+// CapabilityReporter is implemented by executors that know what each backend can do while a job
+// runs (proto v4).
+type CapabilityReporter interface {
+	BackendCapabilities() map[string]proto.BackendCapabilities
 }
 
 // Config for a runner.
@@ -134,6 +141,10 @@ type Client struct {
 	took         bool
 	finished     chan struct{}
 	finishedOnce sync.Once
+
+	// told is what the server was last told of the backends' capabilities; a heartbeat carries
+	// them again only when they changed.
+	told map[string]proto.BackendCapabilities
 }
 
 // New builds a client.
@@ -327,9 +338,13 @@ func (c *Client) session(ctx context.Context) (registered bool, err error) {
 	defer cancel()
 	defer conn.CloseNow()
 
+	perBackend := c.backendCapabilities()
+	c.mu.Lock()
+	c.told = perBackend
+	c.mu.Unlock()
 	reg := proto.Register{Name: c.cfg.Name, Location: c.cfg.Location, Placement: c.cfg.Placement, BinaryVersion: c.cfg.BinaryVersion,
 		Capabilities: proto.Capabilities{Backends: c.cfg.Backends, MaxParallel: c.cfg.MaxParallel, Projects: c.cfg.Projects,
-			CanLogin: c.canLogin(), ReadOnly: nonNil(c.cfg.ReadOnly), NoTools: nonNil(c.cfg.NoTools)}}
+			CanLogin: c.canLogin(), ReadOnly: nonNil(c.cfg.ReadOnly), NoTools: nonNil(c.cfg.NoTools), PerBackend: perBackend}}
 	if err := write(sctx, conn, proto.TypeRegister, 1, reg); err != nil {
 		return false, err
 	}
@@ -450,14 +465,19 @@ func (c *Client) beat() {
 	if ar, ok := c.exec.(AuthReporter); ok {
 		authState = ar.AuthState()
 	}
+	caps := c.backendCapabilities()
 	c.mu.Lock()
 	active := c.activeLocked()
 	free := c.cfg.MaxParallel - len(c.jobs)
 	if c.cfg.Once && c.took {
 		free = 0 // its one job is taken; the machine ends with it
 	}
+	var changed map[string]proto.BackendCapabilities
+	if caps != nil && !maps.Equal(caps, c.told) {
+		changed, c.told = caps, caps
+	}
 	c.mu.Unlock()
-	c.sendBestEffort(proto.TypeHeartbeat, proto.Heartbeat{Load: len(active), AuthState: authState, ActiveJobs: active})
+	c.sendBestEffort(proto.TypeHeartbeat, proto.Heartbeat{Load: len(active), AuthState: authState, ActiveJobs: active, Capabilities: changed})
 	if free > 0 && len(c.cfg.Backends) > 0 {
 		c.sendBestEffort(proto.TypeLeaseRequest, proto.LeaseRequest{Slots: free})
 	}
@@ -535,6 +555,14 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn) error {
 			}
 		}
 	}
+}
+
+// backendCapabilities are what the executor's backends can do, when it says.
+func (c *Client) backendCapabilities() map[string]proto.BackendCapabilities {
+	if r, ok := c.exec.(CapabilityReporter); ok {
+		return r.BackendCapabilities()
+	}
+	return nil
 }
 
 // canLogin reports whether this runner can drive an interactive backend login. Today no

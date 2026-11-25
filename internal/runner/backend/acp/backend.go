@@ -67,6 +67,13 @@ func (b Backend) AuthState() string {
 	return b.Profile.authState(getenv, h)
 }
 
+// Capabilities implements backend.Backend. A steer cancels the prompt and loads the session in a
+// new process; the runner answers every permission request by the job's tier, so it is the
+// runner that holds the agent to it.
+func (b Backend) Capabilities() proto.BackendCapabilities {
+	return proto.BackendCapabilities{Enforcement: proto.EnforcementRunner}
+}
+
 // Supports implements backend.Limited. A read-only job runs only on an agent whose profile names a
 // read-only session mode, which the session must offer (start fails otherwise): an agent's own
 // tools do not all ask before they act, so the permission answers alone are not a promise. The

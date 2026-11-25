@@ -1131,6 +1131,22 @@ func (q *Queries) SaveJobContextDoc(ctx context.Context, arg SaveJobContextDocPa
 	return err
 }
 
+const setRunnerBackendCapabilities = `-- name: SetRunnerBackendCapabilities :exec
+UPDATE runners SET capabilities = jsonb_set(capabilities, '{per_backend}', $1::jsonb), updated_at = now()
+WHERE id = $2
+`
+
+type SetRunnerBackendCapabilitiesParams struct {
+	PerBackend []byte      `json:"per_backend"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+// What a runner's backends can do now, when its heartbeat says it changed since the registration.
+func (q *Queries) SetRunnerBackendCapabilities(ctx context.Context, arg SetRunnerBackendCapabilitiesParams) error {
+	_, err := q.db.Exec(ctx, setRunnerBackendCapabilities, arg.PerBackend, arg.ID)
+	return err
+}
+
 const setRunnerStatus = `-- name: SetRunnerStatus :exec
 UPDATE runners SET status = $1, updated_at = now(),
     offline_reason = CASE WHEN $1::text = 'offline' THEN $2::text ELSE '' END,

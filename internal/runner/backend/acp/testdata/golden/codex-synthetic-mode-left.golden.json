@@ -1,0 +1,18 @@
+{
+  "events": [
+    {"type":"session","payload":{"agent":"","backend":"acp:codex","experimental":false,"load_session":true,"mcp_servers":[],"model":"","session_id":"sess-mode"}},
+    {"type":"text","payload":{"text":"Switching to auto."}},
+    {"type":"warning","payload":{"message":"the agent switched to mode auto; a read-only job ends"}}
+  ],
+  "outcome": {
+    "cost_estimated": true,
+    "cost_usd": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "reason": "acp:codex left its read-only mode; a read-only job does not go on outside it",
+    "session_id": "sess-mode",
+    "status": "failed",
+    "summary": "Switching to auto.",
+    "tool_calls": 0
+  }
+}

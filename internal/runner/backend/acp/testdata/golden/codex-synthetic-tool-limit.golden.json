@@ -1,0 +1,22 @@
+{
+  "events": [
+    {"type":"session","payload":{"agent":"","backend":"acp:codex","experimental":false,"load_session":false,"mcp_servers":[],"model":"","session_id":"sess-limit"}},
+    {"type":"tool_call","payload":{"id":"t1","input":null,"kind":"execute","name":"ls"}},
+    {"type":"tool_result","payload":{"content":"","is_error":false,"tool_use_id":"t1"}},
+    {"type":"tool_call","payload":{"id":"t2","input":null,"kind":"execute","name":"ls"}},
+    {"type":"tool_result","payload":{"content":"","is_error":false,"tool_use_id":"t2"}},
+    {"type":"tool_call","payload":{"id":"t3","input":null,"kind":"execute","name":"ls"}},
+    {"type":"tool_result","payload":{"content":"","is_error":false,"tool_use_id":"t3"}}
+  ],
+  "outcome": {
+    "cost_estimated": true,
+    "cost_usd": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "reason": "tool call limit (2) reached",
+    "session_id": "",
+    "status": "failed",
+    "summary": "",
+    "tool_calls": 3
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "events": [],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "",
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "tool_calls": 0,
+    "unknown": 0,
+    "version": ""
+  }
+}

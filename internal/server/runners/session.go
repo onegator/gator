@@ -34,7 +34,7 @@ type session struct {
 	tokenID  pgtype.UUID
 	name     string
 	caps     proto.Capabilities
-	authMu   sync.Mutex
+	authMu   sync.Mutex        // guards auth and caps.PerBackend, which heartbeats change
 	auth     map[string]string // backend → login state from the last heartbeat
 	projects []pgtype.UUID
 	// placement is where this runner takes work from; owner is the person whose machine it is,
@@ -338,6 +338,15 @@ func (s *session) heartbeat(hb proto.Heartbeat) {
 			return emit(ctx, q, "runner.auth_changed", "runner", s.runnerID, map[string]any{"auth": hb.AuthState})
 		})
 	}
+	if hb.Capabilities != nil && s.version >= liveVersion {
+		s.authMu.Lock()
+		s.caps.PerBackend = hb.Capabilities
+		s.authMu.Unlock()
+		per, _ := json.Marshal(hb.Capabilities)
+		if err := q.SetRunnerBackendCapabilities(ctx, db.SetRunnerBackendCapabilitiesParams{ID: s.runnerID, PerBackend: per}); err != nil {
+			s.m.log.Warn("backend capabilities", "runner", s.name, "err", err)
+		}
+	}
 	ids := make([]pgtype.UUID, 0, len(hb.ActiveJobs))
 	for _, id := range hb.ActiveJobs {
 		if u, ok := parseUUID(id); ok {
@@ -401,6 +410,10 @@ func (s *session) dispatch(ctx context.Context, requested int, sendEmpty bool) e
 // turnsVersion is the protocol that knows a job's kind, tier and agent; a runner below it only
 // runs phase jobs.
 const turnsVersion = 3
+
+// liveVersion is the protocol of live sessions: backend capabilities, checkpoints, approvals and
+// attachments. A runner below it runs a job as it always did.
+const liveVersion = 4
 
 // placementOrLocal is the session's placement; a session built without one (a test, an old
 // row) is local, which is what every runner was before placement existed.

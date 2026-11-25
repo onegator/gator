@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -46,6 +47,7 @@ func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen
 		return
 	}
 	out := make([]gen.Job, 0, len(rows))
+	caps := newJobCapabilities(db.New(s.Pool))
 	for _, j := range rows {
 		readable, err := s.jobReadable(r.Context(), p, j)
 		if err != nil {
@@ -53,7 +55,7 @@ func (s *Server) ListTaskJobs(w http.ResponseWriter, r *http.Request, taskId gen
 			return
 		}
 		if readable {
-			out = append(out, toJob(j))
+			out = append(out, withCapabilities(r.Context(), caps, j))
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -100,7 +102,7 @@ func (s *Server) GetJob(w http.ResponseWriter, r *http.Request, jobId gen.JobId)
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, toJob(job))
+	writeJSON(w, http.StatusOK, withCapabilities(r.Context(), newJobCapabilities(db.New(s.Pool)), job))
 }
 
 func (s *Server) ListJobEvents(w http.ResponseWriter, r *http.Request, jobId gen.JobId, params gen.ListJobEventsParams) {
@@ -225,6 +227,43 @@ func (s *Server) ListRunners(w http.ResponseWriter, r *http.Request) {
 		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// GetRunner answers one runner, for people, as the list does.
+func (s *Server) GetRunner(w http.ResponseWriter, r *http.Request, runnerId gen.RunnerId) {
+	p, ok := s.principal(w, r)
+	if !ok {
+		return
+	}
+	if p.Kind != auth.KindUser {
+		writeError(w, http.StatusForbidden, "runners are for people", "forbidden")
+		return
+	}
+	q := db.New(s.Pool)
+	rn, err := q.GetRunner(r.Context(), fromUUID(runnerId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if rn.RetiredAt.Valid {
+		writeError(w, http.StatusNotFound, "not found", "not_found")
+		return
+	}
+	active, err := q.ListActiveJobsOnRunners(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	jobs := []gen.RunnerJob{}
+	for _, j := range active {
+		if j.RunnerID == rn.ID {
+			jobs = append(jobs, gen.RunnerJob{Id: toUUID(j.ID), TaskId: toUUID(j.TaskID), TaskTitle: j.TaskTitle, Phase: j.Phase,
+				Role: j.Role, Backend: j.Backend, Status: j.Status, StartedAt: timePtr(j.StartedAt)})
+		}
+	}
+	info := toRunner(rn, s.Runners.Connected(rn.ID))
+	info.Jobs = &jobs
+	writeJSON(w, http.StatusOK, info)
 }
 
 // ForgetRunner ends a runner for good: its token stops authenticating and it leaves the list.
@@ -357,7 +396,7 @@ func toRunner(r db.Runner, connected bool) gen.RunnerInfo {
 		Id: toUUID(r.ID), Name: r.Name, Location: r.Location, Placement: gen.RunnerInfoPlacement(r.Placement),
 		OwnerId: toUUIDPtr(r.OwnerID), Status: gen.RunnerInfoStatus(r.Status), Connected: connected,
 		Capabilities: gen.RunnerCapabilities{Backends: caps.Backends, MaxParallel: caps.MaxParallel, Projects: caps.Projects,
-			CanLogin: &caps.CanLogin, ReadOnly: optList(caps.ReadOnly), NoTools: optList(caps.NoTools)},
+			CanLogin: &caps.CanLogin, ReadOnly: optList(caps.ReadOnly), NoTools: optList(caps.NoTools), PerBackend: perBackend(caps)},
 		AuthState: authState, ProtocolVersion: int(r.ProtocolVersion), BinaryVersion: r.BinaryVersion,
 	}
 	if r.LastHeartbeatAt.Valid {
@@ -371,6 +410,57 @@ func toRunner(r db.Runner, connected bool) gen.RunnerInfo {
 	if r.OfflineReason != "" {
 		out.OfflineReason = &r.OfflineReason
 	}
+	return out
+}
+
+// perBackend is what each of a runner's backends can do, as the API says it; every backend it
+// names is there, with nothing for one it said nothing of.
+func perBackend(caps proto.Capabilities) *map[string]gen.BackendCapabilities {
+	out := make(map[string]gen.BackendCapabilities, len(caps.Backends))
+	for _, name := range caps.Backends {
+		out[name] = toBackendCapabilities(caps.PerBackend[name])
+	}
+	return &out
+}
+
+func toBackendCapabilities(c proto.BackendCapabilities) gen.BackendCapabilities {
+	return gen.BackendCapabilities{ActiveSteering: c.ActiveSteering, SteeringInterruptsTool: c.SteeringInterruptsTool,
+		NativeInterrupt: c.NativeInterrupt, ToolApprovals: c.ToolApprovals, ApprovalsLiveOnly: c.ApprovalsLiveOnly,
+		StreamsText: c.StreamsText, StreamsReasoning: c.StreamsReasoning, Attachments: c.Attachments, Checkpoints: c.Checkpoints,
+		Enforcement: gen.BackendCapabilitiesEnforcement(c.Enforcement)}
+}
+
+// jobCapabilities answers what the backend of each job can do on the runner that took it, reading
+// each runner once.
+type jobCapabilities struct {
+	q       *db.Queries
+	runners map[[16]byte]proto.Capabilities
+}
+
+func newJobCapabilities(q *db.Queries) *jobCapabilities {
+	return &jobCapabilities{q: q, runners: map[[16]byte]proto.Capabilities{}}
+}
+
+// of is the job's backend's capabilities, or nil before a runner took it (or when its runner is gone).
+func (c *jobCapabilities) of(ctx context.Context, j db.Job) *gen.BackendCapabilities {
+	if !j.RunnerID.Valid {
+		return nil
+	}
+	caps, ok := c.runners[j.RunnerID.Bytes]
+	if !ok {
+		if r, err := c.q.GetRunner(ctx, j.RunnerID); err == nil {
+			_ = json.Unmarshal(r.Capabilities, &caps)
+		}
+		c.runners[j.RunnerID.Bytes] = caps
+	}
+	out := toBackendCapabilities(caps.PerBackend[j.Backend])
+	return &out
+}
+
+// withCapabilities is toJob with what the job's backend can do.
+func withCapabilities(ctx context.Context, caps *jobCapabilities, j db.Job) gen.Job {
+	out := toJob(j)
+	out.Capabilities = caps.of(ctx, j)
 	return out
 }
 

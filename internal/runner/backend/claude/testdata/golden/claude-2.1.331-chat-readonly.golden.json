@@ -1,0 +1,37 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.331","mcp_servers":[],"model":"claude-haiku-4-5","session_id":"00000000-0000-4000-8000-000000000003"}},
+    {"type":"tool_call","payload":{"id":"toolu_01HXz2Cfdw4HTk5i8ugsrBJT","input":{"file_path":"/work/jobs/fixture/README.md"},"name":"Read"}},
+    {"type":"tool_result","payload":{"content":"1\thello\n2\t","is_error":false,"tool_use_id":"toolu_01HXz2Cfdw4HTk5i8ugsrBJT"}},
+    {"type":"tool_call","payload":{"id":"toolu_01FNJXDW8sbw7DoJPTP8mGkM","input":{"command":"touch other.txt","description":"Create other.txt file"},"name":"Bash"}},
+    {"type":"rate_limit","payload":{"resets_at":1789428000,"status":"allowed","type":"five_hour","utilization":{}}},
+    {"type":"tool_result","payload":{"content":"Permission to use Bash has been denied because Claude Code is running in don't ask mode. IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, e.g. do not use your ability to run tests to execute non-test actions. You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. If you believe this capability is essential to complete the user's request, STOP and explain to the user what you were trying to do and why you need this permission. Let the user decide how to proceed.","is_error":true,"tool_use_id":"toolu_01FNJXDW8sbw7DoJPTP8mGkM"}},
+    {"type":"text","payload":{"text":"Now let me try the Write tool:"}},
+    {"type":"tool_call","payload":{"id":"toolu_01Sr3m99RDKeHRm5VGWCVVKc","input":{"content":"hi","file_path":"/work/jobs/fixture/notes.txt"},"name":"Write"}},
+    {"type":"tool_result","payload":{"content":"\u003ctool_use_error\u003eError: No such tool available: Write. Write is disabled for this session, in subagents as well as here.\u003c/tool_use_error\u003e","is_error":true,"tool_use_id":"toolu_01Sr3m99RDKeHRm5VGWCVVKc"}},
+    {"type":"text","payload":{"text":"Here's what happened:\n\n1. **README.md read**: Succeeded, file contains \"hello\"\n2. **Write tool attempt**: Tool is disabled for this session\n3. **Bash command attempt**: Permission denied in don't ask mode"}},
+    {"type":"result","payload":{"cost_usd":0.0186978,"is_error":false,"num_turns":4,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-haiku-4-5",
+    "result": {
+      "cost_estimated": true,
+      "cost_usd": 0.0186978,
+      "is_error": false,
+      "subtype": "success",
+      "terminal_reason": "completed",
+      "text_bytes": 204,
+      "tokens": {
+        "Input": 26,
+        "Output": 576,
+        "CacheRead": 36498,
+        "CacheWrite": 6071
+      }
+    },
+    "session_id": "00000000-0000-4000-8000-000000000003",
+    "tool_calls": 3,
+    "unknown": 0,
+    "version": "2.1.331"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "events": [
+    {"type":"session","payload":{"agent":"codex-acp 0.0.0-synthetic","backend":"acp:codex","experimental":false,"load_session":true,"mcp_servers":[],"model":"","session_id":"sess-chat"}},
+    {"type":"permission","payload":{"allowed":true,"kind":"read","reason":"read-only: read","title":"Read go.mod","tool_call_id":"p1"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"edit","reason":"read-only: edit is refused","title":"Edit go.mod","tool_call_id":"p2"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"execute","reason":"read-only: commands other than gator-cli are refused","title":"Run rm","tool_call_id":"p3"}},
+    {"type":"permission","payload":{"allowed":true,"kind":"execute","reason":"read-only: gator-cli","title":"Run gator-cli","tool_call_id":"p4"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"execute","reason":"read-only: commands other than gator-cli are refused","title":"Run gator-cli chained","tool_call_id":"p5"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"other","reason":"read-only: other is refused","title":"mcp__gator__brain_search","tool_call_id":"p6"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"other","reason":"read-only: other is refused","title":"mcp__other__write","tool_call_id":"p7"}},
+    {"type":"permission","payload":{"allowed":false,"kind":"delete","reason":"read-only: delete is refused","title":"Delete","tool_call_id":"p8"}},
+    {"type":"text","payload":{"text":"I can only read here."}},
+    {"type":"result","payload":{"cost_usd":0,"stop_reason":"end_turn"}}
+  ],
+  "outcome": {
+    "cost_estimated": true,
+    "cost_usd": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "reason": "",
+    "session_id": "sess-chat",
+    "status": "done",
+    "summary": "I can only read here.",
+    "tool_calls": 0
+  }
+}

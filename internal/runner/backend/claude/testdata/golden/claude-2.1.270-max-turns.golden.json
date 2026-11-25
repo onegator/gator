@@ -1,0 +1,31 @@
+{
+  "events": [
+    {"type":"rate_limit","payload":{"resets_at":1789428000,"status":"allowed","type":"five_hour","utilization":{"five_hour":0.18,"seven_day":0.52}}},
+    {"type":"session","payload":{"claude_code_version":"2.1.270","mcp_servers":[],"model":"claude-opus-5[1m]","session_id":"00000000-0000-4000-8000-000000000001"}},
+    {"type":"tool_call","payload":{"id":"toolu_011Z3Lx7rAXnL2VLYgPFtNcS","input":{"command":"echo one","description":"Print \"one\""},"name":"Bash"}},
+    {"type":"tool_result","payload":{"content":"one","is_error":false,"tool_use_id":"toolu_011Z3Lx7rAXnL2VLYgPFtNcS"}},
+    {"type":"result","payload":{"cost_usd":0.21645599999999998,"is_error":true,"num_turns":2,"subtype":"error_max_turns","terminal_reason":"max_turns"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-opus-5[1m]",
+    "result": {
+      "cost_estimated": true,
+      "cost_usd": 0.21645599999999998,
+      "is_error": true,
+      "subtype": "error_max_turns",
+      "terminal_reason": "max_turns",
+      "text_bytes": 0,
+      "tokens": {
+        "Input": 913,
+        "Output": 86,
+        "CacheRead": 11850,
+        "CacheWrite": 20770
+      }
+    },
+    "session_id": "00000000-0000-4000-8000-000000000001",
+    "tool_calls": 1,
+    "unknown": 0,
+    "version": "2.1.270"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "events": [
+    {"type":"session","payload":{"agent":"","backend":"acp:gemini","experimental":false,"load_session":false,"mcp_servers":[],"model":"","session_id":"gemini-session-1"}},
+    {"type":"text","payload":{"text":"Hello from Gemini."}},
+    {"type":"result","payload":{"cost_usd":0,"stop_reason":"max_turn_requests"}}
+  ],
+  "outcome": {
+    "cost_estimated": true,
+    "cost_usd": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "reason": "acp:gemini stopped: max_turn_requests; 1 unparseable lines",
+    "session_id": "",
+    "status": "failed",
+    "summary": "Hello from Gemini.",
+    "tool_calls": 0
+  }
+}

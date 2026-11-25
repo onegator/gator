@@ -302,6 +302,13 @@ type rawRunner struct {
 
 func (h *harness) dialRaw(token, backend string, version, maxParallel int) (*rawRunner, proto.RawEnvelope) {
 	h.t.Helper()
+	reg := proto.Register{Name: "raw-" + backend, Location: "other", Capabilities: proto.Capabilities{Backends: []string{backend}, MaxParallel: maxParallel}}
+	return h.dialRegistered(token, reg, version)
+}
+
+// dialRegistered connects a raw runner that registers as reg.
+func (h *harness) dialRegistered(token string, reg proto.Register, version int) (*rawRunner, proto.RawEnvelope) {
+	h.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	u := strings.Replace(h.srv.URL, "http", "ws", 1) + proto.Path
@@ -311,7 +318,6 @@ func (h *harness) dialRaw(token, backend string, version, maxParallel int) (*raw
 	}
 	h.t.Cleanup(func() { c.CloseNow() })
 	r := &rawRunner{t: h.t, c: c}
-	reg := proto.Register{Name: "raw-" + backend, Location: "other", Capabilities: proto.Capabilities{Backends: []string{backend}, MaxParallel: maxParallel}}
 	b, _ := json.Marshal(proto.Envelope{Type: proto.TypeRegister, Seq: 1, Version: version, Payload: reg})
 	r.seq = 1
 	if err := c.Write(ctx, websocket.MessageText, b); err != nil {

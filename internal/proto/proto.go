@@ -19,10 +19,16 @@ import (
 // its Tier (chat is read-only), its Agent and, for a reply, the conversation it answers in. A v2
 // runner knows none of it and would run a reply as a phase (committing, pushing, objecting to
 // itself), so it is only ever handed phase jobs, which are all of the work tier.
-const Version = 3
+//
+// v4 added live sessions: a runner says what each of its backends can do (BackendCapabilities),
+// sends a checkpoint of the worktree after every turn, asks a person before a tool the project
+// wants asked about (runtime_request, answered by runtime_decision), and is handed the
+// attachments of the conversation and the approval policy with a job. A v3 runner knows none of
+// it and runs a job as it always did; the server no longer speaks v2.
+const Version = 4
 
 // MinSupportedVersion is the oldest runner protocol the server still speaks.
-const MinSupportedVersion = 2
+const MinSupportedVersion = 3
 
 // Timing both sides agree on.
 const (
@@ -160,6 +166,40 @@ type Capabilities struct {
 	// every backend keeps both, as Claude Code, the only one there was, does.
 	ReadOnly []string `json:"read_only,omitempty"`
 	NoTools  []string `json:"no_tools,omitempty"`
+	// PerBackend is what each backend can do in a live session (v4), by backend name. A backend
+	// missing from it (and every backend of a v3 runner) can do none of it: the zero value.
+	PerBackend map[string]BackendCapabilities `json:"per_backend,omitempty"`
+}
+
+// Enforcement says who holds an agent to its tier: the agent's CLI itself (its own flags and
+// permission modes), or the runner answering the agent's permission requests.
+const (
+	EnforcementNative = "native"
+	EnforcementRunner = "runner"
+)
+
+// BackendCapabilities is what one backend can do while a job runs (v4). Clients hide an action a
+// job's backend cannot carry out rather than offer a button that does nothing.
+type BackendCapabilities struct {
+	// ActiveSteering: a person's message reaches the running turn without restarting it.
+	ActiveSteering bool `json:"active_steering"`
+	// SteeringInterruptsTool: such a message interrupts a tool that is running.
+	SteeringInterruptsTool bool `json:"steering_interrupts_tool"`
+	// NativeInterrupt: stop ends the turn without killing the process.
+	NativeInterrupt bool `json:"native_interrupt"`
+	// ToolApprovals: the backend asks before a tool and waits for the answer.
+	ToolApprovals bool `json:"tool_approvals"`
+	// ApprovalsLiveOnly: an approval waiting when the process dies is lost with it.
+	ApprovalsLiveOnly bool `json:"approvals_live_only"`
+	// StreamsText and StreamsReasoning: text (and reasoning) arrives in pieces, not whole messages.
+	StreamsText      bool `json:"streams_text"`
+	StreamsReasoning bool `json:"streams_reasoning"`
+	// Attachments: files (paths or images) can be given to the agent as input.
+	Attachments bool `json:"attachments"`
+	// Checkpoints: the runner checkpoints the worktree of this backend's jobs after every turn.
+	Checkpoints bool `json:"checkpoints"`
+	// Enforcement is EnforcementNative or EnforcementRunner.
+	Enforcement string `json:"enforcement,omitempty"`
 }
 
 // Registered acknowledges a registration.
@@ -177,6 +217,9 @@ type Heartbeat struct {
 	// logged out and has a different fix.
 	AuthState  map[string]string `json:"auth_state"`
 	ActiveJobs []string          `json:"active_jobs"`
+	// Capabilities are the backends' capabilities as they are now (v4), when they changed since
+	// the registration: a backend switched to its fallback mode can do less than it said.
+	Capabilities map[string]BackendCapabilities `json:"capabilities,omitempty"`
 }
 
 // LeaseRequest asks for up to Slots jobs.

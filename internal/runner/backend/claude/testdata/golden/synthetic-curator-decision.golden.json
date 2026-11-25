@@ -1,0 +1,29 @@
+{
+  "events": [
+    {"type":"session","payload":{"claude_code_version":"2.1.331","mcp_servers":[],"model":"claude-haiku-4-5","session_id":"00000000-0000-4000-8000-000000000051"}},
+    {"type":"text","payload":{"text":"```gator-brain\n{\"proposals\":[{\"kind\":\"decision\",\"title\":\"Sessions use PASETO v4\",\"content\":\"Session tokens are PASETO v4 local tokens, not JWT: there is no algorithm to confuse, and the keys rotate weekly.\",\"quote\":\"Agreed: PASETO v4 local, and we rotate the keys weekly.\",\"seq\":__SEQ__}]}\n```"}},
+    {"type":"result","payload":{"cost_usd":0.0009,"is_error":false,"num_turns":1,"subtype":"success","terminal_reason":"completed"}}
+  ],
+  "outcome": {
+    "bad_lines": 0,
+    "model": "claude-haiku-4-5",
+    "result": {
+      "cost_estimated": true,
+      "cost_usd": 0.0009,
+      "is_error": false,
+      "subtype": "success",
+      "terminal_reason": "completed",
+      "text_bytes": 293,
+      "tokens": {
+        "Input": 820,
+        "Output": 96,
+        "CacheRead": 0,
+        "CacheWrite": 0
+      }
+    },
+    "session_id": "00000000-0000-4000-8000-000000000051",
+    "tool_calls": 0,
+    "unknown": 0,
+    "version": "2.1.331"
+  }
+}
