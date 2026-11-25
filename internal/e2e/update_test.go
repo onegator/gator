@@ -9,11 +9,20 @@ import (
 	"github.com/onegator/gator/internal/server/marketplace/marketplacetest"
 )
 
+// helper is an agent package; an extra starting "  - " is one more permission, any other a line
+// of agent.yaml.
 func helper(version, instructions string, extra ...string) map[string]string {
+	top, perms := "", "permissions:\n  - reads merged pull requests\n"
+	for _, e := range extra {
+		if strings.HasPrefix(e, "  - ") {
+			perms += e
+		} else {
+			top += e
+		}
+	}
 	return map[string]string{
 		"agent.yaml": "name: release-helper\nversion: " + version + "\ndisplay_name: Release Helper\nhandle: releaser\n" +
-			"description: Writes the changelog of release " + version + ".\ntier: chat\npermissions:\n  - reads merged pull requests\n" +
-			strings.Join(extra, ""),
+			"description: Writes the changelog of release " + version + ".\ntier: chat\n" + top + perms,
 		"instructions.md": instructions,
 	}
 }
@@ -115,5 +124,29 @@ func TestUpdatesWaitForAPersonAndForWhatTheyChanged(t *testing.T) {
 	}
 	if code := h.asJob(h.member(project, "member"), "PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{Version: ptr("2.0.0")}, nil); code != 403 {
 		t.Fatalf("a member updates: %d", code)
+	}
+}
+
+// An update that only drops a cost cap is asking for more, not less: it waits for acceptance.
+func TestDroppingACostCapIsAcceptedAgain(t *testing.T) {
+	h := newHarness(t)
+	r := marketplacetest.New(t)
+	r.Package("agents/release-helper", helper("1.0.0", "Write the changelog.\n", "policy: {max_cost_usd: 2, daily_budget_usd: 10}\n"))
+	r.Publish()
+	reg, _ := h.registry(r)
+	p := h.oneProject("cap")
+	inst := h.install(p.Id.String(), gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: &reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
+	r.Package("agents/release-helper", helper("1.0.1", "Write the changelog.\n"))
+	r.Publish()
+	h.fetch(reg.Id.String(), 200)
+	var pv gen.UpdatePreview
+	h.do("GET", "/installations/"+inst.Id.String()+"/update", nil, &pv)
+	want := []string{"spends what the project's budget allows a day (no daily cap of its own)", "spends what the project's policy allows a turn (no cap of its own)"}
+	if !pv.NeedsAcceptance || !slices.Equal(pv.AddedPermissions, want) {
+		t.Fatalf("dropping the caps: %+v", pv)
+	}
+	var refusal gen.InstallRefusal
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{}, &refusal); code != 409 || refusal.Code != "permissions_not_accepted" {
+		t.Fatalf("applied without acceptance: %d %+v", code, refusal)
 	}
 }

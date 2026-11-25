@@ -153,12 +153,19 @@ func agentPermissions(am AgentManifest) []string {
 	if am.Tier == "work" {
 		out = append(out, "works on code: commits on its own gator/ branch of the project's repository, on tasks where a person allowed agents")
 	}
+	// Spending is always a line, capped or not: a new version that drops a cap changes the line,
+	// and is accepted again, rather than dropping a line and passing as asking for less.
 	if am.Policy.MaxCostUSD > 0 {
 		out = append(out, fmt.Sprintf("spends up to $%.2f a turn", am.Policy.MaxCostUSD))
+	} else {
+		out = append(out, "spends what the project's policy allows a turn (no cap of its own)")
 	}
 	if am.Policy.DailyBudgetUSD > 0 {
 		out = append(out, fmt.Sprintf("spends up to $%.2f a day", am.Policy.DailyBudgetUSD))
+	} else {
+		out = append(out, "spends what the project's budget allows a day (no daily cap of its own)")
 	}
+	out = append(out, "runs on "+orProject(am.Policy.Backend, "backend")+", "+orProject(am.Policy.Model, "model"))
 	if am.RoleKey != "" {
 		out = append(out, "may play the process role "+am.RoleKey)
 	}
@@ -179,4 +186,11 @@ func agentPermissions(am AgentManifest) []string {
 		out = append(out, strings.TrimSpace("proposes an automation on "+tr.On+" "+string(when)))
 	}
 	return out
+}
+
+func orProject(v, what string) string {
+	if v == "" {
+		return "the project's " + what
+	}
+	return what + " " + v
 }
