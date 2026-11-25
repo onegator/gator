@@ -74,8 +74,8 @@ func (h *Hub) Subscribe(topics ...string) (<-chan Event, func()) {
 // away: a stalled job, an agent's proposal, a plugin switched off, a runner's login.
 var inboxEvents = map[string]bool{
 	"job.stalled": true, "job.resumed": true, "job.finished": true,
-	"component.proposed": true, "product.proposed": true,
-	"brain.proposed": true, "brain.approved": true, "brain.rejected": true, "brain.archived": true,
+	"component.proposed": true,
+	"brain.proposed":     true, "brain.approved": true, "brain.rejected": true, "brain.archived": true,
 	"plugin.disabled": true, "plugin.connected": true,
 	"runner.auth_changed": true,
 }

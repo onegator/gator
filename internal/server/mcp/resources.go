@@ -8,11 +8,17 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/store/db"
 )
 
+// mine answers everything about a person. brain.Service is one.
+type mine interface {
+	Mine(ctx context.Context, r brain.Reader) ([]db.BrainEntry, error)
+}
+
 // Resources for a person's client to pin: a project's principles, and their own context.
-func Resources(find finder, named projects) []Resource {
-	return []Resource{principles{find: find, named: named}, me{find: find}}
+func Resources(find finder, own mine, named projects) []Resource {
+	return []Resource{principles{find: find, named: named}, me{own: own}}
 }
 
 // principles is brain://project/<slug>/principles: what a project holds itself to, approved.
@@ -42,7 +48,7 @@ func (p principles) Add(s *sdk.Server, c Caller) {
 }
 
 // me is brain://me: the person's own context, as agents acting for them are lent it.
-type me struct{ find finder }
+type me struct{ own mine }
 
 func (me) Allowed(c Caller) bool { return !c.IsJob() }
 
@@ -50,14 +56,14 @@ func (m me) Add(s *sdk.Server, c Caller) {
 	s.AddResource(&sdk.Resource{Name: "me", URI: "brain://me", Description: "Your expertise, focus and preferences",
 		MIMEType: "text/markdown"},
 		func(ctx context.Context, req *sdk.ReadResourceRequest) (*sdk.ReadResourceResult, error) {
-			hits, err := m.find.Find(ctx, c.Reader, brain.Query{Scopes: []string{brain.ScopeUser}, Statuses: []string{brain.StatusApproved}, Limit: brain.MaxLimit})
+			rows, err := m.own.Mine(ctx, c.Reader)
 			if err != nil {
 				return nil, err
 			}
-			own := hits[:0]
-			for _, h := range hits {
-				if h.Entry.UserID == c.Reader.User {
-					own = append(own, h)
+			var own []brain.Hit
+			for _, e := range rows {
+				if brain.Live(e) {
+					own = append(own, brain.Hit{Entry: e})
 				}
 			}
 			return markdown(req.Params.URI, "What Gator knows about you", own), nil

@@ -315,21 +315,6 @@ func (q *Queries) DeleteBrainEntry(ctx context.Context, id pgtype.UUID) (int64, 
 	return result.RowsAffected(), nil
 }
 
-const deleteBrainLink = `-- name: DeleteBrainLink :exec
-DELETE FROM brain_links WHERE entry_id = $1 AND target_kind = $2 AND target_id = $3
-`
-
-type DeleteBrainLinkParams struct {
-	EntryID    pgtype.UUID `json:"entry_id"`
-	TargetKind string      `json:"target_kind"`
-	TargetID   string      `json:"target_id"`
-}
-
-func (q *Queries) DeleteBrainLink(ctx context.Context, arg DeleteBrainLinkParams) error {
-	_, err := q.db.Exec(ctx, deleteBrainLink, arg.EntryID, arg.TargetKind, arg.TargetID)
-	return err
-}
-
 const deleteUserBrain = `-- name: DeleteUserBrain :execrows
 DELETE FROM brain_entries WHERE scope = 'user' AND user_id = $1
 `
@@ -924,35 +909,6 @@ func (q *Queries) ListBrainProposals(ctx context.Context, projectID pgtype.UUID)
 	return items, nil
 }
 
-const listJobCitations = `-- name: ListJobCitations :many
-SELECT job_id, entry_id, how, created_at FROM brain_citations WHERE job_id = $1 ORDER BY how, entry_id
-`
-
-func (q *Queries) ListJobCitations(ctx context.Context, jobID pgtype.UUID) ([]BrainCitation, error) {
-	rows, err := q.db.Query(ctx, listJobCitations, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []BrainCitation
-	for rows.Next() {
-		var i BrainCitation
-		if err := rows.Scan(
-			&i.JobID,
-			&i.EntryID,
-			&i.How,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listKnowledgeShelf = `-- name: ListKnowledgeShelf :many
 SELECT id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries
 WHERE kind = 'convention' AND topic IS NOT NULL AND status = 'approved' AND scope IN ('workspace', 'project')
@@ -1524,7 +1480,7 @@ WHERE ($1::text = '' OR to_tsvector('simple', e.title || ' ' || e.content) @@ we
        OR (e.scope = 'user' AND (e.user_id = $10::uuid
                                  OR (e.visibility = 'project' AND ($8::boolean OR e.project_id = ANY($9::uuid[]))))))
 ORDER BY rank DESC, e.updated_at DESC, e.id
-LIMIT $11
+LIMIT $12 OFFSET $11
 `
 
 type SearchBrainParams struct {
@@ -1538,6 +1494,7 @@ type SearchBrainParams struct {
 	EveryProject    bool               `json:"every_project"`
 	Projects        []pgtype.UUID      `json:"projects"`
 	UserID          pgtype.UUID        `json:"user_id"`
+	Skip            int32              `json:"skip"`
 	MaxRows         int32              `json:"max_rows"`
 }
 
@@ -1560,6 +1517,7 @@ func (q *Queries) SearchBrain(ctx context.Context, arg SearchBrainParams) ([]Sea
 		arg.EveryProject,
 		arg.Projects,
 		arg.UserID,
+		arg.Skip,
 		arg.MaxRows,
 	)
 	if err != nil {
@@ -1690,17 +1648,24 @@ SELECT e.id, e.scope, e.project_id, e.component_key, e.user_id, e.agent_id, e.ki
 WHERE e.status = 'approved' AND e.archived_at IS NULL AND e.approved_at < $1::timestamptz
   AND ($2::uuid IS NULL OR e.project_id = $2::uuid)
   AND NOT EXISTS (SELECT 1 FROM brain_citations c WHERE c.entry_id = e.id AND c.how = 'cited' AND c.created_at >= $1::timestamptz)
-ORDER BY e.approved_at LIMIT 100
+ORDER BY e.approved_at, e.id LIMIT $4 OFFSET $3
 `
 
 type StaleBrainEntriesParams struct {
 	Before    pgtype.Timestamptz `json:"before"`
 	ProjectID pgtype.UUID        `json:"project_id"`
+	Skip      int32              `json:"skip"`
+	MaxRows   int32              `json:"max_rows"`
 }
 
 // Approved entries nobody has cited since before: the ones worth asking "is this still true?".
 func (q *Queries) StaleBrainEntries(ctx context.Context, arg StaleBrainEntriesParams) ([]BrainEntry, error) {
-	rows, err := q.db.Query(ctx, staleBrainEntries, arg.Before, arg.ProjectID)
+	rows, err := q.db.Query(ctx, staleBrainEntries,
+		arg.Before,
+		arg.ProjectID,
+		arg.Skip,
+		arg.MaxRows,
+	)
 	if err != nil {
 		return nil, err
 	}

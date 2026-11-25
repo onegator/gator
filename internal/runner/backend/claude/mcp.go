@@ -6,16 +6,54 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/onegator/gator/internal/runner/backend"
 )
 
+// DefaultMCPDir is where the runner keeps the MCP configurations of running jobs: a directory of
+// its own, which only its user may enter.
+func DefaultMCPDir() string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("gator-runner-mcp-%d", os.Getuid()))
+}
+
+// PrepareMCPDir makes dir the runner's own, empty, directory (0700), at startup: what a run that
+// died left behind — a job's token — does not stay there. A dir that is not a directory this user
+// owns is refused rather than used.
+func PrepareMCPDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || !ok || int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("%s is not a directory of this runner's user", dir)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // mcpConfig is what --mcp-config gets: the runner's own configuration (a JSON string or a file,
 // "explicit or empty") with the job's servers added. A job's servers carry its token, so they go
-// into a file only this user reads, outside the worktree, removed when the run ends — never onto
-// the command line, where any process on the machine could read it.
-func mcpConfig(base string, servers []backend.MCPServer) (string, func(), error) {
+// into a file only this user reads, in the runner's own directory outside the worktree, removed
+// when the run ends — never onto the command line, where any process on the machine could read it.
+func mcpConfig(base, dir string, servers []backend.MCPServer) (string, func(), error) {
 	nothing := func() {}
 	if len(servers) == 0 {
 		if base == "" {
@@ -38,7 +76,13 @@ func mcpConfig(base string, servers []backend.MCPServer) (string, func(), error)
 	if err != nil {
 		return "", nothing, err
 	}
-	f, err := os.CreateTemp("", "gator-mcp-*.json")
+	if dir == "" {
+		dir = DefaultMCPDir()
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", nothing, err
+	}
+	f, err := os.CreateTemp(dir, "job-*.json")
 	if err != nil {
 		return "", nothing, err
 	}

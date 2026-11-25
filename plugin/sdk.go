@@ -304,8 +304,6 @@ func (c *Core) RequestReview(ctx context.Context, p ReviewRequestParams) (Review
 	return out, err
 }
 
-// CloseIncident says a fault has stopped: production is all right again. Closing one that is
-// already closed changes nothing, because a monitoring tool may say so more than once.
 // ProposeToBrain proposes an entry to the project's Brain; a person approves it.
 func (c *Core) ProposeToBrain(ctx context.Context, p BrainProposeParams) (BrainProposeResult, error) {
 	var out BrainProposeResult
@@ -313,6 +311,8 @@ func (c *Core) ProposeToBrain(ctx context.Context, p BrainProposeParams) (BrainP
 	return out, err
 }
 
+// CloseIncident says a fault has stopped: production is all right again. Closing one that is
+// already closed changes nothing, because a monitoring tool may say so more than once.
 func (c *Core) CloseIncident(ctx context.Context, p IncidentCloseParams) error {
 	return c.conn.Call(ctx, CoreIncidentClose, p, nil)
 }

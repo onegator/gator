@@ -49,7 +49,7 @@ func (s *Server) AgentThread(w http.ResponseWriter, r *http.Request, params gen.
 	for _, m := range said {
 		body := m.Body
 		if m.Untrusted {
-			body = marker.Fence(m.Who, m.Body) // the same fence the prompt uses, not a flag a model may skip
+			body = marker.Fence(m.Who, m.Body) // fenced as the prompt fences them (a nonce of its own), not a flag a model may skip
 		}
 		out.Messages = append(out.Messages, gen.AgentThreadMessage{Seq: m.Seq, Author: m.Who, Body: body, Untrusted: m.Untrusted})
 	}

@@ -281,6 +281,7 @@ func TestJobsMCPServerJoinsTheRunnersConfig(t *testing.T) {
 	copied := filepath.Join(t.TempDir(), "mcp.json")
 	t.Setenv("FAKE_CLAUDE_MCP", copied)
 	b.MCPConfig = `{"mcpServers":{"docs":{"type":"http","url":"https://docs.example/mcp"}}}`
+	b.MCPDir = filepath.Join(t.TempDir(), "mcp")
 	gator := backend.MCPServer{Name: "gator", URL: "https://gator.example/mcp", Headers: map[string]string{"Authorization": "Bearer gtr_job_secret"}}
 	var sessions []any
 	out := b.Run(context.Background(), backend.Spec{Dir: t.TempDir(), Prompt: "why do sessions expire?", MCP: []backend.MCPServer{gator},
@@ -309,10 +310,38 @@ func TestJobsMCPServerJoinsTheRunnersConfig(t *testing.T) {
 		t.Fatalf("only this user reads it: %s", mode)
 	}
 	path, _ := os.ReadFile(copied + ".path")
+	if filepath.Dir(strings.TrimSpace(string(path))) != b.MCPDir {
+		t.Fatalf("in the runner's own directory: %s", path)
+	}
 	if _, err := os.Stat(strings.TrimSpace(string(path))); !os.IsNotExist(err) {
 		t.Fatal("and it is gone when the run ends")
 	}
 	if len(sessions) != 1 || !strings.Contains(fmt.Sprint(sessions[0]), "gator:connected") {
 		t.Fatalf("the session reports Gator's server: %v", sessions)
+	}
+}
+
+// At startup the runner's MCP directory is made its own, 0700, and emptied of what a run that died
+// left there (a job's token).
+func TestTheRunnersMCPDirectoryStartsEmptyAndClosed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "mcp")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "job-old.json"), []byte(`{"token":"gtr_job_old"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareMCPDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(dir)
+	left, _ := os.ReadDir(dir)
+	if info.Mode().Perm() != 0o700 || len(left) != 0 {
+		t.Fatalf("mode %v, left %v", info.Mode().Perm(), left)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	_ = os.WriteFile(file, nil, 0o600)
+	if err := PrepareMCPDir(file); err == nil {
+		t.Fatal("a file is not a directory to use")
 	}
 }

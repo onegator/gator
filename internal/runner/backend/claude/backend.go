@@ -31,7 +31,9 @@ type Backend struct {
 	// path for --mcp-config). Sessions always run with --strict-mcp-config, so servers and
 	// claude.ai connectors attached to the logged-in account are not available to jobs.
 	// Empty means no MCP servers at all.
-	MCPConfig   string
+	MCPConfig string
+	// MCPDir is where a job's MCP configuration is written while it runs; empty: DefaultMCPDir.
+	MCPDir      string
 	GracePeriod time.Duration
 	Log         *slog.Logger
 	// AllowEnv names variables the agent gets beyond agentenv's allow-list; a trailing *
@@ -128,7 +130,7 @@ func (b Backend) Run(ctx context.Context, spec backend.Spec, emit backend.Emit) 
 	if strings.HasPrefix(prompt, "-") { // would be parsed as a flag
 		prompt = "Task: " + prompt
 	}
-	mcp, cleanup, err := mcpConfig(b.MCPConfig, spec.MCP)
+	mcp, cleanup, err := mcpConfig(b.MCPConfig, b.MCPDir, spec.MCP)
 	if err != nil {
 		return failed("mcp config: " + err.Error())
 	}

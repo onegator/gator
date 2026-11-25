@@ -362,12 +362,25 @@ func (s *Service) Proposals(ctx context.Context, r Reader, project pgtype.UUID) 
 // ToReview are the approved entries in project (or everywhere r reads) that no job has cited
 // since before: the ones worth asking whether they still hold.
 func (s *Service) ToReview(ctx context.Context, r Reader, project pgtype.UUID, before time.Time) ([]db.BrainEntry, error) {
-	rows, err := s.store.StaleBrainEntries(ctx, db.StaleBrainEntriesParams{ProjectID: project,
-		Before: pgtype.Timestamptz{Time: before, Valid: true}})
-	if err != nil {
-		return nil, err
+	// The rules may turn many away (a project r does not read), so read on until there are
+	// enough, a few batches at most.
+	var out []db.BrainEntry
+	for batch := range maxBatches {
+		rows, err := s.store.StaleBrainEntries(ctx, db.StaleBrainEntriesParams{ProjectID: project,
+			Before: pgtype.Timestamptz{Time: before, Valid: true}, MaxRows: reviewBatch, Skip: int32(batch) * reviewBatch})
+		if err != nil {
+			return nil, err
+		}
+		kept, err := s.Visible(ctx, r, rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, kept...)
+		if len(out) >= reviewBatch || len(rows) < reviewBatch {
+			break
+		}
 	}
-	return s.Visible(ctx, r, rows)
+	return out[:min(len(out), reviewBatch)], nil
 }
 
 // Mine is everything the Brain holds about r, every version: what "me" is, to read and to take
@@ -683,8 +696,12 @@ func draftOf(e db.BrainEntry) Draft {
 }
 
 const (
-	maxTitle   = 300
-	maxContent = 64 << 10
+	// reviewBatch is how many entries a review lists, and maxBatches how many batches of
+	// candidates a listing reads at most to find them among what the rules turn away.
+	reviewBatch = 100
+	maxBatches  = 5
+	maxTitle    = 300
+	maxContent  = 64 << 10
 )
 
 func optional(s string) *string {

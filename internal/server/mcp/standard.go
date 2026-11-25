@@ -34,5 +34,5 @@ func Standard(d Deps) *Server {
 		tools = append(tools, ConversationTools(d.Talk)...)
 	}
 	tools = append(BrainTools(d.Brain.Finder, d.Brain.Service, d.Brain.Citations, from, d.Queries), tools...)
-	return New(d.Queries, d.Brain.Readers, tools, Resources(d.Brain.Finder, d.Queries), d.Log)
+	return New(d.Queries, d.Brain.Readers, tools, Resources(d.Brain.Finder, d.Brain.Service, d.Queries), d.Log)
 }

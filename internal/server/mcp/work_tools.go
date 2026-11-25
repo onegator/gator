@@ -137,7 +137,7 @@ func ConversationTools(t talk) []Tool {
 				for _, m := range said {
 					body := m.Body
 					if m.Untrusted {
-						body = marker.Fence(m.Who, m.Body) // the same fence the prompt uses
+						body = marker.Fence(m.Who, m.Body) // fenced as the prompt fences them, with a nonce of its own
 					}
 					out.Messages = append(out.Messages, messageOut{Seq: m.Seq, Author: m.Who, Body: body, Untrusted: m.Untrusted})
 				}

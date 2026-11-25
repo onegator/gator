@@ -23,6 +23,8 @@ type Query struct {
 	// At asks what held at a moment: what was approved by then and not yet replaced.
 	At    time.Time
 	Limit int
+	// Skip is how many candidates to pass over: the next batch.
+	Skip int
 }
 
 // Hit is one entry found, with how well it matched.
@@ -62,7 +64,7 @@ func (f FTS) Search(ctx context.Context, reach Reach, q Query) ([]Hit, error) {
 	rows, err := f.store.SearchBrain(ctx, db.SearchBrainParams{
 		Query: strings.TrimSpace(q.Text), Scopes: orEmpty(q.Scopes), Kinds: orEmpty(q.Kinds), Statuses: orEmpty(statuses),
 		ProjectID: q.Project, IncludeArchived: q.Archived && !reach.LiveOnly,
-		EveryProject: reach.EveryProject, Projects: orNone(reach.Projects), UserID: reach.User, MaxRows: int32(q.Limit), At: at,
+		EveryProject: reach.EveryProject, Projects: orNone(reach.Projects), UserID: reach.User, MaxRows: int32(q.Limit), Skip: int32(q.Skip), At: at,
 	})
 	if err != nil {
 		return nil, err
@@ -99,23 +101,29 @@ func (f Finder) Find(ctx context.Context, r Reader, q Query) ([]Hit, error) {
 	}
 	q.Limit = min(q.Limit, MaxLimit)
 	want := q.Limit
-	// The policy may turn candidates away (a private conversation's proposal), so ask for more
-	// than are wanted, once.
+	// The policy may turn candidates away (a private conversation's proposal), so read more than
+	// are wanted, batch after batch, a few at most.
 	q.Limit = want * 3
-	hits, err := f.searcher.Search(ctx, ReachOf(r), q)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Hit, 0, min(len(hits), want))
-	for _, h := range hits {
-		ok, err := f.policy.CanRead(ctx, r, h.Entry)
+	var out []Hit
+	for batch := range maxBatches {
+		q.Skip = batch * q.Limit
+		hits, err := f.searcher.Search(ctx, ReachOf(r), q)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
-			out = append(out, h)
+		for _, h := range hits {
+			ok, err := f.policy.CanRead(ctx, r, h.Entry)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out = append(out, h)
+			}
+			if len(out) == want {
+				return out, nil
+			}
 		}
-		if len(out) == want {
+		if len(hits) < q.Limit {
 			break
 		}
 	}

@@ -95,7 +95,7 @@ WHERE (sqlc.arg(query)::text = '' OR to_tsvector('simple', e.title || ' ' || e.c
        OR (e.scope = 'user' AND (e.user_id = sqlc.narg(user_id)::uuid
                                  OR (e.visibility = 'project' AND (sqlc.arg(every_project)::boolean OR e.project_id = ANY(sqlc.arg(projects)::uuid[]))))))
 ORDER BY rank DESC, e.updated_at DESC, e.id
-LIMIT sqlc.arg(max_rows);
+LIMIT sqlc.arg(max_rows) OFFSET sqlc.arg(skip);
 
 -- name: LiveBrainEntries :many
 -- What may reach a prompt: the newest approved version of every entry, not folded into a
@@ -143,9 +143,6 @@ ON CONFLICT (entry_id, target_kind, target_id) DO UPDATE SET relation = EXCLUDED
 -- name: ListBrainLinks :many
 SELECT * FROM brain_links WHERE entry_id = ANY(sqlc.arg(ids)::uuid[]) ORDER BY entry_id, target_kind, target_id;
 
--- name: DeleteBrainLink :exec
-DELETE FROM brain_links WHERE entry_id = $1 AND target_kind = $2 AND target_id = $3;
-
 -- name: RecordBrainCitations :exec
 INSERT INTO brain_citations (job_id, entry_id, how)
 SELECT sqlc.arg(job_id)::uuid, unnest(sqlc.arg(entry_ids)::uuid[]), sqlc.arg(how)::text
@@ -156,16 +153,13 @@ ON CONFLICT DO NOTHING;
 SELECT c.job_id, c.entry_id, c.how, c.created_at, j.task_id, j.role, j.project_id FROM brain_citations c JOIN jobs j ON j.id = c.job_id
 WHERE c.entry_id = ANY(sqlc.arg(ids)::uuid[]) ORDER BY c.created_at DESC LIMIT 200;
 
--- name: ListJobCitations :many
-SELECT * FROM brain_citations WHERE job_id = $1 ORDER BY how, entry_id;
-
 -- name: StaleBrainEntries :many
 -- Approved entries nobody has cited since before: the ones worth asking "is this still true?".
 SELECT e.* FROM brain_entries e
 WHERE e.status = 'approved' AND e.archived_at IS NULL AND e.approved_at < sqlc.arg(before)::timestamptz
   AND (sqlc.narg(project_id)::uuid IS NULL OR e.project_id = sqlc.narg(project_id)::uuid)
   AND NOT EXISTS (SELECT 1 FROM brain_citations c WHERE c.entry_id = e.id AND c.how = 'cited' AND c.created_at >= sqlc.arg(before)::timestamptz)
-ORDER BY e.approved_at LIMIT 100;
+ORDER BY e.approved_at, e.id LIMIT sqlc.arg(max_rows) OFFSET sqlc.arg(skip);
 
 -- The doors the product context and the knowledge entries had, over the Brain.
 
