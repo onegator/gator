@@ -10,7 +10,7 @@ working_state).
 
 ## Tożsamość agenta
 
-Dzisiejsze role (`process/roles/*.md`) stają się **agentami domyślnymi** każdego projektu:
+Dzisiejsze role (`internal/server/process/roles/*.md`) stają się **agentami domyślnymi** każdego projektu:
 `@researcher`, `@planner`, `@worker`, `@reviewer`, `@security`, `@curator`. Szablon procesu dalej
 mówi `role: reviewer`, a serwer rozwiązuje to do agenta projektu z `role_key = 'reviewer'`. Projekt
 może podmienić agenta dla roli (np. własny `@backend-reviewer`), nie ruszając szablonu.
@@ -30,7 +30,7 @@ Ograniczenie narzędzi dla `chat` w backendzie Claude: `--permission-mode` z jaw
 `--allowedTools` (Read, Grep, Glob, WebFetch, narzędzia MCP Gatora) i `--disallowedTools` dla reszty.
 Do zweryfikowania na aktualnej wersji CLI i nagrania w `testdata`.
 
-## Dane (`00037_agents.sql`, `00038_agent_turns.sql`)
+## Dane (`00039_agents.sql`, `00040_agent_turns.sql`)
 
 ```sql
 CREATE TABLE agents (
@@ -41,7 +41,7 @@ CREATE TABLE agents (
     description   text NOT NULL DEFAULT '',      -- jedna linia, widoczna w @autocomplete
     avatar        text NOT NULL DEFAULT '',      -- SF Symbol, emoji albo url
     role_key      text,                          -- researcher|planner|worker|reviewer|… (do szablonów procesu)
-    instructions  text NOT NULL DEFAULT '',      -- pusty = prompt roli z process/roles
+    instructions  text NOT NULL DEFAULT '',      -- pusty = prompt roli z internal/server/process/roles
     tier          text NOT NULL DEFAULT 'chat' CHECK (tier IN ('chat', 'work')),
     policy        jsonb NOT NULL DEFAULT '{}',   -- {backend, model, max_cost_usd}; brak = process_config.policy
     tools         jsonb NOT NULL DEFAULT '[]',   -- nazwy serwerów MCP / pluginów (faza 4)
@@ -79,13 +79,13 @@ ALTER TABLE jobs
     ADD COLUMN tier     text NOT NULL DEFAULT 'work';
 ```
 
-Migracja 00037 tworzy agentów domyślnych dla istniejących projektów (z `role_key` i pustym
+Migracja 00039 tworzy agentów domyślnych dla istniejących projektów (z `role_key` i pustym
 `instructions`), a `jobs.agent_id` uzupełnia po `role`.
 
 ## Rozmowa bez taska: kind `ask`
 
 Każdy job potrzebuje taska (`jobs.task_id NOT NULL`, token joba ma zakres taska, budżety i metryki
-liczą się per task). Zamiast to rozluźniać, dodajemy szablon `process/defaults/ask.yaml`:
+liczą się per task). Zamiast to rozluźniać, dodajemy szablon `internal/server/process/defaults/ask.yaml`:
 
 ```yaml
 kind: ask
@@ -183,7 +183,7 @@ Agenci workspace'u są tylko dla admina workspace'u.
 
 ## Podział na PR-y
 
-1. Migracje 00037/00038, seed agentów domyślnych, rozwiązywanie `role → agent` w autopilocie.
+1. Migracje 00039/00040, seed agentów domyślnych, rozwiązywanie `role → agent` w autopilocie.
 2. `ask.yaml` (ukryty kind) i promote `ask → feature/bug`.
 3. Dispatcher wzmianek z limitami (hop, budżet, pauza, consent) i testami tabelarycznymi.
 4. Pakiet rozmowy i streszczenia (`conversation_summaries`, generowane tanim modelem z policy

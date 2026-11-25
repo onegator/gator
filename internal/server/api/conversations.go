@@ -1,0 +1,478 @@
+package api
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/onegator/gator/internal/server/api/gen"
+	"github.com/onegator/gator/internal/server/auth"
+	"github.com/onegator/gator/internal/server/conversations"
+	"github.com/onegator/gator/internal/server/store/db"
+)
+
+// conversationsOff answers 503 when the server runs without conversations.
+func (s *Server) conversationsOff(w http.ResponseWriter) bool {
+	if s.Conversations == nil {
+		writeError(w, http.StatusServiceUnavailable, "conversations are not enabled on this server", "unavailable")
+		return true
+	}
+	return false
+}
+
+// failConversation maps the conversations package's errors to responses. A conversation the
+// caller may not read answers 404, like one that does not exist.
+func (s *Server) failConversation(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, conversations.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not found", "not_found")
+	case errors.Is(err, conversations.ErrForbidden):
+		writeError(w, http.StatusForbidden, err.Error(), "forbidden")
+	case errors.Is(err, conversations.ErrInvalid):
+		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), conversations.ErrInvalid.Error()+": "), "invalid")
+	case errors.Is(err, conversations.ErrConflict):
+		writeError(w, http.StatusConflict, strings.TrimPrefix(err.Error(), conversations.ErrConflict.Error()+": "), "conflict")
+	default:
+		s.fail(w, err)
+	}
+}
+
+// conversationCaller is the caller, for a conversations endpoint that is switched on.
+func (s *Server) conversationCaller(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) {
+	if s.conversationsOff(w) {
+		return auth.Principal{}, false
+	}
+	return s.principal(w, r)
+}
+
+func (s *Server) ListProjectConversations(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, params gen.ListProjectConversationsParams) {
+	if s.conversationsOff(w) {
+		return
+	}
+	p, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer)
+	if !ok {
+		return
+	}
+	f := conversations.ListFilter{Archived: params.Archived != nil && *params.Archived, Name: deref(params.Q)}
+	if params.Kind != nil {
+		f.Kind = string(*params.Kind)
+	}
+	f.Page = listPage(params.Limit, params.Offset)
+	rows, more, err := s.Conversations.Directory.ListProject(r.Context(), p, fromUUID(projectId), f)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeConversationList(w, rows, more)
+}
+
+func (s *Server) CreateChannel(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId) {
+	if s.conversationsOff(w) {
+		return
+	}
+	p, ok := s.requireProject(w, r, fromUUID(projectId), auth.RoleViewer)
+	if !ok {
+		return
+	}
+	var in gen.NewChannel
+	if !decode(w, r, &in) {
+		return
+	}
+	nc := conversations.NewChannel{Name: in.Name, Topic: deref(in.Topic), ComponentKey: deref(in.ComponentKey)}
+	if in.Visibility != nil {
+		nc.Visibility = string(*in.Visibility)
+	}
+	conv, err := s.Conversations.Directory.CreateChannel(r.Context(), p, fromUUID(projectId), nc)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	s.respondConversation(w, r, p, conv.ID, http.StatusCreated)
+}
+
+func (s *Server) ListMyConversations(w http.ResponseWriter, r *http.Request, params gen.ListMyConversationsParams) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	kind := ""
+	if params.Kind != nil {
+		kind = string(*params.Kind)
+	}
+	rows, more, err := s.Conversations.Directory.ListMine(r.Context(), p, kind, listPage(params.Limit, params.Offset))
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeConversationList(w, rows, more)
+}
+
+func (s *Server) OpenDirectMessage(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.NewDirectMessage
+	if !decode(w, r, &in) {
+		return
+	}
+	people := make([]pgtype.UUID, 0, len(in.Members))
+	for _, m := range in.Members {
+		people = append(people, fromUUID(m))
+	}
+	var project pgtype.UUID
+	if in.ProjectId != nil {
+		project = fromUUID(*in.ProjectId)
+	}
+	conv, created, err := s.Conversations.Directory.OpenDM(r.Context(), p, people, project)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	s.respondConversation(w, r, p, conv.ID, status)
+}
+
+func (s *Server) GetConversation(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	s.respondConversation(w, r, p, fromUUID(conversationId), http.StatusOK)
+}
+
+func (s *Server) UpdateConversation(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.ConversationPatch
+	if !decode(w, r, &in) {
+		return
+	}
+	if _, err := s.Conversations.Directory.Update(r.Context(), p, fromUUID(conversationId), conversations.Patch{
+		Name: in.Name, Topic: in.Topic, Archived: in.Archived,
+	}); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	s.respondConversation(w, r, p, fromUUID(conversationId), http.StatusOK)
+}
+
+func (s *Server) SetConversationMember(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId,
+	memberKind gen.SetConversationMemberParamsMemberKind, memberId gen.MemberId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.ConversationMemberChange
+	if r.ContentLength != 0 && !decode(w, r, &in) {
+		return
+	}
+	change := conversations.MemberChange{}
+	if in.Notify != nil {
+		change.Notify = ptr(string(*in.Notify))
+	}
+	if in.Role != nil {
+		change.Role = ptr(string(*in.Role))
+	}
+	m, err := s.Conversations.Directory.SetMember(r.Context(), p, fromUUID(conversationId),
+		conversations.Member{Kind: string(memberKind), ID: fromUUID(memberId)}, change)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toConversationMember(m.MemberKind, m.MemberID, "", m.Role, m.Notify, m.LastReadSeq, m.JoinedAt))
+}
+
+func (s *Server) RemoveConversationMember(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId,
+	memberKind gen.RemoveConversationMemberParamsMemberKind, memberId gen.MemberId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Conversations.Directory.RemoveMember(r.Context(), p, fromUUID(conversationId),
+		conversations.Member{Kind: string(memberKind), ID: fromUUID(memberId)}); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ListMessages(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId, params gen.ListMessagesParams) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	page := conversations.Page{}
+	if params.BeforeSeq != nil {
+		page.BeforeSeq = *params.BeforeSeq
+	}
+	page.AfterSeq = params.AfterSeq
+	if params.Limit != nil {
+		page.Limit = *params.Limit
+	}
+	res, err := s.Conversations.Messages.List(r.Context(), p, fromUUID(conversationId), page)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gen.MessagePage{Messages: mapAll(res.Messages, toMessage), HasMore: res.HasMore})
+}
+
+func (s *Server) PostMessage(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.NewMessage
+	if !decode(w, r, &in) {
+		return
+	}
+	posted, err := s.Conversations.Messages.Post(r.Context(), p, fromUUID(conversationId), toDraft(in))
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	status := http.StatusCreated
+	if posted.Replayed {
+		status = http.StatusOK
+	}
+	s.respondMessage(w, r, p, posted.Message.ID, status)
+}
+
+func (s *Server) MarkConversationRead(w http.ResponseWriter, r *http.Request, conversationId gen.ConversationId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.ReadMarker
+	if !decode(w, r, &in) {
+		return
+	}
+	m, err := s.Conversations.Messages.MarkRead(r.Context(), p, fromUUID(conversationId), in.Seq)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toConversationMember(m.MemberKind, m.MemberID, "", m.Role, m.Notify, m.LastReadSeq, m.JoinedAt))
+}
+
+func (s *Server) GetMessage(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	s.respondMessage(w, r, p, fromUUID(messageId), http.StatusOK)
+}
+
+func (s *Server) GetMessageThread(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	thread, err := s.Conversations.Threads.Of(r.Context(), p, fromUUID(messageId))
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	s.respondConversation(w, r, p, thread.ID, http.StatusOK)
+}
+
+// respondConversation answers a conversation as the caller sees it.
+func (s *Server) respondConversation(w http.ResponseWriter, r *http.Request, p auth.Principal, id pgtype.UUID, status int) {
+	d, err := s.Conversations.Directory.Get(r.Context(), p, id)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, status, toConversationDetail(d))
+}
+
+// respondMessage answers one message as the caller sees it.
+func (s *Server) respondMessage(w http.ResponseWriter, r *http.Request, p auth.Principal, id pgtype.UUID, status int) {
+	v, err := s.Conversations.Messages.Get(r.Context(), p, id)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, status, toMessage(v))
+}
+
+func listPage(limit, offset *int) conversations.ListPage {
+	var pg conversations.ListPage
+	if limit != nil {
+		pg.Limit = *limit
+	}
+	if offset != nil {
+		pg.Offset = *offset
+	}
+	return pg
+}
+
+// writeConversationList answers one page of conversations; X-Has-More says another follows.
+func writeConversationList(w http.ResponseWriter, rows []conversations.Listed, more bool) {
+	w.Header().Set("X-Has-More", strconv.FormatBool(more))
+	writeJSON(w, http.StatusOK, mapAll(rows, toConversation))
+}
+
+func toDraft(in gen.NewMessage) conversations.Draft {
+	d := conversations.Draft{Body: deref(in.Body), ClientID: deref(in.ClientId)}
+	if in.Mentions != nil {
+		for _, m := range *in.Mentions {
+			d.Mentions = append(d.Mentions, conversations.Member{Kind: string(m.Kind), ID: fromUUID(m.Id)})
+		}
+	}
+	if in.Attachments != nil {
+		for _, id := range *in.Attachments {
+			d.Attachments = append(d.Attachments, fromUUID(id))
+		}
+	}
+	return d
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// GetTaskConversation answers the task's thread, opening it for a task that has none yet.
+func (s *Server) GetTaskConversation(w http.ResponseWriter, r *http.Request, taskId gen.TaskId) {
+	if s.conversationsOff(w) {
+		return
+	}
+	p, ok := s.requireTask(w, r, fromUUID(taskId), auth.RoleViewer)
+	if !ok {
+		return
+	}
+	task, err := db.New(s.Pool).GetTask(r.Context(), fromUUID(taskId))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	conv, err := s.Conversations.Threads.ForTaskAs(r.Context(), p, task)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	d, err := s.Conversations.Directory.DetailOf(r.Context(), conv, p)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toConversationDetail(d))
+}
+
+// PromoteMessage makes a message into a task.
+func (s *Server) PromoteMessage(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	if s.Conversations.Promoter == nil {
+		writeError(w, http.StatusServiceUnavailable, "making messages into tasks is not enabled on this server", "unavailable")
+		return
+	}
+	var in gen.PromoteMessage
+	if !decode(w, r, &in) {
+		return
+	}
+	pr := conversations.Promotion{Kind: string(in.Kind), Title: deref(in.Title)}
+	if in.ProjectId != nil {
+		pr.Project = fromUUID(*in.ProjectId)
+	}
+	out, err := s.Conversations.Promoter.Promote(r.Context(), p, ActorFromContext(r.Context()), fromUUID(messageId), pr)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, gen.PromotedMessage{Task: toTask(out.Task), ConversationId: toUUID(out.Conversation)})
+}
+
+func (s *Server) EditMessage(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	var in gen.MessagePatch
+	if !decode(w, r, &in) {
+		return
+	}
+	if _, err := s.Conversations.Messages.Edit(r.Context(), p, fromUUID(messageId), in.Body); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	s.respondMessage(w, r, p, fromUUID(messageId), http.StatusOK)
+}
+
+func (s *Server) DeleteMessage(w http.ResponseWriter, r *http.Request, messageId gen.MessageId) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Conversations.Messages.Delete(r.Context(), p, fromUUID(messageId)); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) AddReaction(w http.ResponseWriter, r *http.Request, messageId gen.MessageId, emoji gen.Emoji) {
+	s.react(w, r, messageId, emoji, true)
+}
+
+func (s *Server) RemoveReaction(w http.ResponseWriter, r *http.Request, messageId gen.MessageId, emoji gen.Emoji) {
+	s.react(w, r, messageId, emoji, false)
+}
+
+func (s *Server) react(w http.ResponseWriter, r *http.Request, messageId gen.MessageId, emoji string, add bool) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Conversations.Messages.React(r.Context(), p, fromUUID(messageId), emoji, add); err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SearchMessages finds messages by their words in the conversations the caller may read.
+func (s *Server) SearchMessages(w http.ResponseWriter, r *http.Request, params gen.SearchMessagesParams) {
+	p, ok := s.conversationCaller(w, r)
+	if !ok {
+		return
+	}
+	in := conversations.Query{Text: params.Q}
+	if params.Limit != nil {
+		in.Limit = *params.Limit
+	}
+	if params.ProjectId != nil {
+		in.Project = fromUUID(*params.ProjectId)
+		if _, ok := s.requireProject(w, r, in.Project, auth.RoleViewer); !ok {
+			return
+		}
+	}
+	visible, err := s.visibleProjects(r, p)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	scope := conversations.Scope{All: visible == nil}
+	for id := range visible {
+		scope.Projects = append(scope.Projects, pgtype.UUID{Bytes: id, Valid: true})
+	}
+	hits, err := s.Conversations.Search.Messages(r.Context(), p, scope, in)
+	if err != nil {
+		s.failConversation(w, err)
+		return
+	}
+	out := make([]gen.MessageHit, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, gen.MessageHit{Message: toMessage(h.Message), Conversation: toConversation(conversations.Listed{Conversation: h.Conversation})})
+	}
+	writeJSON(w, http.StatusOK, out)
+}

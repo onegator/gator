@@ -27,23 +27,37 @@ i kopiuje do opisu taska streszczenie oraz link do wiadomości.
 
 ## Dane (`00035_conversations.sql`)
 
+Pełna migracja: `internal/server/store/migrations/00035_conversations.sql`. Skrót:
+
 ```sql
 CREATE TABLE conversations (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id   uuid REFERENCES projects(id) ON DELETE CASCADE,   -- NULL dla DM poza projektem
+    project_id   uuid REFERENCES projects(id) ON DELETE CASCADE,   -- NULL dla DM poza projektem (i jego wątków)
     kind         text NOT NULL CHECK (kind IN ('channel', 'dm', 'thread', 'task')),
     name         text,                                              -- tylko channel; unikalny w projekcie
     topic        text NOT NULL DEFAULT '',
     visibility   text NOT NULL DEFAULT 'project' CHECK (visibility IN ('project', 'private')),
-    parent_message_id uuid,                                         -- thread: wiadomość-korzeń
+    parent_message_id uuid,                                         -- thread/task: wiadomość-korzeń
     task_id      uuid UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,-- kind='task'
     component_key text,
+    dm_key       text,                                              -- tylko dm: posortowane id uczestników
     archived_at  timestamptz,
-    created_by_kind text NOT NULL, created_by uuid,
+    created_by_kind text NOT NULL CHECK (created_by_kind IN ('user','agent','system','plugin','external')),
+    created_by   uuid,
     created_at   timestamptz NOT NULL DEFAULT now(),
     last_message_at timestamptz,
-    UNIQUE (project_id, name)
+    last_seq     bigint NOT NULL DEFAULT 0,                         -- seq najnowszej wiadomości
+    CHECK ((kind = 'channel') = (name IS NOT NULL)),
+    CHECK ((kind = 'dm') = (dm_key IS NOT NULL)),
+    CHECK ((kind = 'task') = (task_id IS NOT NULL)),
+    CHECK (kind <> 'thread' OR parent_message_id IS NOT NULL),
+    CHECK (kind IN ('dm', 'thread') OR project_id IS NOT NULL)
 );
+-- Kanał zawsze ma projekt, a inne rodzaje nie mają nazwy: indeks częściowy zamiast UNIQUE (project_id, name).
+CREATE UNIQUE INDEX conversations_channel_name_idx ON conversations (project_id, name) WHERE kind = 'channel';
+-- Jeden DM na zestaw ludzi w danym zakresie; NULL project_id to jeden zakres („poza projektami”).
+CREATE UNIQUE INDEX conversations_dm_idx ON conversations (project_id, dm_key) NULLS NOT DISTINCT WHERE kind = 'dm';
+CREATE UNIQUE INDEX conversations_parent_idx ON conversations (parent_message_id) WHERE parent_message_id IS NOT NULL;
 
 CREATE TABLE conversation_members (
     conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -66,6 +80,7 @@ CREATE TABLE messages (
     body            text NOT NULL DEFAULT '',        -- Markdown (podzbiór)
     card_type       text,
     card            jsonb,
+    card_key        text,                            -- o czym jest karta ("job:<id>"); karta jest aktualizowana, nie dublowana
     reply_count     integer NOT NULL DEFAULT 0,
     status          text NOT NULL DEFAULT 'final' CHECK (status IN ('streaming', 'final', 'failed')),
     origin          jsonb NOT NULL DEFAULT '{}',     -- np. {"source":"slack","ts":"…"} (faza 5)
@@ -73,38 +88,44 @@ CREATE TABLE messages (
     edited_at       timestamptz,
     deleted_at      timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
+    CHECK ((kind = 'card') = (card_type IS NOT NULL)),
+    CHECK (kind = 'card' OR (card IS NULL AND card_key IS NULL)),
     UNIQUE (conversation_id, seq),
-    UNIQUE (conversation_id, client_id)
+    UNIQUE (conversation_id, author_kind, author_id, client_id),
+    UNIQUE (conversation_id, card_key)
 );
-ALTER TABLE conversations ADD FOREIGN KEY (parent_message_id) REFERENCES messages(id) ON DELETE CASCADE;
+ALTER TABLE conversations ADD CONSTRAINT conversations_parent_message_fk
+    FOREIGN KEY (parent_message_id) REFERENCES messages(id) ON DELETE CASCADE;
 
 CREATE TABLE message_mentions (
     message_id  uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    member_kind text NOT NULL, member_id uuid NOT NULL,
+    member_kind text NOT NULL CHECK (member_kind IN ('user', 'agent')), member_id uuid NOT NULL,
     PRIMARY KEY (message_id, member_kind, member_id)
 );
 
 CREATE TABLE message_reactions (
     message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    member_kind text NOT NULL, member_id uuid NOT NULL,
-    emoji text NOT NULL,
+    member_kind text NOT NULL CHECK (member_kind IN ('user', 'agent')), member_id uuid NOT NULL,
+    emoji text NOT NULL CHECK (length(emoji) BETWEEN 1 AND 64),
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (message_id, member_kind, member_id, emoji)
 );
 
 CREATE TABLE message_attachments (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    message_id uuid REFERENCES messages(id) ON DELETE CASCADE,  -- NULL do wysłania wiadomości, która go niesie
+    uploaded_by uuid REFERENCES users(id) ON DELETE SET NULL,
     name text NOT NULL, content_type text NOT NULL, size_bytes bigint NOT NULL,
-    storage_key text NOT NULL,                  -- S3-compatible jak backupy, albo dysk lokalny
+    storage_key text NOT NULL UNIQUE,           -- S3-compatible albo dysk lokalny
     created_at timestamptz NOT NULL DEFAULT now()
 );
 ```
 
-`seq` nadawany jest w transakcji przez `UPDATE conversations SET last_seq = last_seq + 1 RETURNING`
-(dodatkowa kolumna `last_seq`), co daje kolejność bez luk na conversation.
+`seq` nadawany jest w transakcji przez `UPDATE conversations SET last_seq = last_seq + 1 RETURNING last_seq`,
+co blokuje wiersz rozmowy do końca transakcji i daje kolejność bez luk na conversation.
 
-`00036_message_search.sql`: `tsvector` generowany z `body` (konfiguracja `simple`, bo zespoły piszą
+`00038_message_search.sql`: `tsvector` generowany z `body` (konfiguracja `simple`, bo zespoły piszą
 w PL i EN) plus indeks GIN, a do tego `pg_trgm` na nazwy kanałów.
 
 ## API (`docs/openapi.yaml`)
@@ -112,22 +133,25 @@ w PL i EN) plus indeks GIN, a do tego `pg_trgm` na nazwy kanałów.
 ```
 GET    /projects/{projectId}/conversations?kind=channel          lista kanałów (z unread, last_message_at)
 POST   /projects/{projectId}/conversations                       nowy kanał {name, topic, visibility}
-POST   /conversations/dm                                          {members:[…]} → istniejący lub nowy DM
-GET    /conversations/{id}                                        szczegóły + członkowie
+GET    /conversations?kind=                                       rozmowy, w których jestem (też DM-y poza projektem)
+POST   /conversations/dm                                          {members:[…], projectId?} → istniejący (200) lub nowy (201) DM
+GET    /conversations/{id}                                        szczegóły + członkowie + moje uprawnienia
 PATCH  /conversations/{id}                                        name, topic, archive
 PUT    /conversations/{id}/members/{kind}/{memberId}              dołącz / zmień notify
 DELETE /conversations/{id}/members/{kind}/{memberId}
-GET    /conversations/{id}/messages?before_seq=&after_seq=&limit= paginacja po seq
-POST   /conversations/{id}/messages                               {body, client_id, attachments[]}
+GET    /conversations/{id}/messages?beforeSeq=&afterSeq=&limit=   paginacja po seq
+POST   /conversations/{id}/messages                               {body, clientId, mentions[], attachments[]}
+GET    /messages/{id}                                             jedna wiadomość (np. po zdarzeniu z WS)
 PATCH  /messages/{id}                                             edycja (autor, 24 h) 
 DELETE /messages/{id}                                             soft delete (autor albo admin projektu)
 PUT    /messages/{id}/reactions/{emoji}  /  DELETE …
 GET    /messages/{id}/thread                                      conversation wątku (tworzy przy 1. odpowiedzi)
-POST   /messages/{id}/promote                                     „zrób task" {kind, title?} → task + link
+POST   /messages/{id}/promote                                     „zrób task" {kind, title?, projectId?} → {task, conversationId}
 POST   /conversations/{id}/read                                   {seq}
 GET    /tasks/{taskId}/conversation
-GET    /search/messages?q=&project=                               FTS, tylko w dostępnych conversation
-POST   /attachments                                               upload → id (presigned albo multipart)
+GET    /search/messages?q=&projectId=&limit=                      FTS, tylko w dostępnych conversation
+POST   /attachments                                               upload (multipart: conversationId, file) → id
+GET    /attachments/{id}                                          plik dla czytających rozmowę
 ```
 
 **WebSocket:** nowe topiki `conversation:<id>` (wiadomości, edycje, reakcje, typing) i `me`
@@ -140,8 +164,10 @@ nie trafia do outboxu, tylko bezpośrednio do huba.
 
 ## Karty: skąd się biorą
 
-Nowy konsument outboxu `internal/server/conversations/cards.go` (z własnym kursorem w `event_cursors`,
-tak jak `product`) zamienia zdarzenia domenowe na karty w wątku taska:
+Nowy konsument outboxu `internal/server/conversations` (z własnym kursorem `conversations` w `event_cursors`,
+tak jak `product`) zamienia zdarzenia domenowe na karty w wątku taska. Każdy rodzaj karty to osobne
+źródło (`CardSource`: `cards_task.go`, `cards_decision.go`, `cards_job.go`, `cards_artifact.go`),
+a `Projector` zapisuje karty kluczem (`card_key`), więc nowy rodzaj karty to nowe źródło, bez zmian w reszcie:
 
 | Zdarzenie | Karta | Akcje w karcie (te same endpointy co dziś) |
 |---|---|---|
@@ -180,12 +206,12 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
 
 1. Migracja 00035, zapytania sqlc, serwis conversations z testami uprawnień.
 2. Endpointy wiadomości i paginacji, WS `conversation:<id>`, zdarzenia.
-3. Kanał `#general` tworzony z projektem plus backfill dla istniejących projektów (w migracji).
-4. Wątek taska: tworzenie przy tasku, backfill dla otwartych tasków, `GET /tasks/{id}/conversation`.
+3. Kanał `#general` tworzony z projektem plus backfill dla istniejących projektów (migracja 00036).
+4. Wątek taska: tworzenie przy tasku, backfill dla otwartych tasków (migracja 00037), `GET /tasks/{id}/conversation`.
 5. Konsument kart (`task`, `decision`, `job`, `artifact`).
 6. Promote (wiadomość → task).
 7. Reakcje, edycja, usuwanie, załączniki.
-8. FTS (00036) i `/search/messages`.
+8. FTS (00038) i `/search/messages`.
 9. Powiadomienia (mentions, DM).
 10. Regeneracja `GatorAPI` w gator-app i ekrany z fazy 6a.
 
@@ -203,3 +229,89 @@ karty `task` i `decision` z działającymi przyciskami, unread oraz push na ment
   a kolejne fazy zwijane do jednej linii.
 - **Kanał `#general` jako śmietnik kart tasków.** Rozwiązaniem jest konfigurowalny `task_channel`
   oraz filtr „tylko rozmowy" w kliencie.
+
+## Odstępstwa od planu (zapisane przy implementacji)
+
+- **Nazwy parametrów** w API są camelCase jak w reszcie `docs/openapi.yaml` (`beforeSeq`, `afterSeq`,
+  `clientId`, `projectId`), a nie snake_case z pierwszej wersji tego dokumentu.
+- **Wzmianki** przychodzą od klienta jawnie (`mentions: [{kind, id}]`), a nie z parsowania `@imię` w
+  treści: ludzie nie mają unikalnych uchwytów. Osoba, która nie może czytać rozmowy, jest pomijana.
+- **Zdarzenia nie niosą treści wiadomości**, tylko id, `seq` i autora. Klient dociąga wiadomości po
+  `afterSeq`, przez te same reguły dostępu. Treść nie zostaje więc w outboxie po usunięciu
+  wiadomości, a pluginy czytające zdarzenia jej nie widzą.
+- **Temat `me`** to `user:<id>` w hubie. Komu zdarzenie rozmowy dotyczy, ustala relay w chwili
+  publikacji (`conversations.RelayAudience`: członkowie rozmowy z `conversation_members` plus osoby z
+  pola `also`, np. wspomniani albo właśnie usunięty), więc zdarzenie w bazie nie niesie listy członków.
+  `conversation.read` jest osobiste: trafia tylko na `user:<id>` czytającego (nie na `conversation:`,
+  `project:` ani `*`) i tylko wtedy, gdy znacznik się przesunął. Nikt nie subskrybuje `user:<id>` wprost.
+- **Typing** wysyła klient przez WebSocket (`{"typing":"<conversationId>"}`), a serwer publikuje
+  `conversation.typing` prosto do huba, tylko na `conversation:<id>` (`Hub.PublishTo`, więc nie budzi
+  konsumentów outboxu), najwyżej raz na 2 s na rozmowę i połączenie.
+- **Dodatkowe zdarzenia:** `conversation.updated` (temat, nazwa, archiwum), `conversation.read`
+  (tylko do czytającego, dla jego innych urządzeń), `message.replied` (licznik odpowiedzi pod
+  wiadomością-korzeniem, w rozmowie korzenia).
+- **Administrator workspace'u** moderuje kanały projektów jak admin projektu, ale prywatny kanał i
+  DM czyta tylko wtedy, gdy jest ich członkiem. Rozmowa, której nie wolno czytać, odpowiada 404.
+- **`GET /messages/{id}/thread`** otwiera wątek przy pierwszym pytaniu (idempotentnie) kogoś, kto może
+  tam pisać, z autorem wiadomości jako członkiem; viewer i każdy w zarchiwizowanej rozmowie tylko
+  znajdują wątek, który już jest (inaczej 404). Tak samo `GET /tasks/{id}/conversation` otwiera
+  brakujący wątek taska tylko członkowi projektu. Wątki się nie zagnieżdżają (400 dla odpowiedzi).
+- **Viewer w DM-ie** projektu odpisuje (może też otworzyć DM); w kanałach tylko czyta i reaguje.
+- **Ostatni właściciel kanału**, który wychodzi, przekazuje go najdłużej obecnemu członkowi;
+  ostatnia osoba nie może opuścić prywatnego kanału (409, zamiast tego archiwizacja).
+- **Migracje:** backfille `#general` (00036) i wątków otwartych tasków (00037) są osobnymi migracjami,
+  a FTS ma numer 00038; numery kolejnych faz przesunęły się o 2 (tabela w `README.md`).
+- **`#general` przy projekcie** tworzy `POST /projects` (twórca od razu w nim jest), a osoby dołączające
+  do projektu (`project.member_set`, `project.invitation_accepted`) dodaje do niego konsument outboxu
+  pakietu (kursor `conversations`). `#general` nie da się przemianować ani zarchiwizować (409).
+- **Wątek taska** otwiera konsument outboxu na `task.created` (kartę `task` w kanale zadań, a pod nią
+  conversation `kind='task'`), a `GET /tasks/{id}/conversation` robi to samo, jeśli jeszcze nie zdążył;
+  jeden wątek na task gwarantuje `UNIQUE (task_id)`. `process_config.conversations.task_channel`
+  wskazuje inny kanał niż `#general` (nieistniejący albo zarchiwizowany = `#general`). Backfill 00037
+  zakłada wątki otwartym taskom bez karty w kanale (bez wiadomości-korzenia), żeby nie zalać `#general`.
+- **Karty** mają klucz w rozmowie (`messages.card_key`): `task:<id>`, `job:<id>`, `artifact:<faza>:<typ>`,
+  `decision:<faza>:<wejście w fazę>`. Zapis karty z tą samą treścią nic nie zmienia (powtórzone
+  zdarzenie nie robi nic), inna treść to `message.edited`. Karta `decision` pokazuje regułę krótkiego
+  inboxu dla jednego taska (`process.Service.DecisionFor`); gdy task przestaje czekać, karta dostaje
+  `state: resolved`, a powrót do fazy po rollbacku to nowa karta. Karty `incident`/`release`/`pr` i kanał
+  `#incidents` zostają na później (plan PR-ów fazy 1 wymienia w konsumencie tylko `task`, `decision`,
+  `job`, `artifact`); `working_state` runnera nie ma karty.
+- **Promote** tworzy task przez `process.Service.Create` (te same reguły consentu i `origin`), a
+  powiązanie wątku robi w tej samej transakcji (nowe pole `process.CreateParams.InTx`). Wątkiem taska
+  zostaje wątek pod wiadomością albo wątek, w którym wiadomość jest odpowiedzią; wiadomość bez
+  odpowiedzi dostaje wątek razem z taskiem. Karta `task` trafia wtedy do środka tego wątku (a nie do
+  kanału, bo wątek wisi pod wiadomością człowieka). Opis taska cytuje wiadomość i do 5 pierwszych
+  odpowiedzi (bez LLM-owego streszczenia) i linkuje `gator://conversations/<id>?seq=<n>`. Wiadomość w
+  DM-ie poza projektem wymaga `projectId`. Rodzaje: `feature`, `bug`, `chore`, `incident`.
+  Wiadomość z **prywatnego kanału albo DM-a** nie przenosi rozmowy: task dostaje własny wątek pod kartą
+  w kanale zadań (jak każdy task), opis cytuje tylko wiadomość samego promującego (cudzych słów z
+  prywatnej rozmowy nie ma w tasku), a w prywatnej rozmowie pojawia się systemowa linijka z linkiem
+  do taska. Inaczej członkowie projektu dostawaliby 404 na wątek własnego taska, a uczestnik DM-a spoza
+  projektu mógłby w nim pisać.
+- **Załączniki** idą przez serwer (multipart, do 25 MB), bez presigned URL-i: dostęp sprawdza ta sama
+  `Access`, a klucz do bucketu nie opuszcza serwera. Magazyn: `GATOR_ATTACHMENTS_S3_*` (jak backupy)
+  albo `GATOR_ATTACHMENTS_DIR`; bez nich upload odpowiada 503. Plik należy do nikogo, dopóki uploader
+  nie wyśle wiadomości z jego id (`message_attachments.message_id` jest NULL do tej chwili). Obrazki
+  pokazują się inline, reszta jako pobranie, zawsze z `nosniff` i `sandbox`.
+- **Usunięcie wiadomości** zostawia jej miejsce (`seq`, wątek) i czyści treść w bazie; jej pliki nie są
+  już wydawane, a co godzinę sprzątacz usuwa je z magazynu razem z plikami niewysłanymi przez 24 h.
+  Jedna osoba może mieć najwyżej 100 MB niewysłanych plików. Edycja nie zmienia wzmianek. Karty nie są
+  edytowane ręcznie, a usuwa je tylko moderator.
+- **FTS (00038)** to indeks wyrażeniowy GIN na `to_tsvector('simple', body)` (bez usuniętych), a nie
+  kolumna `tsvector`: to samo wyszukiwanie bez wektora w każdym odczycie wiadomości. SQL zawęża
+  kandydatów (otwarte rozmowy czytelnych projektów i te, w których jestem), a każdy wynik i tak
+  przechodzi przez `Access`; gdy reguły odrzucą wiele kandydatów, wyszukiwanie czyta kolejne partie
+  (do 5), zamiast oddać niepełną stronę. Zapytanie w składni `websearch_to_tsquery`. `pg_trgm` służy
+  filtrowi `?q=` na liście kanałów projektu (`ILIKE` po indeksie trigramowym na całej kolumnie `name`);
+  krok down migracji zostawia rozszerzenie.
+- **Listy rozmów** są stronicowane (`limit` do 500, `offset`, nagłówek `X-Has-More`), a każdy wiersz
+  niesie fakty o rozmowie-korzeniu, więc reguły dostępu sprawdzają stronę bez zapytań na wiersz.
+- **Powiadomienia** to reguła w `internal/server/notify/messages.go` na `message.posted`: wzmianka
+  (także poza członkami rozmowy), DM, odpowiedź w wątku, w którym się pisało (autor korzenia i
+  odpowiadający), oraz wszystko przy `notify = all`. `notify = none` wycisza rozmowę razem ze
+  wzmiankami; nikt nie dostaje pusha o własnej wiadomości, a każdy odbiorca musi móc czytać rozmowę
+  (`Access.UserCanRead`). Karty nie wysyłają pushy, bo task ma już swoje powiadomienia.
+- **`context.go`** (pakiet rozmowy dla agenta) przechodzi do fazy 2, razem z pierwszym, kto go czyta;
+  w fazie 1 nie ma jeszcze konsumenta, a jego kształt zależy od `agent_turns`.
+- **Punkt 10** (regeneracja `GatorAPI` i ekrany) należy do repozytorium `gator-app` i fazy 6a;
+  `docs/openapi.yaml` opisuje już wszystko, czego te ekrany potrzebują.

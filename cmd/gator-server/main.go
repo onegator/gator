@@ -21,6 +21,7 @@ import (
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/backup"
 	"github.com/onegator/gator/internal/server/config"
+	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
 	"github.com/onegator/gator/internal/server/jobs"
 	"github.com/onegator/gator/internal/server/knowledge"
@@ -33,6 +34,7 @@ import (
 	"github.com/onegator/gator/internal/server/runners"
 	"github.com/onegator/gator/internal/server/secrets"
 	"github.com/onegator/gator/internal/server/store"
+	dbq "github.com/onegator/gator/internal/server/store/db"
 	"github.com/onegator/gator/internal/server/telemetry"
 	"github.com/onegator/gator/internal/version"
 )
@@ -134,7 +136,8 @@ func serve(ctx context.Context) error {
 	// A project's capabilities are those of its enabled plugins.
 	svc := process.NewService(db.Pool, process.DBTemplates{Pool: db.Pool, Defaults: catalog}, plugins.Capabilities{Pool: db.Pool})
 	hub := events.NewHub()
-	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log}
+	// Conversation events reach the people in the conversation (the "me" topic) as they go out.
+	relay := &events.Relay{Pool: db.Pool, Hub: hub, Log: log, Audience: conversations.NewRelayAudience(dbq.New(db.Pool))}
 	go relay.Run(ctx)
 	// The catalogue of things Gator does for a project by itself once a person switches them on.
 	autos := automations.New(db.Pool, svc, hub, log)
@@ -150,7 +153,7 @@ func serve(ctx context.Context) error {
 	} else if apns != nil {
 		sender = apns
 	}
-	go notify.New(db.Pool, svc, sender, hub, log, 0).Run(ctx)
+	notifier := notify.New(db.Pool, svc, sender, hub, log, 0)
 	// Finished work proposes what the product learned; a person approves it.
 	curator := product.NewCurator(db.Pool, hub, log, 0)
 	// Once a project has learned more than a prompt can carry, a curator proposes a shorter
@@ -200,12 +203,31 @@ func serve(ctx context.Context) error {
 		log.Info("autopilot on: entering a runner phase queues a job")
 	}
 
+	// People talk in a project's channels; the consumer keeps them in step with the project.
+	// Files people send are kept in a bucket or a directory, or not at all.
+	blobs, err := conversations.BlobStoreFromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if blobs == nil {
+		log.Warn("attachments not configured (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*)")
+	}
+	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs})
+	go chat.Consumer(hub, log, 0).Run(ctx)
+	if chat.Attachments != nil {
+		go chat.Attachments.RunSweeper(ctx, time.Hour, log)
+	}
+	// A mention, a DM or a reply in one's thread is pushed, to people who may read it.
+	go notifier.WithChat(chat.Access).Run(ctx)
+
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
 		Quality: scorecards, Automations: autos,
 		Tokens: auth.Tokens{Pool: db.Pool}, Authz: auth.Authorizer{Pool: db.Pool}, DevAuth: cfg.DevAuth,
 		RateLimitPerSecond: cfg.RateLimitPerSecond, RateLimitBurst: cfg.RateLimitBurst, TrustedProxies: cfg.TrustedProxies,
 		PublicURL: cfg.PublicURL,
+		// Channels, DMs and threads, with the same access rules for the API, the WebSocket and search.
+		Conversations: chat,
 	}
 	oc := auth.LoadOIDCConfig()
 	// A server people sign in to, or reach at a public address, is not a developer's laptop:

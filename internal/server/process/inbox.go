@@ -2,9 +2,11 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -149,6 +151,34 @@ func (s *Service) Inbox(ctx context.Context, f InboxFilter) ([]Decision, error) 
 			JobID: jobID[r.Task.ID.Bytes]})
 	}
 	return out, nil
+}
+
+// DecisionFor answers whether one task waits on a person now, and why, by the rule of the
+// short inbox: what a card in the task's thread shows as the decision waiting there. A closed
+// task waits on nobody.
+func (s *Service) DecisionFor(ctx context.Context, taskID pgtype.UUID) (Decision, bool, error) {
+	d, err := s.Detail(ctx, taskID)
+	if err != nil {
+		return Decision{}, false, err
+	}
+	if d.Task.ClosedAt.Valid {
+		return Decision{}, false, nil
+	}
+	var status string
+	var jobID pgtype.UUID
+	unassignable := false
+	job, err := db.New(s.pool).GetCurrentPhaseJob(ctx, taskID)
+	switch {
+	case err == nil:
+		status, jobID, unassignable = job.Status, job.JobID, job.Unassignable
+	case !errors.Is(err, pgx.ErrNoRows):
+		return Decision{}, false, err
+	}
+	reason, ok := decisionReason(d.Task, d.Gate, d.Phase, status, unassignable, false, false)
+	if !ok {
+		return Decision{}, false, nil
+	}
+	return Decision{Task: d.Task, Gate: d.Gate, Phase: d.Phase, Reason: reason, WaitingSince: d.Task.PhaseEnteredAt.Time, JobID: jobID}, true, nil
 }
 
 // stuck says whether a reason means the task cannot move on its own. A campaign hides its

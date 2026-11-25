@@ -25,10 +25,23 @@ type Event struct {
 	ProjectID string          `json:"projectId,omitempty"`
 	Payload   json.RawMessage `json:"payload"`
 	CreatedAt time.Time       `json:"createdAt"`
+	// Audience are the people the event concerns, by user id: it also reaches each one's
+	// "user:<id>" topic. The relay asks an AudienceResolver; it is not sent to clients.
+	Audience []string `json:"-"`
+	// Personal events reach their audience's topics alone: nobody following a conversation, a
+	// project or the firehose hears them.
+	Personal bool `json:"-"`
+}
+
+// AudienceResolver answers whom an outbox event concerns, as it is published.
+type AudienceResolver interface {
+	Audience(ctx context.Context, e Event) (users []string, personal bool, err error)
 }
 
 // Hub fans events out to topic subscribers. Topics: "inbox", "task:<id>", "job:<id>",
-// "project:<id>", "runners", "runner:<id>", "*".
+// "project:<id>", "conversation:<id>", "user:<id>", "runners", "runner:<id>", "*".
+// "user:<id>" carries the conversation events whose audience names that person; the WebSocket
+// offers it to that person alone, as "me".
 type Hub struct {
 	mu   sync.RWMutex
 	subs map[string]map[chan Event]struct{}
@@ -84,6 +97,23 @@ func (h *Hub) Publish(e Event) {
 	if e.Aggregate == "runner" {
 		topics = append(topics, "runners", "runner:"+e.AggregateID)
 	}
+	if e.Aggregate == "conversation" {
+		topics = append(topics, "conversation:"+e.AggregateID)
+	}
+	if e.Personal {
+		topics = nil
+	}
+	for _, id := range e.Audience {
+		topics = append(topics, "user:"+id)
+	}
+	h.deliver(e, topics)
+}
+
+// PublishTo delivers e to these topics alone, for what never goes through the outbox (someone
+// typing): it wakes no outbox consumer, which follow "*".
+func (h *Hub) PublishTo(e Event, topics ...string) { h.deliver(e, topics) }
+
+func (h *Hub) deliver(e Event, topics []string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	seen := map[chan Event]bool{}
@@ -107,6 +137,8 @@ type Relay struct {
 	Hub      *Hub
 	Interval time.Duration
 	Log      *slog.Logger
+	// Audience, when set, names the people each event concerns (see Event.Audience).
+	Audience AudienceResolver
 }
 
 // Run blocks until ctx is done.
@@ -149,6 +181,12 @@ func (r *Relay) Drain(ctx context.Context) error {
 				v, _ := row.ProjectID.Value()
 				e.ProjectID, _ = v.(string)
 			}
+			if r.Audience != nil {
+				var err error
+				if e.Audience, e.Personal, err = r.Audience.Audience(ctx, e); err != nil {
+					return err // try again on the next tick rather than tell the wrong people
+				}
+			}
 			r.Hub.Publish(e)
 			if err := q.MarkEventPublished(ctx, row.ID); err != nil {
 				return err
@@ -162,21 +200,42 @@ func (r *Relay) Drain(ctx context.Context) error {
 // update repeats a batch, which deliver must tolerate. It stops at the first database error
 // and tries again on the caller's next wake.
 func DrainCursor(ctx context.Context, pool *pgxpool.Pool, cursor string, types []string, deliver func(db.EventsAfterRow)) {
+	_ = DrainCursorUntil(ctx, pool, cursor, types, func(r db.EventsAfterRow) error {
+		deliver(r)
+		return nil
+	})
+}
+
+// DrainCursorUntil is DrainCursor for a consumer that can fail: it stops at the first event
+// deliver fails, leaves the cursor just before it, and answers the error, so the event comes
+// again on the next drain instead of being lost.
+func DrainCursorUntil(ctx context.Context, pool *pgxpool.Pool, cursor string, types []string, deliver func(db.EventsAfterRow) error) error {
 	q := db.New(pool)
 	for ctx.Err() == nil {
 		after, err := q.GetEventCursor(ctx, cursor)
 		if err != nil {
-			return
+			return err
 		}
 		rows, err := q.EventsAfter(ctx, db.EventsAfterParams{After: after, Types: types, MaxRows: 100})
 		if err != nil || len(rows) == 0 {
-			return
+			return err
 		}
+		done := after
+		var failed error
 		for _, r := range rows {
-			deliver(r)
+			if failed = deliver(r); failed != nil {
+				break
+			}
+			done = r.ID
 		}
-		if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursor, EventID: rows[len(rows)-1].ID}); err != nil {
-			return
+		if done > after {
+			if err := q.SetEventCursor(ctx, db.SetEventCursorParams{Name: cursor, EventID: done}); err != nil {
+				return err
+			}
+		}
+		if failed != nil {
+			return failed
 		}
 	}
+	return ctx.Err()
 }

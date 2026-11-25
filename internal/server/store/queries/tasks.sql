@@ -187,3 +187,13 @@ WHERE id = $1 RETURNING *;
 
 -- name: ListActiveJobsForTask :many
 SELECT * FROM jobs WHERE task_id = $1 AND status IN ('queued', 'leased', 'running', 'stalled') ORDER BY created_at;
+
+-- name: GetCurrentPhaseJob :one
+-- The newest job of a task's current phase entry, as ListCurrentPhaseJobs answers for all, and
+-- whether no runner can take it (as ListUnassignableTaskIDs answers for all).
+SELECT j.id AS job_id, j.status, (j.status = 'queued' AND j.unassignable_since IS NOT NULL)::bool AS unassignable
+FROM jobs j
+JOIN tasks t ON t.id = j.task_id
+WHERE j.task_id = $1 AND j.phase = t.phase AND j.created_at >= t.phase_entered_at
+ORDER BY j.created_at DESC
+LIMIT 1;

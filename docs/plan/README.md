@@ -66,11 +66,14 @@ przychodzi jako karta w wątku taska i działa tym samym endpointem co dziś `/t
 
 | Faza | Migracja |
 |---|---|
-| 1 | `00035_conversations.sql`, `00036_message_search.sql` |
-| 2 | `00037_agents.sql`, `00038_agent_turns.sql` |
-| 3 | `00039_brain.sql`, `00040_brain_backfill.sql`, `00041_brain_embeddings.sql` (opcjonalna, pgvector) |
-| 4 | `00042_marketplace.sql`, `00043_mcp_servers.sql` |
-| 5 | `00044_external_agents.sql`, `00045_messaging_bridges.sql` |
+| 1 | `00035_conversations.sql`, `00036_general_channels.sql`, `00037_task_conversations.sql`, `00038_message_search.sql` |
+| 2 | `00039_agents.sql`, `00040_agent_turns.sql` |
+| 3 | `00041_brain.sql`, `00042_brain_backfill.sql`, `00043_brain_embeddings.sql` (opcjonalna, pgvector) |
+| 4 | `00044_marketplace.sql`, `00045_mcp_servers.sql` |
+| 5 | `00046_external_agents.sql`, `00047_messaging_bridges.sql` |
+
+Faza 1 dostała dwie migracje więcej niż w pierwszej wersji planu: backfill `#general` i backfill
+wątków otwartych tasków to osobne kroki (osobne PR-y), więc numery kolejnych faz przesunęły się o 2.
 
 Każda ma krok down, a migracje uruchamia się tylko na żądanie (`gator-server migrate`), jak dotąd.
 

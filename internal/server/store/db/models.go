@@ -112,6 +112,35 @@ type ComponentHint struct {
 	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }
 
+type Conversation struct {
+	ID              pgtype.UUID        `json:"id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	Kind            string             `json:"kind"`
+	Name            *string            `json:"name"`
+	Topic           string             `json:"topic"`
+	Visibility      string             `json:"visibility"`
+	ParentMessageID pgtype.UUID        `json:"parent_message_id"`
+	TaskID          pgtype.UUID        `json:"task_id"`
+	ComponentKey    *string            `json:"component_key"`
+	DmKey           *string            `json:"dm_key"`
+	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
+	CreatedByKind   string             `json:"created_by_kind"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	LastMessageAt   pgtype.Timestamptz `json:"last_message_at"`
+	LastSeq         int64              `json:"last_seq"`
+}
+
+type ConversationMember struct {
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	MemberKind     string             `json:"member_kind"`
+	MemberID       pgtype.UUID        `json:"member_id"`
+	Role           string             `json:"role"`
+	Notify         string             `json:"notify"`
+	LastReadSeq    int64              `json:"last_read_seq"`
+	JoinedAt       pgtype.Timestamptz `json:"joined_at"`
+}
+
 type Device struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`
@@ -256,6 +285,52 @@ type Membership struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	UserID    pgtype.UUID `json:"user_id"`
 	Role      string      `json:"role"`
+}
+
+type Message struct {
+	ID             pgtype.UUID        `json:"id"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	Seq            int64              `json:"seq"`
+	AuthorKind     string             `json:"author_kind"`
+	AuthorID       pgtype.UUID        `json:"author_id"`
+	Kind           string             `json:"kind"`
+	Body           string             `json:"body"`
+	CardType       *string            `json:"card_type"`
+	Card           []byte             `json:"card"`
+	CardKey        *string            `json:"card_key"`
+	ReplyCount     int32              `json:"reply_count"`
+	Status         string             `json:"status"`
+	Origin         []byte             `json:"origin"`
+	ClientID       *string            `json:"client_id"`
+	EditedAt       pgtype.Timestamptz `json:"edited_at"`
+	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type MessageAttachment struct {
+	ID             pgtype.UUID        `json:"id"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	MessageID      pgtype.UUID        `json:"message_id"`
+	UploadedBy     pgtype.UUID        `json:"uploaded_by"`
+	Name           string             `json:"name"`
+	ContentType    string             `json:"content_type"`
+	SizeBytes      int64              `json:"size_bytes"`
+	StorageKey     string             `json:"storage_key"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type MessageMention struct {
+	MessageID  pgtype.UUID `json:"message_id"`
+	MemberKind string      `json:"member_kind"`
+	MemberID   pgtype.UUID `json:"member_id"`
+}
+
+type MessageReaction struct {
+	MessageID  pgtype.UUID        `json:"message_id"`
+	MemberKind string             `json:"member_kind"`
+	MemberID   pgtype.UUID        `json:"member_id"`
+	Emoji      string             `json:"emoji"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type PhaseTransition struct {

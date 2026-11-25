@@ -1,0 +1,127 @@
+package conversations
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/onegator/gator/internal/server/events"
+	"github.com/onegator/gator/internal/server/store/db"
+)
+
+// Events written to the outbox. All of them have aggregate "conversation" and the conversation's
+// id, so they reach the topic conversation:<id>; as the relay publishes one, Audience names the
+// people it concerns (the conversation's members, and anyone the payload adds under "also"),
+// which is what the "me" topic follows. Message bodies are never in an event: a client reads the
+// message by its seq, through the same access rules as any other read.
+const (
+	EventConversationCreated = "conversation.created"
+	EventConversationUpdated = "conversation.updated"
+	EventMemberChanged       = "conversation.member_changed"
+	EventConversationRead    = "conversation.read"
+	EventMessagePosted       = "message.posted"
+	EventMessageEdited       = "message.edited"
+	EventMessageDeleted      = "message.deleted"
+	// EventMessageReplied is a reply under a message: its reply count changed. It is written on
+	// the conversation the root message lives in, so those reading it see the count move.
+	EventMessageReplied  = "message.replied"
+	EventReactionChanged = "reaction.changed"
+	// EventTyping is never written: it goes straight to the hub and is gone.
+	EventTyping = "conversation.typing"
+)
+
+// Aggregate is what the outbox calls a conversation.
+const Aggregate = "conversation"
+
+// emit records an event about conv in the outbox, in the caller's transaction, for the
+// conversation's members and whoever else is named (a person just removed, or mentioned).
+func emit(ctx context.Context, q *db.Queries, typ string, conv pgtype.UUID, payload map[string]any, also ...pgtype.UUID) error {
+	if len(also) > 0 {
+		payload["also"] = audience(also)
+	}
+	return insert(ctx, q, typ, conv, payload)
+}
+
+// emitPersonal records an event about conv for these people alone (a read marker): it reaches
+// their own topics and nobody following the conversation.
+func emitPersonal(ctx context.Context, q *db.Queries, typ string, conv pgtype.UUID, payload map[string]any, people ...pgtype.UUID) error {
+	payload["also"] = audience(people)
+	payload["personal"] = true
+	return insert(ctx, q, typ, conv, payload)
+}
+
+func insert(ctx context.Context, q *db.Queries, typ string, conv pgtype.UUID, payload map[string]any) error {
+	payload["conversationId"] = uuidString(conv)
+	b, _ := json.Marshal(payload)
+	_, err := q.InsertEvent(ctx, db.InsertEventParams{Type: typ, Aggregate: Aggregate, AggregateID: conv, Payload: b})
+	return err
+}
+
+// audience lists people without repeating anyone.
+func audience(lists ...[]pgtype.UUID) []string {
+	seen := map[[16]byte]bool{}
+	out := []string{}
+	for _, l := range lists {
+		for _, id := range l {
+			if id.Valid && !seen[id.Bytes] {
+				seen[id.Bytes] = true
+				out = append(out, uuidString(id))
+			}
+		}
+	}
+	return out
+}
+
+// RelayAudience tells the relay whom a conversation event concerns: the people in the
+// conversation as it is published, and whoever the event names. It keeps the member list out of
+// every stored event.
+type RelayAudience struct {
+	members memberLister
+}
+
+// memberLister answers the people in a conversation. *db.Queries is one.
+type memberLister interface {
+	ListConversationUserIDs(ctx context.Context, conversationID pgtype.UUID) ([]pgtype.UUID, error)
+}
+
+// NewRelayAudience builds the resolver.
+func NewRelayAudience(members memberLister) RelayAudience { return RelayAudience{members: members} }
+
+// Audience implements events.AudienceResolver.
+func (r RelayAudience) Audience(ctx context.Context, e events.Event) ([]string, bool, error) {
+	if e.Aggregate != Aggregate {
+		return nil, false, nil
+	}
+	var p struct {
+		Also     []string `json:"also"`
+		Personal bool     `json:"personal"`
+	}
+	_ = json.Unmarshal(e.Payload, &p)
+	if p.Personal {
+		return p.Also, true, nil
+	}
+	var conv pgtype.UUID
+	if err := conv.Scan(e.AggregateID); err != nil {
+		return p.Also, false, nil
+	}
+	members, err := r.members.ListConversationUserIDs(ctx, conv)
+	if err != nil {
+		return nil, false, err
+	}
+	out := audience(members)
+	seen := map[string]bool{}
+	for _, id := range out {
+		seen[id] = true
+	}
+	for _, id := range p.Also {
+		if !seen[id] {
+			out = append(out, id)
+		}
+	}
+	return out, false, nil
+}
+
+func memberPayload(m Member) map[string]any {
+	return map[string]any{"kind": m.Kind, "id": uuidString(m.ID)}
+}

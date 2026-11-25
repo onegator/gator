@@ -15,7 +15,7 @@ rejestr kurowany przez nas, patrz założenia w [README](README.md)).
 | `agent` | `agent.yaml`, `instructions.md`, opcjonalnie `skills/`, wymagane integracje, automations | wiersz `agents` z `source.kind='marketplace'` |
 | `skill` | folder w formacie Agent Skills: `SKILL.md` (frontmatter `name`, `description`, opcjonalnie `example-prompt`), `scripts/`, `references/`, `assets/icon.png` | wiersz `skills`, przypinany do agentów |
 | `integration` | natywny plugin (binarka per platforma + manifest) **albo** definicja zdalnego serwera MCP | `plugins` / `mcp_servers` |
-| `process` | szablon kindu (`*.yaml` jak `process/defaults`) i role | wpis w `process_config` projektu lub workspace'u |
+| `process` | szablon kindu (`*.yaml` jak `internal/server/process/defaults`) i role | wpis w `process_config` projektu lub workspace'u |
 | `knowledge` | dzisiejszy knowledge pack | `knowledge_packs` (bez zmian) |
 
 ## Format rejestru
@@ -97,7 +97,7 @@ Runner **nigdy** nie dostaje tokenu do zewnętrznego MCP. `--mcp-config` joba ws
 - działa w `limits.Breaker`, jak pluginy.
 
 ```sql
--- 00043_mcp_servers.sql
+-- 00045_mcp_servers.sql
 CREATE TABLE mcp_servers (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id  uuid REFERENCES projects(id) ON DELETE CASCADE,   -- NULL = workspace
@@ -126,7 +126,7 @@ nasza implementacja):
 - skrypty skilla nie są uruchamiane przy instalacji, tylko przez agenta w trakcie joba, w jego
   uprawnieniach (`tier`).
 
-## Dane (`00042_marketplace.sql`)
+## Dane (`00044_marketplace.sql`)
 
 ```sql
 CREATE TABLE marketplace_registries (

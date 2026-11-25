@@ -120,6 +120,9 @@ type CreateParams struct {
 	SourceTaskID pgtype.UUID
 	// Automation, when set, makes this the work of an automation a person switched on.
 	Automation *Automated
+	// InTx, when set, runs inside the transaction that creates the task, so that what the caller
+	// links to the new task (the conversation it came from) commits or rolls back with it.
+	InTx func(q *db.Queries, task db.Task) error
 }
 
 // Automated says which automation creates a task. Switching on one that puts agents to work is
@@ -183,6 +186,11 @@ func (s *Service) Create(ctx context.Context, p CreateParams, actor Actor) (db.T
 				return err
 			}
 			payload["automation"] = a.Key
+		}
+		if p.InTx != nil {
+			if err := p.InTx(q, task); err != nil {
+				return err
+			}
 		}
 		return s.emit(ctx, q, "task.created", task.ID, payload)
 	})

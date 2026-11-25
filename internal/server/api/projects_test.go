@@ -8,8 +8,6 @@ import (
 	"github.com/onegator/gator/internal/server/api/gen"
 )
 
-func ptr[T any](v T) *T { return &v }
-
 func TestAnyoneSignedInRunsTheirOwnProject(t *testing.T) {
 	h := newHarness(t)
 	admin := h.token
