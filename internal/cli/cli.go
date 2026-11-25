@@ -55,6 +55,12 @@ Tasks
   gator task run ID [--allow-agents] [--cloud] [--backend NAME] [--instruction TEXT] [-f]
   gator task logs ID [-f] [--job JOB_ID]
 
+Review and approvals
+  gator job checkpoints JOB_ID        what each turn of a job changed
+  gator job diff JOB_ID [--from N] [--to N] [--ignore-whitespace]
+  gator approvals [--project SLUG]    what agents wait for you to decide
+  gator decide ID allow|allow-session|deny|stop|answer [--reason TEXT]
+
 Every command takes --json for output a script can read, and --server URL.
 GATOR_SERVER and GATOR_TOKEN override the stored server and token.
 Exit codes: 0 ok, 1 your request, 2 network, 3 sign-in, 4 server, 5 the work moved on.
@@ -147,7 +153,7 @@ func dispatch(ctx context.Context, env *Env, args []string) error {
 		fmt.Fprintf(env.Stdout, "gator %s (%s)\n", version.Version, version.Commit)
 		return nil
 	}
-	if cmd == "task" || cmd == "project" {
+	if cmd == "task" || cmd == "project" || cmd == "job" {
 		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 			return coded(exitUserErr, "%s needs a subcommand; run gator help", cmd)
 		}
@@ -181,6 +187,11 @@ func init() {
 		"task logs":      cmdTaskLogs,
 		"project list":   cmdProjects,
 		"task list":      cmdTasks,
+		// What each turn of a job changed, and what agents wait for a person on.
+		"job checkpoints": cmdJobCheckpoints,
+		"job diff":        cmdJobDiff,
+		"approvals":       cmdApprovals,
+		"decide":          cmdDecide,
 	}
 }
 

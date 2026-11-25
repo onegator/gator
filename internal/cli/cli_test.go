@@ -499,3 +499,46 @@ func TestFlagsAfterArguments(t *testing.T) {
 		t.Errorf("kind=%q json=%v pos=%v", *kind, g.json, pos)
 	}
 }
+
+// What each turn changed, and its diff, from the terminal.
+func TestJobCheckpointsAndDiff(t *testing.T) {
+	f := newFake(t)
+	e, out, errOut := f.env(t)
+	f.signIn(t, e)
+	if code := run(t, e, "job", "checkpoints", jobID); code != 0 {
+		t.Fatalf("exited %d: %s", code, errOut)
+	}
+	if !strings.Contains(out.String(), "TURN") || !strings.Contains(out.String(), "+42 −7") {
+		t.Fatalf("checkpoints:\n%s", out)
+	}
+	out.Reset()
+	if code := run(t, e, "job", "diff", jobID, "--from", "2", "--ignore-whitespace"); code != 0 {
+		t.Fatalf("exited %d: %s", code, errOut)
+	}
+	if out.String() != "diff --git a/pay.go b/pay.go\n+from=2 ws=true\n" {
+		t.Fatalf("diff:\n%s", out)
+	}
+}
+
+// What agents wait for, and a decision with its reason.
+func TestApprovalsAndDecide(t *testing.T) {
+	f := newFake(t)
+	e, out, errOut := f.env(t)
+	f.signIn(t, e)
+	if code := run(t, e, "approvals"); code != 0 {
+		t.Fatalf("exited %d: %s", code, errOut)
+	}
+	if !strings.Contains(out.String(), "curl https://example.com") || !strings.Contains(out.String(), "tool_approval") {
+		t.Fatalf("approvals:\n%s", out)
+	}
+	out.Reset()
+	if code := run(t, e, "decide", "d1d1d1d1-0000-4000-8000-000000000001", "deny", "--reason", "no network"); code != 0 {
+		t.Fatalf("exited %d: %s", code, errOut)
+	}
+	if out.String() != "d1d1d1d1-0000-4000-8000-000000000001: denied\n" {
+		t.Fatalf("decide: %q", out)
+	}
+	if code := run(t, e, "decide", "x", "maybe"); code != exitUserErr {
+		t.Fatalf("a decision that is none exited %d", code)
+	}
+}
