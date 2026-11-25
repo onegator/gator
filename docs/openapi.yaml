@@ -3118,11 +3118,26 @@ components:
         state: { type: string }
         summary: { type: string }
         actions: { type: array, items: { type: string } }
+        day: { type: string, description: "brain_proposal: the day (YYYY-MM-DD) whose proposals the card lists" }
+        proposals: { type: array, items: { $ref: "#/components/schemas/BrainCardProposal" }, description: "brain_proposal: what the Brain was proposed from the task that day" }
+    BrainCardProposal:
+      type: object
+      required: [id, kind, scope, title, status]
+      description: "one proposal of a brain_proposal card; approve and reject call /brain/{id}/approve and /brain/{id}/reject"
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/BrainKind" }
+        scope: { $ref: "#/components/schemas/BrainScope" }
+        component: { type: string }
+        title: { type: string }
+        status: { $ref: "#/components/schemas/BrainStatus" }
+        replaces: { type: array, items: { type: string, format: uuid }, description: "approved decisions it contradicts: approving it supersedes them (\"does this replace X?\")" }
+        actions: { type: array, items: { type: string, enum: [approve, reject] } }
     CardRef:
       type: object
       required: [kind, id]
       properties:
-        kind: { type: string, description: "task | job | artifact | turn | task_proposal | pr | incident | release | brain_entry" }
+        kind: { type: string, description: "task | job | artifact | turn | task_proposal | pr | incident | release | brain_entry | brain_proposal" }
         id: { type: string }
         taskId: { type: string, format: uuid }
     MessagePage:

@@ -116,6 +116,15 @@ type BrainCitation struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type BrainCuration struct {
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	UptoSeq        int64              `json:"upto_seq"`
+	JobID          pgtype.UUID        `json:"job_id"`
+	PendingUpto    *int64             `json:"pending_upto"`
+	ClaimedAt      pgtype.Timestamptz `json:"claimed_at"`
+	CuratedAt      pgtype.Timestamptz `json:"curated_at"`
+}
+
 type BrainEntry struct {
 	ID                   pgtype.UUID        `json:"id"`
 	Scope                string             `json:"scope"`

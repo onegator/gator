@@ -51,6 +51,8 @@ type Module struct {
 	Consent *Consent
 	// Directory keeps the agents themselves.
 	Directory *Directory
+	// Curations queues the curator's reading of conversations (curator.Jobs).
+	Curations CurationQueue
 
 	pool *pgxpool.Pool
 }
@@ -84,6 +86,7 @@ func New(pool *pgxpool.Pool, deps Deps) *Module {
 		Summaries:  summaries,
 		Tracker:    NewTurnTracker(q, voice),
 		Talk:       NewTalk(q, chat.Threads, voice, chat.Packer, chat.Proposals, chat.Access),
+		Curations:  CurationQueue{jobs: deps.Jobs},
 		pool:       pool,
 	}
 }

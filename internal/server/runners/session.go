@@ -568,7 +568,13 @@ func (s *session) handContext(ctx context.Context, q *db.Queries, j db.Job, brie
 		}
 		record(d, "conversation")
 	}
-	if docs, err := s.m.process.ContextFor(ctx, s.contextRequest(ctx, q, j)); err == nil {
+	// A summary reads the transcript in its instruction and nothing else; it is handed no package.
+	var docs []process.ContextDoc
+	var err error
+	if j.Kind != KindSummary {
+		docs, err = s.m.process.ContextFor(ctx, s.contextRequest(ctx, q, j))
+	}
+	if err == nil && len(docs) > 0 {
 		var packed []pgtype.UUID
 		for _, d := range docs {
 			// A document that did not fit is kept in the record but not in the prompt:

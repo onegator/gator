@@ -191,3 +191,55 @@ INSERT INTO brain_citations (job_id, entry_id, how)
 SELECT sqlc.arg(job_id)::uuid, e, 'cited' FROM unnest(sqlc.arg(entry_ids)::uuid[]) e
 WHERE EXISTS (SELECT 1 FROM brain_citations c WHERE c.job_id = sqlc.arg(job_id)::uuid AND c.entry_id = e AND c.how IN ('packed', 'searched'))
 ON CONFLICT DO NOTHING;
+
+-- name: ConversationsDueForCuration :many
+-- Task threads that went quiet with enough said since their last curation, and no curation being
+-- written (or one that has been for an hour, which is lost).
+SELECT c.id, c.task_id, c.last_seq FROM conversations c
+LEFT JOIN brain_curations b ON b.conversation_id = c.id
+WHERE c.task_id IS NOT NULL AND c.archived_at IS NULL
+  AND c.last_message_at < sqlc.arg(quiet_before)::timestamptz
+  AND c.last_seq > coalesce(b.upto_seq, 0)
+  AND (b.job_id IS NULL OR b.claimed_at < now() - interval '1 hour')
+  AND (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id AND m.seq > coalesce(b.upto_seq, 0)
+       AND m.kind = 'text' AND m.author_kind IN ('user', 'agent') AND m.deleted_at IS NULL) >= sqlc.arg(min_messages)::bigint
+ORDER BY c.last_message_at
+LIMIT 50;
+
+-- name: GetCuration :one
+SELECT * FROM brain_curations WHERE conversation_id = $1;
+
+-- name: ClaimCuration :one
+-- Takes a conversation for one curation up to a seq, unless one is being written.
+INSERT INTO brain_curations (conversation_id, pending_upto, claimed_at) VALUES ($1, sqlc.arg(upto)::bigint, now())
+ON CONFLICT (conversation_id) DO UPDATE SET pending_upto = EXCLUDED.pending_upto, claimed_at = now(), job_id = NULL
+WHERE brain_curations.job_id IS NULL OR brain_curations.claimed_at < now() - interval '1 hour'
+RETURNING *;
+
+-- name: SetCurationJob :exec
+UPDATE brain_curations SET job_id = $2 WHERE conversation_id = $1;
+
+-- name: CurationByJob :one
+SELECT * FROM brain_curations WHERE job_id = $1;
+
+-- name: FinishCuration :exec
+UPDATE brain_curations SET upto_seq = greatest(upto_seq, coalesce(pending_upto, upto_seq)), pending_upto = NULL,
+    job_id = NULL, curated_at = now()
+WHERE conversation_id = $1;
+
+-- name: ReleaseCuration :exec
+UPDATE brain_curations SET job_id = NULL, pending_upto = NULL WHERE conversation_id = $1;
+
+-- name: CountOpenProposalsFrom :one
+-- Proposals from one conversation still waiting: a thread does not fill the inbox.
+SELECT count(*) FROM brain_entries WHERE source_conversation_id = $1 AND status = 'proposed';
+
+-- name: MessageAtSeq :one
+SELECT * FROM messages WHERE conversation_id = $1 AND seq = $2;
+
+-- name: TaskBrainOfDay :many
+-- What the Brain was proposed from one task on one day, for the day's card in its thread.
+SELECT * FROM brain_entries
+WHERE source_task_id = $1 AND scope IN ('project', 'component') AND NOT source_private
+  AND created_at >= sqlc.arg(day)::timestamptz AND created_at < sqlc.arg(day)::timestamptz + interval '1 day'
+ORDER BY created_at, id;

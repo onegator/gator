@@ -24,6 +24,79 @@ func (q *Queries) ArchiveBrainEntries(ctx context.Context, ids []pgtype.UUID) (i
 	return result.RowsAffected(), nil
 }
 
+const claimCuration = `-- name: ClaimCuration :one
+INSERT INTO brain_curations (conversation_id, pending_upto, claimed_at) VALUES ($1, $2::bigint, now())
+ON CONFLICT (conversation_id) DO UPDATE SET pending_upto = EXCLUDED.pending_upto, claimed_at = now(), job_id = NULL
+WHERE brain_curations.job_id IS NULL OR brain_curations.claimed_at < now() - interval '1 hour'
+RETURNING conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at
+`
+
+type ClaimCurationParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	Upto           int64       `json:"upto"`
+}
+
+// Takes a conversation for one curation up to a seq, unless one is being written.
+func (q *Queries) ClaimCuration(ctx context.Context, arg ClaimCurationParams) (BrainCuration, error) {
+	row := q.db.QueryRow(ctx, claimCuration, arg.ConversationID, arg.Upto)
+	var i BrainCuration
+	err := row.Scan(
+		&i.ConversationID,
+		&i.UptoSeq,
+		&i.JobID,
+		&i.PendingUpto,
+		&i.ClaimedAt,
+		&i.CuratedAt,
+	)
+	return i, err
+}
+
+const conversationsDueForCuration = `-- name: ConversationsDueForCuration :many
+SELECT c.id, c.task_id, c.last_seq FROM conversations c
+LEFT JOIN brain_curations b ON b.conversation_id = c.id
+WHERE c.task_id IS NOT NULL AND c.archived_at IS NULL
+  AND c.last_message_at < $1::timestamptz
+  AND c.last_seq > coalesce(b.upto_seq, 0)
+  AND (b.job_id IS NULL OR b.claimed_at < now() - interval '1 hour')
+  AND (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id AND m.seq > coalesce(b.upto_seq, 0)
+       AND m.kind = 'text' AND m.author_kind IN ('user', 'agent') AND m.deleted_at IS NULL) >= $2::bigint
+ORDER BY c.last_message_at
+LIMIT 50
+`
+
+type ConversationsDueForCurationParams struct {
+	QuietBefore pgtype.Timestamptz `json:"quiet_before"`
+	MinMessages int64              `json:"min_messages"`
+}
+
+type ConversationsDueForCurationRow struct {
+	ID      pgtype.UUID `json:"id"`
+	TaskID  pgtype.UUID `json:"task_id"`
+	LastSeq int64       `json:"last_seq"`
+}
+
+// Task threads that went quiet with enough said since their last curation, and no curation being
+// written (or one that has been for an hour, which is lost).
+func (q *Queries) ConversationsDueForCuration(ctx context.Context, arg ConversationsDueForCurationParams) ([]ConversationsDueForCurationRow, error) {
+	rows, err := q.db.Query(ctx, conversationsDueForCuration, arg.QuietBefore, arg.MinMessages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConversationsDueForCurationRow
+	for rows.Next() {
+		var i ConversationsDueForCurationRow
+		if err := rows.Scan(&i.ID, &i.TaskID, &i.LastSeq); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countBrainFromSource = `-- name: CountBrainFromSource :one
 SELECT count(*) FROM brain_entries
 WHERE source->>'kind' = $1::text AND source->>'id' = $2::text
@@ -61,6 +134,36 @@ func (q *Queries) CountBrainProposalsForTask(ctx context.Context, arg CountBrain
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countOpenProposalsFrom = `-- name: CountOpenProposalsFrom :one
+SELECT count(*) FROM brain_entries WHERE source_conversation_id = $1 AND status = 'proposed'
+`
+
+// Proposals from one conversation still waiting: a thread does not fill the inbox.
+func (q *Queries) CountOpenProposalsFrom(ctx context.Context, sourceConversationID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenProposalsFrom, sourceConversationID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const curationByJob = `-- name: CurationByJob :one
+SELECT conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at FROM brain_curations WHERE job_id = $1
+`
+
+func (q *Queries) CurationByJob(ctx context.Context, jobID pgtype.UUID) (BrainCuration, error) {
+	row := q.db.QueryRow(ctx, curationByJob, jobID)
+	var i BrainCuration
+	err := row.Scan(
+		&i.ConversationID,
+		&i.UptoSeq,
+		&i.JobID,
+		&i.PendingUpto,
+		&i.ClaimedAt,
+		&i.CuratedAt,
+	)
+	return i, err
 }
 
 const deleteBrainEntry = `-- name: DeleteBrainEntry :execrows
@@ -102,6 +205,17 @@ func (q *Queries) DeleteUserBrain(ctx context.Context, userID pgtype.UUID) (int6
 	return result.RowsAffected(), nil
 }
 
+const finishCuration = `-- name: FinishCuration :exec
+UPDATE brain_curations SET upto_seq = greatest(upto_seq, coalesce(pending_upto, upto_seq)), pending_upto = NULL,
+    job_id = NULL, curated_at = now()
+WHERE conversation_id = $1
+`
+
+func (q *Queries) FinishCuration(ctx context.Context, conversationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, finishCuration, conversationID)
+	return err
+}
+
 const getBrainEntry = `-- name: GetBrainEntry :one
 SELECT id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries WHERE id = $1
 `
@@ -141,6 +255,24 @@ func (q *Queries) GetBrainEntry(ctx context.Context, id pgtype.UUID) (BrainEntry
 		&i.ApprovedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCuration = `-- name: GetCuration :one
+SELECT conversation_id, upto_seq, job_id, pending_upto, claimed_at, curated_at FROM brain_curations WHERE conversation_id = $1
+`
+
+func (q *Queries) GetCuration(ctx context.Context, conversationID pgtype.UUID) (BrainCuration, error) {
+	row := q.db.QueryRow(ctx, getCuration, conversationID)
+	var i BrainCuration
+	err := row.Scan(
+		&i.ConversationID,
+		&i.UptoSeq,
+		&i.JobID,
+		&i.PendingUpto,
+		&i.ClaimedAt,
+		&i.CuratedAt,
 	)
 	return i, err
 }
@@ -1036,6 +1168,40 @@ func (q *Queries) LiveEntriesOfKind(ctx context.Context, arg LiveEntriesOfKindPa
 	return items, nil
 }
 
+const messageAtSeq = `-- name: MessageAtSeq :one
+SELECT id, conversation_id, seq, author_kind, author_id, kind, body, card_type, card, card_key, reply_count, status, origin, client_id, edited_at, deleted_at, created_at FROM messages WHERE conversation_id = $1 AND seq = $2
+`
+
+type MessageAtSeqParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	Seq            int64       `json:"seq"`
+}
+
+func (q *Queries) MessageAtSeq(ctx context.Context, arg MessageAtSeqParams) (Message, error) {
+	row := q.db.QueryRow(ctx, messageAtSeq, arg.ConversationID, arg.Seq)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Seq,
+		&i.AuthorKind,
+		&i.AuthorID,
+		&i.Kind,
+		&i.Body,
+		&i.CardType,
+		&i.Card,
+		&i.CardKey,
+		&i.ReplyCount,
+		&i.Status,
+		&i.Origin,
+		&i.ClientID,
+		&i.EditedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const recordBrainCitations = `-- name: RecordBrainCitations :exec
 INSERT INTO brain_citations (job_id, entry_id, how)
 SELECT $1::uuid, unnest($2::uuid[]), $3::text
@@ -1069,6 +1235,15 @@ type RecordCitedBrainParams struct {
 // it never read.
 func (q *Queries) RecordCitedBrain(ctx context.Context, arg RecordCitedBrainParams) error {
 	_, err := q.db.Exec(ctx, recordCitedBrain, arg.JobID, arg.EntryIds)
+	return err
+}
+
+const releaseCuration = `-- name: ReleaseCuration :exec
+UPDATE brain_curations SET job_id = NULL, pending_upto = NULL WHERE conversation_id = $1
+`
+
+func (q *Queries) ReleaseCuration(ctx context.Context, conversationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, releaseCuration, conversationID)
 	return err
 }
 
@@ -1229,6 +1404,20 @@ func (q *Queries) SetBrainStatus(ctx context.Context, arg SetBrainStatusParams) 
 	return i, err
 }
 
+const setCurationJob = `-- name: SetCurationJob :exec
+UPDATE brain_curations SET job_id = $2 WHERE conversation_id = $1
+`
+
+type SetCurationJobParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	JobID          pgtype.UUID `json:"job_id"`
+}
+
+func (q *Queries) SetCurationJob(ctx context.Context, arg SetCurationJobParams) error {
+	_, err := q.db.Exec(ctx, setCurationJob, arg.ConversationID, arg.JobID)
+	return err
+}
+
 const staleBrainEntries = `-- name: StaleBrainEntries :many
 SELECT e.id, e.scope, e.project_id, e.component_key, e.user_id, e.agent_id, e.kind, e.topic, e.title, e.content, e.visibility, e.status, e.lineage, e.version, e.supersedes, e.valid_from, e.valid_until, e.confidence, e.source, e.source_task_id, e.source_conversation_id, e.source_private, e.position, e.condensed_from, e.archived_at, e.created_by_kind, e.created_by, e.approved_by, e.approved_at, e.created_at, e.updated_at FROM brain_entries e
 WHERE e.status = 'approved' AND e.archived_at IS NULL AND e.approved_at < $1::timestamptz
@@ -1357,4 +1546,69 @@ func (q *Queries) SupersedeOtherVersions(ctx context.Context, arg SupersedeOther
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const taskBrainOfDay = `-- name: TaskBrainOfDay :many
+SELECT id, scope, project_id, component_key, user_id, agent_id, kind, topic, title, content, visibility, status, lineage, version, supersedes, valid_from, valid_until, confidence, source, source_task_id, source_conversation_id, source_private, position, condensed_from, archived_at, created_by_kind, created_by, approved_by, approved_at, created_at, updated_at FROM brain_entries
+WHERE source_task_id = $1 AND scope IN ('project', 'component') AND NOT source_private
+  AND created_at >= $2::timestamptz AND created_at < $2::timestamptz + interval '1 day'
+ORDER BY created_at, id
+`
+
+type TaskBrainOfDayParams struct {
+	SourceTaskID pgtype.UUID        `json:"source_task_id"`
+	Day          pgtype.Timestamptz `json:"day"`
+}
+
+// What the Brain was proposed from one task on one day, for the day's card in its thread.
+func (q *Queries) TaskBrainOfDay(ctx context.Context, arg TaskBrainOfDayParams) ([]BrainEntry, error) {
+	rows, err := q.db.Query(ctx, taskBrainOfDay, arg.SourceTaskID, arg.Day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BrainEntry
+	for rows.Next() {
+		var i BrainEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ProjectID,
+			&i.ComponentKey,
+			&i.UserID,
+			&i.AgentID,
+			&i.Kind,
+			&i.Topic,
+			&i.Title,
+			&i.Content,
+			&i.Visibility,
+			&i.Status,
+			&i.Lineage,
+			&i.Version,
+			&i.Supersedes,
+			&i.ValidFrom,
+			&i.ValidUntil,
+			&i.Confidence,
+			&i.Source,
+			&i.SourceTaskID,
+			&i.SourceConversationID,
+			&i.SourcePrivate,
+			&i.Position,
+			&i.CondensedFrom,
+			&i.ArchivedAt,
+			&i.CreatedByKind,
+			&i.CreatedBy,
+			&i.ApprovedBy,
+			&i.ApprovedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

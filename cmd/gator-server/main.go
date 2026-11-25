@@ -22,6 +22,7 @@ import (
 	"github.com/onegator/gator/internal/server/automations"
 	"github.com/onegator/gator/internal/server/backup"
 	"github.com/onegator/gator/internal/server/brain"
+	"github.com/onegator/gator/internal/server/brain/curator"
 	"github.com/onegator/gator/internal/server/config"
 	"github.com/onegator/gator/internal/server/conversations"
 	"github.com/onegator/gator/internal/server/events"
@@ -158,11 +159,11 @@ func serve(ctx context.Context) error {
 	}
 	notifier := notify.New(db.Pool, svc, sender, hub, log, 0)
 	// Finished work proposes what the product learned; a person approves it.
-	curator := product.NewCurator(db.Pool, hub, log, 0)
+	learner := product.NewCurator(db.Pool, hub, log, 0)
 	// Once a project has learned more than a prompt can carry, a curator proposes a shorter
 	// version of it; the originals are archived, never deleted.
-	condenser := product.NewCondenser(curator, svc, 0, 0)
-	go curator.Run(ctx)
+	condenser := product.NewCondenser(learner, svc, 0, 0)
+	go learner.Run(ctx)
 
 	bc := backup.LoadConfig()
 	scorecards := quality.New(db.Pool, svc, pluginHost, log)
@@ -212,7 +213,9 @@ func serve(ctx context.Context) error {
 	if blobs == nil {
 		log.Warn("attachments not configured (GATOR_ATTACHMENTS_DIR or GATOR_ATTACHMENTS_S3_*)")
 	}
-	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs})
+	chat := conversations.New(db.Pool, conversations.Deps{Roles: auth.Authorizer{Pool: db.Pool}, Decisions: svc, Tasks: svc, Blobs: blobs,
+		// What the Brain was proposed from a task, one card a day in its thread.
+		CardSources: []conversations.CardSource{curator.NewCards(dbq.New(db.Pool))}})
 	go chat.Consumer(hub, log, 0).Run(ctx)
 	// Agents are members: a mention, or a message in a DM with one, is a turn of that agent,
 	// within the limits of a chain of delegations and the project's budget.
@@ -234,6 +237,12 @@ func serve(ctx context.Context) error {
 
 	// What the team and its agents know: one store, read under the same rules everywhere.
 	knows := brain.New(db.Pool, brain.Deps{Conversations: chat.Access})
+	// What a thread settled is proposed to the Brain once it goes quiet or its task closes.
+	curate := curator.New(dbq.New(db.Pool), team.Curations, chat.Packer, chat.Access, knows.Service, log)
+	curations := conversations.NewCursorConsumer("brain_curator", db.Pool, hub, log, 0)
+	curations.On(curate, curate.Events()...)
+	go curations.Run(ctx)
+	go curate.Run(ctx, time.Minute)
 
 	apiServer := &api.Server{
 		Pool: db.Pool, Process: svc, Runners: runnerMgr, Plugins: pluginHost, Hub: hub, Log: log,
