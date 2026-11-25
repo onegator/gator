@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -112,10 +113,11 @@ func (s *Installations) preview(ctx context.Context, p auth.Principal, id pgtype
 		if err != nil {
 			return err
 		}
-		for part, now := range current {
-			was := rec.State[part]
-			if same(was, now) {
-				continue
+		for _, part := range sortedKeys(current) {
+			now := current[part]
+			was, known := rec.State[part]
+			if !known || same(was, now) {
+				continue // a part nothing was recorded of has no "as installed" to differ from
 			}
 			pv.Local = append(pv.Local, LocalChange{Part: part,
 				Local:    Diff(was, now, part+" as installed ("+inst.Version+")", part+" as it is now"),
@@ -211,3 +213,12 @@ var (
 	_ Updater = IntegrationInstaller{}
 	_ Updater = ProcessInstaller{}
 )
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}

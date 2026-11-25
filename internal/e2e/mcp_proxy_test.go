@@ -212,7 +212,8 @@ func TestAnAgentReadsAnIssueThroughTheProxyAndTheTokenNeverReachesTheRunner(t *t
 	go func() { _ = c.Run(ctx) }()
 
 	turn := h.turnOf(h.say(s.project, h.generalOf(s.project).Id.String(), "@oncall what is ISSUE-1?", "oncall"), s.project, "oncall")
-	h.until("the job's session started", func() bool { _, err := os.Stat(cfg); return err == nil })
+	// The fake writes the copy while the session starts: wait for all of it.
+	h.until("the job's session started", func() bool { b, err := os.ReadFile(cfg); return err == nil && json.Valid(b) })
 
 	// What Claude Code would do with its configuration: reach issues-mcp where it says, as it says.
 	var mcpCfg struct {

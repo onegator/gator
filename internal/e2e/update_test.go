@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -148,5 +150,55 @@ func TestDroppingACostCapIsAcceptedAgain(t *testing.T) {
 	var refusal gen.InstallRefusal
 	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{}, &refusal); code != 409 || refusal.Code != "permissions_not_accepted" {
 		t.Fatalf("applied without acceptance: %d %+v", code, refusal)
+	}
+}
+
+// What a person changed of an installed agent beyond its instructions — its tools, skills, tier,
+// policy, role — is a local change too: an update shows it and waits. A skill the agent brought
+// and its new version no longer does goes with the update.
+func TestAnAgentsOwnSettingsAreLocalChanges(t *testing.T) {
+	h := newHarness(t)
+	r := marketplacetest.New(t)
+	pkg := helper("1.0.0", "Write the changelog.\n", "skills: [changelog-style]\n")
+	pkg["skills/changelog-style/SKILL.md"] = "---\nname: changelog-style\ndescription: How our changelog reads.\n---\nKeep a Changelog.\n"
+	r.Package("agents/release-helper", pkg)
+	r.Publish()
+	reg, _ := h.registry(r)
+	p := h.oneProject("own")
+	project := p.Id.String()
+	inst := h.install(project, gen.NewInstallation{Kind: "agent", Name: "release-helper", RegistryId: &reg.Id, AcceptedPermissions: h.accept("agent", "release-helper", reg.Id.String())})
+	if code := h.do("PATCH", "/agents/"+inst.Agent.Id.String(), gen.AgentPatch{Tools: &[]string{"issues-mcp"}, Tier: ptr(gen.AgentPatchTierWork)}, nil); code != 200 {
+		t.Fatalf("local changes: %d", code)
+	}
+
+	r.Write("agents/release-helper/agent.yaml", helper("1.1.0", "")["agent.yaml"])
+	_ = os.RemoveAll(filepath.Join(r.Dir, "agents/release-helper/skills"))
+	r.Publish()
+	h.fetch(reg.Id.String(), 200)
+	var pv gen.UpdatePreview
+	h.do("GET", "/installations/"+inst.Id.String()+"/update", nil, &pv)
+	var parts []string
+	for _, c := range pv.LocalChanges {
+		parts = append(parts, c.Part)
+	}
+	if !slices.Equal(parts, []string{"tier", "tools"}) {
+		t.Fatalf("local changes: %v", parts)
+	}
+	var refusal gen.InstallRefusal
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &pv.AddedPermissions}, &refusal); code != 409 || refusal.Code != "local_changes" {
+		t.Fatalf("overwritten without a word: %d %+v", code, refusal)
+	}
+	keep := gen.KeepLocal
+	var got gen.Installation
+	if code := h.do("PATCH", "/installations/"+inst.Id.String(), gen.InstallationUpdate{AcceptedPermissions: &pv.AddedPermissions, Resolve: &keep}, &got); code != 200 {
+		t.Fatalf("keep: %d", code)
+	}
+	if got.Agent.Tier != "work" || !slices.Equal(got.Agent.Tools, []string{"issues-mcp"}) || len(got.Agent.Skills) != 0 {
+		t.Fatalf("kept, and the dropped skill not carried: %+v", got.Agent)
+	}
+	var skills []gen.SkillInfo
+	h.do("GET", "/projects/"+project+"/skills", nil, &skills)
+	if len(skills) != 0 {
+		t.Fatalf("the skill the new version dropped stayed: %+v", skills)
 	}
 }

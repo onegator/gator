@@ -75,7 +75,7 @@ func (ai AgentInstaller) Install(ctx context.Context, tx *db.Queries, in Input) 
 			}
 		}
 	}
-	return Installed{Target: a.ID, State: map[string]string{stateInstructions: instructions}}, nil
+	return Installed{Target: a.ID, State: partsOf(am, instructions)}, nil
 }
 
 // Remove implements Installer: the agent is put away, its turns kept as the record of what it did.
@@ -116,23 +116,53 @@ func orNone(s []string) []string {
 	return s
 }
 
-// Current implements Updater: a person may have changed the agent's instructions.
+// The parts of an installed agent a person may change afterwards, each compared with what was
+// installed before an update touches it.
+const (
+	partTools  = "tools"
+	partSkills = "skills"
+	partPolicy = "policy"
+	partTier   = "tier"
+	partRole   = "role_key"
+)
+
+// partsOf are an agent package's parts, as an agent row keeps them.
+func partsOf(am AgentManifest, instructions string) map[string]string {
+	tools, _ := json.Marshal(agentTools(am))
+	skills, _ := json.Marshal(orNone(am.Skills))
+	policy, _ := json.Marshal(am.Policy)
+	return map[string]string{stateInstructions: instructions, partTools: string(tools), partSkills: string(skills),
+		partPolicy: string(policy), partTier: am.Tier, partRole: am.RoleKey}
+}
+
+// partsOfAgent are an agent's parts as they are now.
+func partsOfAgent(a db.Agent) map[string]string {
+	role := ""
+	if a.RoleKey != nil {
+		role = *a.RoleKey
+	}
+	return map[string]string{stateInstructions: a.Instructions, partTools: string(a.Tools), partSkills: string(a.Skills),
+		partPolicy: string(a.Policy), partTier: a.Tier, partRole: role}
+}
+
+// Current implements Updater.
 func (AgentInstaller) Current(ctx context.Context, tx *db.Queries, inst db.Installation) (map[string]string, error) {
 	a, err := tx.GetAgent(ctx, inst.TargetID)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{stateInstructions: a.Instructions}, nil
+	return partsOfAgent(a), nil
 }
 
 // Incoming implements Updater.
 func (AgentInstaller) Incoming(pkg Package) (map[string]string, error) {
-	_, instructions, err := ParseAgent(pkg.Files)
-	return map[string]string{stateInstructions: instructions}, err
+	am, instructions, err := ParseAgent(pkg.Files)
+	return partsOf(am, instructions), err
 }
 
-// Update implements Updater: the agent takes the new version's description, tier, policy, tools
-// and skills; it keeps its handle (people know it by it) and, when asked, its own instructions.
+// Update implements Updater: the agent takes the new version's name, description and every part
+// a person did not ask to keep; it keeps its handle (people know it by it). The skills it brought
+// and the new version does not are taken away, unless another agent carries them.
 func (ai AgentInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Installation, in Input, keep map[string]bool) (Installed, error) {
 	am, instructions, err := ParseAgent(in.Package.Files)
 	if err != nil {
@@ -142,24 +172,26 @@ func (ai AgentInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Ins
 	if err != nil {
 		return Installed{}, err
 	}
-	if err := agents.Check(cur.Handle, am.DisplayName, am.Description, am.Tier); err != nil {
+	incoming, now := partsOf(am, instructions), partsOfAgent(cur)
+	next := map[string]string{}
+	for part, v := range incoming {
+		next[part] = v
+		if keep[part] {
+			next[part] = now[part]
+		}
+	}
+	if err := agents.Check(cur.Handle, am.DisplayName, am.Description, next[partTier]); err != nil {
 		return Installed{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	text := instructions
-	if keep[stateInstructions] {
-		text = cur.Instructions
-	}
 	var roleKey *string
-	if am.RoleKey != "" {
-		roleKey = &am.RoleKey
+	if r := next[partRole]; r != "" {
+		roleKey = &r
 	}
-	policy, _ := json.Marshal(am.Policy)
-	tools, _ := json.Marshal(agentTools(am))
-	skills, _ := json.Marshal(orNone(am.Skills))
 	source, _ := json.Marshal(map[string]string{"kind": agents.SourceMarketplace, "registry": uuidString(in.Registry),
 		"package": am.Name, "version": am.Version})
 	if _, err := tx.UpdateInstalledAgent(ctx, db.UpdateInstalledAgentParams{ID: cur.ID, DisplayName: am.DisplayName, Description: am.Description,
-		Avatar: am.Avatar, RoleKey: roleKey, Instructions: text, Tier: am.Tier, Policy: policy, Tools: tools, Skills: skills, Source: source}); err != nil {
+		Avatar: am.Avatar, RoleKey: roleKey, Instructions: next[stateInstructions], Tier: next[partTier], Policy: []byte(next[partPolicy]),
+		Tools: []byte(next[partTools]), Skills: []byte(next[partSkills]), Source: source}); err != nil {
 		return Installed{}, err
 	}
 	for _, name := range am.Skills {
@@ -169,5 +201,8 @@ func (ai AgentInstaller) Update(ctx context.Context, tx *db.Queries, inst db.Ins
 			}
 		}
 	}
-	return Installed{Target: cur.ID, State: map[string]string{stateInstructions: instructions}}, nil
+	if err := ai.skills.RemoveBundled(ctx, tx, inst.ProjectID, am.Name); err != nil {
+		return Installed{}, err
+	}
+	return Installed{Target: cur.ID, State: incoming}, nil
 }
