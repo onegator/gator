@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/onegator/gator/internal/server/netguard"
+	"github.com/onegator/gator/internal/server/secrets"
 )
 
 // Auth of a remote server.
@@ -37,6 +40,14 @@ func CheckURL(raw string, p netguard.Policy) error {
 	}
 	if err := p.CheckScheme(u); err != nil {
 		return fmt.Errorf("%w: %v (plain http only to localhost, in development)", ErrInvalid, err)
+	}
+	for k, vs := range u.Query() {
+		lk := strings.ToLower(k)
+		if secrets.IsSensitiveKey(k) || lk == "key" || lk == "auth" || lk == "sig" || lk == "signature" || slices.ContainsFunc(vs, secrets.LooksSecret) {
+			// An address is shown to the project and written in records; a credential belongs in
+			// the server's secrets, which only the proxy reads.
+			return fmt.Errorf("%w: %q carries a credential in its query (%s); set it as the server's token instead", ErrInvalid, u.Redacted(), k)
+		}
 	}
 	return nil
 }

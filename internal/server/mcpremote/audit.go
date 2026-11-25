@@ -55,7 +55,7 @@ type DBRecorder struct {
 func (r DBRecorder) Record(ctx context.Context, c Call) {
 	var payload []byte
 	if len(c.Args) > 0 {
-		payload = secrets.RedactJSON(c.Args)
+		payload = secrets.RedactValues(secrets.RedactJSON(c.Args))
 		if !json.Valid(payload) {
 			payload = nil
 		}

@@ -1882,7 +1882,7 @@ paths:
   /projects/{projectId}/mcp-servers/{serverName}/calls:
     get:
       operationId: listProjectMcpServerCalls
-      description: "Every call the project's jobs made through the proxy to this server, newest first: method, tool, arguments (secrets masked), outcome, time. For the project's admins."
+      description: "Every call the project's jobs made through the proxy to this server (the project's own, or the workspace's it reaches), newest first: method, tool, arguments (secrets masked by name and by shape), outcome, time. For the project's admins."
       parameters:
         - { $ref: "#/components/parameters/projectId" }
         - { $ref: "#/components/parameters/serverName" }
@@ -1918,6 +1918,17 @@ paths:
       description: "The workspace's own remote MCP servers, which every project's agents may be given."
       responses:
         "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpServer" } } } } }
+  /workspace/mcp-servers/{serverName}/calls:
+    get:
+      operationId: listWorkspaceMcpServerCalls
+      description: "Every call any project's jobs made through the proxy to this workspace server, newest first. Workspace admins only."
+      parameters:
+        - { $ref: "#/components/parameters/serverName" }
+        - { $ref: "#/components/parameters/listLimit" }
+      responses:
+        "200": { description: ok, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/McpCall" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /workspace/mcp-servers/{serverName}:
     put:
       operationId: putWorkspaceMcpServer

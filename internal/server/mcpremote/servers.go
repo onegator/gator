@@ -23,6 +23,8 @@ type serverStore interface {
 	ListMCPServersVisibleIn(ctx context.Context, projectID pgtype.UUID) ([]db.McpServer, error)
 	GetMCPServerIn(ctx context.Context, arg db.GetMCPServerInParams) (db.McpServer, error)
 	ListMCPCalls(ctx context.Context, arg db.ListMCPCallsParams) ([]db.McpCall, error)
+	ListMCPCallsOfServer(ctx context.Context, arg db.ListMCPCallsOfServerParams) ([]db.McpCall, error)
+	MCPServerFor(ctx context.Context, arg db.MCPServerForParams) (db.McpServer, error)
 	ListWorkspaceMCPServers(ctx context.Context) ([]db.McpServer, error)
 }
 
@@ -313,12 +315,24 @@ func (s *Servers) Calls(ctx context.Context, p auth.Principal, project pgtype.UU
 	if err := s.can(ctx, p, project, auth.RoleAdmin); err != nil {
 		return nil, err
 	}
-	srv, err := s.own(ctx, project, name)
-	if err != nil {
-		return nil, err
-	}
 	if limit <= 0 || limit > 500 {
 		limit = 100
+	}
+	if !project.Valid {
+		// The workspace's own server: its calls from every project, for workspace admins.
+		srv, err := s.own(ctx, project, name)
+		if err != nil {
+			return nil, err
+		}
+		return s.store.ListMCPCallsOfServer(ctx, db.ListMCPCallsOfServerParams{McpServerID: srv.ID, MaxRows: int32(limit)})
+	}
+	// The server the project's agents reach — its own, or the workspace's — and the project's calls.
+	srv, err := s.store.MCPServerFor(ctx, db.MCPServerForParams{Name: name, ProjectID: project})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
 	}
 	return s.store.ListMCPCalls(ctx, db.ListMCPCallsParams{McpServerID: srv.ID, ProjectID: project, MaxRows: int32(limit)})
 }

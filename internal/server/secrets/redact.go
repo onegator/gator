@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -103,4 +104,46 @@ func redactAttr(a slog.Attr) slog.Attr {
 
 func contains(list []string, s string) bool {
 	return slices.Contains(list, s)
+}
+
+// secretValues are shapes a credential has whatever field it is in: a bearer token, an OpenAI or
+// Anthropic key, a GitHub token, a Slack token, an AWS access key, a JWT.
+var secretValues = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{8,}|\b(?:sk|pk|rk)-[a-z0-9_-]{16,}|\bsk-ant-[a-z0-9_-]{16,}|` +
+	`\b(?:ghp|gho|ghs|ghu|ghr)_[a-z0-9]{20,}|\bgithub_pat_[a-z0-9_]{20,}|\bxox[abprs]-[a-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|` +
+	`\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}`)
+
+// LooksSecret says whether a value has the shape of a credential.
+func LooksSecret(s string) bool { return secretValues.MatchString(s) }
+
+// RedactValues masks, in every string of a JSON document, what has the shape of a credential;
+// RedactJSON masks by the field's name. A record of what a tool was called with needs both: an
+// agent puts a token where it likes.
+func RedactValues(b []byte) []byte {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return b
+	}
+	out, err := json.Marshal(redactValues(v))
+	if err != nil {
+		return b
+	}
+	return out
+}
+
+func redactValues(v any) any {
+	switch x := v.(type) {
+	case string:
+		return secretValues.ReplaceAllString(x, Redacted)
+	case map[string]any:
+		for k, e := range x {
+			x[k] = redactValues(e)
+		}
+		return x
+	case []any:
+		for i, e := range x {
+			x[i] = redactValues(e)
+		}
+		return x
+	}
+	return v
 }

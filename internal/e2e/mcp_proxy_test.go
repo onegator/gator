@@ -439,3 +439,53 @@ func TestTheProxyHoldsJobsToTheirGrant(t *testing.T) {
 		t.Fatal("a server switched off")
 	}
 }
+
+// A workspace server's calls are read where they can be: by the workspace's admins whole, and by
+// a project's admins for that project. What a call carried is masked by the field's name and by
+// the shape of a credential in any field; and an address may not carry a credential at all.
+func TestWorkspaceServersAreAuditedAndArgumentsMasked(t *testing.T) {
+	h := newHarness(t)
+	s := h.remoteSetup()
+	ws := "ws-issues"
+	if code := h.do("PUT", "/workspace/mcp-servers/"+ws, gen.McpServerSettings{Url: ptr(s.fake.URL + "/mcp"), Auth: ptr(gen.McpServerSettingsAuthBearer),
+		AllowedTools: &[]string{"search_issues"}, ReadOnlyTools: &[]string{"search_issues"}, Secrets: &map[string]string{"token": s.secret}}, nil); code != 200 {
+		t.Fatalf("workspace server: %d", code)
+	}
+	h.do("PATCH", "/agents/"+s.agent.Id.String(), gen.AgentPatch{Tools: &[]string{"issues-mcp", ws}}, nil)
+	_, job := h.replyJobOf(s.project, "oncall")
+	cs, err := h.proxySession(h.srv.URL+"/mcp/proxy/"+ws, map[string]string{"Authorization": "Bearer " + h.identity(job, s.project)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "search_issues", Arguments: map[string]any{
+		"query": "use Bearer abcdefghijklmnop0123 and ghp_abcdefghijklmnopqrstuvwxyz0123"}})
+	var all, mine []gen.McpCall
+	if code := h.do("GET", "/workspace/mcp-servers/"+ws+"/calls", nil, &all); code != 200 {
+		t.Fatalf("workspace calls: %d", code)
+	}
+	h.do("GET", "/projects/"+s.project+"/mcp-servers/"+ws+"/calls", nil, &mine)
+	found := func(calls []gen.McpCall) *gen.McpCall {
+		for i, c := range calls {
+			if c.Tool == "search_issues" {
+				return &calls[i]
+			}
+		}
+		return nil
+	}
+	c := found(all)
+	if c == nil || found(mine) == nil || c.Payload == nil {
+		t.Fatalf("the call is read in both places: %d %d", len(all), len(mine))
+	}
+	q, _ := (*c.Payload)["query"].(string)
+	if strings.Contains(q, "abcdefghijklmnop0123") || strings.Contains(q, "ghp_") || !strings.Contains(q, "[redacted]") {
+		t.Fatalf("masked by shape: %q", q)
+	}
+	if code := h.asJob(h.person(), "GET", "/workspace/mcp-servers/"+ws+"/calls", nil, nil); code != 403 {
+		t.Fatalf("a person who is not an admin: %d", code)
+	}
+	for _, u := range []string{s.fake.URL + "/mcp?api_key=abc", s.fake.URL + "/mcp?x=Bearer%20abcdefghijkl0123"} {
+		if code := h.do("PUT", "/projects/"+s.project+"/mcp-servers/issues-mcp", gen.McpServerSettings{Url: &u}, nil); code != 400 {
+			t.Fatalf("an address with a credential %s: %d", u, code)
+		}
+	}
+}

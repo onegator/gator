@@ -127,15 +127,23 @@ func (s *Server) ListProjectMcpServerTools(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) ListProjectMcpServerCalls(w http.ResponseWriter, r *http.Request, projectId gen.ProjectId, serverName gen.ServerName, params gen.ListProjectMcpServerCallsParams) {
+	s.listCalls(w, r, fromUUID(projectId), serverName, params.Limit)
+}
+
+func (s *Server) ListWorkspaceMcpServerCalls(w http.ResponseWriter, r *http.Request, serverName gen.ServerName, params gen.ListWorkspaceMcpServerCallsParams) {
+	s.listCalls(w, r, pgtype.UUID{}, serverName, params.Limit)
+}
+
+func (s *Server) listCalls(w http.ResponseWriter, r *http.Request, project pgtype.UUID, serverName string, max *int) {
 	p, ok := s.remoteCaller(w, r)
 	if !ok {
 		return
 	}
 	limit := 100
-	if params.Limit != nil {
-		limit = *params.Limit
+	if max != nil {
+		limit = *max
 	}
-	calls, err := s.Remote.Servers.Calls(r.Context(), p, fromUUID(projectId), serverName, limit)
+	calls, err := s.Remote.Servers.Calls(r.Context(), p, project, serverName, limit)
 	if err != nil {
 		s.failRemote(w, err)
 		return

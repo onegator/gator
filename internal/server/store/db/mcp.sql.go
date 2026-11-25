@@ -265,6 +265,50 @@ func (q *Queries) ListMCPCalls(ctx context.Context, arg ListMCPCallsParams) ([]M
 	return items, nil
 }
 
+const listMCPCallsOfServer = `-- name: ListMCPCallsOfServer :many
+SELECT id, mcp_server_id, project_id, job_id, agent_id, method, tool, payload, outcome, error, result_bytes, duration_ms, created_at FROM mcp_calls WHERE mcp_server_id = $1 ORDER BY id DESC LIMIT $2
+`
+
+type ListMCPCallsOfServerParams struct {
+	McpServerID pgtype.UUID `json:"mcp_server_id"`
+	MaxRows     int32       `json:"max_rows"`
+}
+
+// A workspace server's calls from every project, newest first, for workspace admins.
+func (q *Queries) ListMCPCallsOfServer(ctx context.Context, arg ListMCPCallsOfServerParams) ([]McpCall, error) {
+	rows, err := q.db.Query(ctx, listMCPCallsOfServer, arg.McpServerID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []McpCall
+	for rows.Next() {
+		var i McpCall
+		if err := rows.Scan(
+			&i.ID,
+			&i.McpServerID,
+			&i.ProjectID,
+			&i.JobID,
+			&i.AgentID,
+			&i.Method,
+			&i.Tool,
+			&i.Payload,
+			&i.Outcome,
+			&i.Error,
+			&i.ResultBytes,
+			&i.DurationMs,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMCPServerNamesVisibleIn = `-- name: ListMCPServerNamesVisibleIn :many
 SELECT DISTINCT name FROM mcp_servers WHERE (project_id = $1 OR project_id IS NULL) AND enabled
 `

@@ -67,3 +67,7 @@ SELECT * FROM mcp_servers WHERE project_id IS NULL ORDER BY name;
 
 -- name: SetMCPServerOAuth :one
 UPDATE mcp_servers SET oauth = sqlc.arg(oauth), updated_at = now() WHERE id = sqlc.arg(id) RETURNING *;
+
+-- name: ListMCPCallsOfServer :many
+-- A workspace server's calls from every project, newest first, for workspace admins.
+SELECT * FROM mcp_calls WHERE mcp_server_id = sqlc.arg(mcp_server_id) ORDER BY id DESC LIMIT sqlc.arg(max_rows);
